@@ -220,11 +220,16 @@ FOOT_COLOURS = {"background": "bg", "foreground": "text", "selection-background"
                 "bright4": "accent", "bright7": "text"}
 
 
+# Ctrl+Enter sends what Alt+Enter does (ESC CR), which Claude Code reads as a new line; left
+# alone it is a bare CR, Enter. The AI terminal's alone: in an editor ESC CR is not a new line.
+NEWLINE_BINDING = r"-o 'text-bindings.\x1b\x0d=Control+Return'"
+
+
 def ai_terminal_command(paths: Paths) -> str:
     palette = settings.load(paths.settings).look
     colours = " ".join(f"-o colors.{key}={str(palette[name]).lstrip('#')}"
                        for key, name in FOOT_COLOURS.items())
-    return f"foot {colours} --app-id={surfaces.TERMINAL_APP_ID} rai ai"
+    return f"foot {colours} {NEWLINE_BINDING} --app-id={surfaces.TERMINAL_APP_ID} rai ai"
 
 
 def close_ai_terminal() -> bool:
