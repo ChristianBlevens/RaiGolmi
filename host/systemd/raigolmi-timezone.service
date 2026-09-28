@@ -1,0 +1,14 @@
+[Unit]
+Description=RaiGolmi: the timezone the Windows launcher handed in
+# A boot without the launcher hands in none, and keeps the zone it has.
+ConditionCredential=raigolmi.timezone
+# Before the desktop user's session, so the daemon and every container it starts read it.
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+ImportCredential=raigolmi.timezone
+ExecStart=/usr/libexec/raigolmi/set-timezone
+
+[Install]
+WantedBy=multi-user.target

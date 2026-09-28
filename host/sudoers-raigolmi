@@ -1,0 +1,7 @@
+# The desktop user administers this machine (`bootc upgrade`, system units, setting the
+# password sshd requires).
+#
+# NOPASSWD: tty1 and tty2 autologin, so anyone at the keyboard already has this shell; a
+# sudo prompt would stop only the user, and with no password shipped it is unanswerable,
+# leaving no route to root. sshd refusing an empty password holds the network boundary.
+%wheel ALL=(ALL) NOPASSWD: ALL

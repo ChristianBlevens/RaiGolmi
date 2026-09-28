@@ -1,0 +1,15 @@
+[Unit]
+Description=RaiGolmi: the host is unreachable from containers but for what it serves them
+Documentation=file:/usr/lib/raigolmi/firewall.nft
+DefaultDependencies=no
+Wants=network-pre.target
+Before=network-pre.target docker.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /usr/lib/raigolmi/firewall.nft
+
+[Install]
+WantedBy=multi-user.target

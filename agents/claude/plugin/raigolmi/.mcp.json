@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "raigolmi": {
+      "command": "rai",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "RAIGOLMID_SOCKET": "/run/raigolmid/raigolmid.sock"
+      }
+    }
+  }
+}

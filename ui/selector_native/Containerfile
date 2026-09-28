@@ -1,0 +1,40 @@
+# The selector as a container image.
+#
+# Same reason as the host control's: GTK4, PyGObject and gtk4-layer-shell cannot be installed
+# on the host, whose `/` is a read-only ostree overlay. What it needs from the project
+# is the view-model and the API client, and nothing else — `raigolmid.client` is separate from
+# `raigolmid.api` precisely so this image does not carry a Docker SDK to talk to a socket.
+FROM docker.io/library/fedora:42
+
+# The three surfaces share this line byte for byte, so each build after the first is a cache hit.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gtk4 gtk4-layer-shell python3-gobject \
+        mesa-dri-drivers mesa-libEGL libglvnd-gles \
+        google-noto-color-emoji-fonts \
+    && dnf clean all
+
+# The sockets are the desktop user's and the identity comes from the host.
+RUN useradd --uid 1000 --create-home selector
+USER 1000:1000
+
+# Built from the repository root: the selector is a thin layer over the view-model, so it
+# imports the real `ui.viewmodel` rather than a copy of it.
+COPY --chown=1000:1000 ui/__init__.py ui/copyable.py ui/edge.py ui/layershell.py ui/slide.py ui/surfaces.py ui/theme.py \
+     /opt/raigolmi/ui/
+COPY --chown=1000:1000 ui/viewmodel/ /opt/raigolmi/ui/viewmodel/
+COPY --chown=1000:1000 ui/selector_native/ /opt/raigolmi/ui/selector_native/
+COPY --chown=1000:1000 raigolmid/raigolmid/__init__.py raigolmid/raigolmid/client.py \
+     raigolmid/raigolmid/paths.py /opt/raigolmi/raigolmid/
+
+# ⚠ LD_PRELOAD is required, not belt-and-braces: gtk4-layer-shell has to be loaded before
+# libwayland-client or its init is a no-op and an ordinary window appears instead of an
+# overlay. `ui/layershell.py` refuses to run on when that has happened, and says which of the
+# two causes it was. The SONAME, not a bare `.so` — only the -devel package ships the
+# unversioned symlink, and a missing LD_PRELOAD file is ignored silently.
+ENV HOME=/home/selector \
+    XDG_RUNTIME_DIR=/run/user/1000 \
+    GDK_BACKEND=wayland \
+    PYTHONPATH=/opt/raigolmi \
+    LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0
+
+ENTRYPOINT ["python3", "-m", "ui.selector_native.selector"]

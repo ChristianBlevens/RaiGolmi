@@ -1,0 +1,5 @@
+# The door: the interpreter `raigolmid/door.py` runs in, and nothing
+# else. The daemon mounts the script at run time, so changing it needs no image. The RUN line is
+# the face-mount helper's, byte for byte, so the two share their layers.
+FROM fedora:42
+RUN dnf install -y --setopt=install_weak_deps=False python3 && dnf clean all

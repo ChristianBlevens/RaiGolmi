@@ -1,0 +1,51 @@
+[project]
+name = "raigolmid"
+version = "0.1.0"
+description = "RaiGolmi control plane: composes faces, toolbelts and bodies"
+requires-python = ">=3.11"
+dependencies = [
+    "docker>=7.0",
+    "mcp==2.2.0",
+    "watchfiles>=0.21",
+    # The nixpkgs package index is served brotli-compressed, and package names are
+    # verified before building rather than guessed.
+    "brotli>=1.1",
+    # The credential proxy's own certificate authority (`credproxy.Authority`).
+    "cryptography>=42",
+]
+
+[project.scripts]
+raigolmid = "raigolmid.__main__:main"
+rai = "rai.__main__:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# `ui` lives above this directory in the repo layout but ships with the daemon: the
+# selector's view-model and the AI terminal are `rai selector` and `rai ai`, so an install
+# without them has commands that cannot run.
+package-dir = { "ui" = "../ui" }
+packages = [
+    "raigolmid", "raigolmid.runtime", "raigolmid.launcher", "rai",
+    "ui", "ui.viewmodel", "ui.ai_terminal",
+]
+
+[tool.setuptools.package-data]
+# The session view's entrypoint is mounted into every view from the installed package,
+# so it is not an optional extra. It is a program rather than a module: it runs
+# under the toolbelt's interpreter inside the view, where `raigolmid` is not importable. The
+# face's editor glue is mounted into the face the same way. `settings.toml` is the
+# document the user's settings start from (`settings.install`).
+"raigolmid" = ["launcher/view/*.py", "nvim/lua/*.lua", "settings.toml"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["docker: needs a real Docker daemon"]
+# A test that hangs fails here with its stack, never by using up the caller's whole wait.
+timeout = 30

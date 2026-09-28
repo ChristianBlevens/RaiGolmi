@@ -1,0 +1,64 @@
+#  RaiGolmi host compositor. This is the *host*, not a desktop: a nested face compositor
+#  fills the screen and the host's own vocabulary is two keys.
+#
+#  The two bindings below are the fallback: `raigolmid` generates the real ones from
+#  settings.toml [keys] into the include at the bottom (raigolmid/hostkeys.py). They stay so
+#  the bare host a failed daemon leaves the user in can still reach a repair.
+#
+#  ⚠ The include unbinds each of them before rebinding, since binding a key sway already has
+#  bound is a config error (a swaynag panel). These keys and hostkeys.py's `STATIC_DEFAULTS`
+#  are one fact in two files; change them together.
+#
+#  In /etc because bootc treats it as machine-local: user edits survive `bootc upgrade`.
+
+### The host's own surface
+
+output * bg #101014 solid_color
+default_border none
+font pango:DejaVu Sans 10
+
+# `raigolmid` puts a face fullscreen by pid and reads the tree back (raigolmid/faces.py).
+# Deliberately no `for_window` rule: a nested wlroots compositor's app_id is always
+# `wlroots`, so a rule would match every nested wlroots client and could not report failure.
+
+# A nested face may not suppress the host's keys; otherwise a face asking for the shortcut
+# inhibitor takes both bindings and only a VM reset gets back.
+seat * shortcuts_inhibitor disable
+
+### The reserved host keys
+
+set $mod Mod4
+
+# A bare Super *tap*, so `$mod+<key>` still belongs to the nested face.
+# ⚠ `Super_L`, never `$mod`: `bindsym --release Mod4` validates and then never fires, since
+# a modifier as the key is a binding with no key (see hostkeys.py DEFAULT_KEYS).
+bindsym --release Super_L exec rai selector
+
+# The AI terminal floor: tmux directly, no Python, for a boot where raigolmid never started.
+# The generated include replaces it with `rai ai`.
+# ⚠ The session name is `ui/ai_terminal/terminal.py`'s SESSION; `rai ai` adopts it, so the
+# floor and the real terminal are one terminal across a daemon start.
+bindsym $mod+grave exec foot --app-id=raigolmi-ai-floor tmux new-session -A -s raigolmi-ai
+
+# ⚠ Its own app_id: the floor must map visibly, while the managed terminal must never be
+# seen outside its band, so the rule below may match only the managed one.
+
+# The managed AI terminal goes to the scratchpad at map time, so its first frame is never on
+# the workspace. `ui/host_control/window.py` also asks for the move; moving a scratchpad
+# window there again succeeds, so a rule that stops matching still leaves a terminal.
+# ⚠ Anchored: sway matches app_id as an unanchored regex, which would take the floor too.
+for_window [app_id="^raigolmi-ai$"] move scratchpad
+
+### Generated bindings
+
+# Written by raigolmid from $XDG_CONFIG_HOME/raigolmi/settings.toml [keys], reloaded on
+# change. Created empty by tmpfiles.d so a daemon-less boot still loads a valid config.
+# It unbinds only the two keys above: unbinding an unbound key is also a config error.
+include /run/raigolmid/host-keys.conf
+
+### Session
+
+# One exec, not two: sway runs exec lines concurrently, and raigolmid needs WAYLAND_DISPLAY
+# imported before the target starts to launch faces and editors into this seat.
+exec "systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP SWAYSOCK; \
+      systemctl --user start sway-session.target"

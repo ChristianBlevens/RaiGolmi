@@ -1,0 +1,7 @@
+#  The host image with its own images in it (raigolmid/raigolmid/hostimages.py). A second stage
+#  because they are built from the first: host/ci/bake-host-images.sh builds each from the
+#  tree BASE ships, under the tag BASE's raigolmid computes, and the archive is the context.
+ARG BASE
+FROM $BASE
+COPY host-images.tar /usr/share/raigolmi/host-images.tar
+RUN bootc container lint

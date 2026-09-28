@@ -1,0 +1,421 @@
+"""The credential never enters a tab: raigolmid holds it, and a proxy
+here swaps it in for the placeholder each agent is given.
+
+Every agent container — each tab, the manager, the preferences judge's one-shot — gets a
+placeholder in place of the credential and `HTTPS_PROXY` naming this proxy, on the
+host's address on the containers' default network (`ContainerRuntime.bridge_gateway`). Any
+container on the machine can reach that address, a body's included, so the proxy forwards only
+a request carrying a placeholder it issued, for an owner still open, with the credential: a
+request with no credential at all (Claude Code's connectivity check) goes on as it came, and
+one with any other is refused. A placeholder is its owner
+and an HMAC of it under `Paths.proxy_secret`, so it outlives a daemon restart with the running
+containers holding it, and a closed tab's stops working. What leaves a tab is worth nothing
+outside this machine.
+
+The request goes on to Anthropic's API unchanged but for the credential, headers and body as
+sent — `anthropic-beta` included, which Claude Code's OAuth needs verbatim — and the answer
+comes back as it arrives, so a streamed turn streams. The credential is read on each request,
+so one set with `rai credential --set` holds at once.
+
+The placeholder has the credential's own shape (`sk-ant-oat01-…` for an OAuth token,
+`sk-ant-api03-…` for an API key), since the agent chooses its authentication by which variable
+is set and must choose the one the credential needs.
+
+⚠ **An agent reaches this proxy as its HTTPS proxy, not as its base URL.** Claude Code sends
+its feature flags and bootstrap straight to `api.anthropic.com` whatever the base URL says, and
+a placeholder there turns every flag off — a tab's channel among them. So `CONNECT api.anthropic.com` is answered here under
+a certificate from the machine's own authority (`Authority`), which the agent is told to trust,
+and every request inside it has its placeholder swapped like any other. `CONNECT` to anywhere
+else is a plain tunnel — agents browse — except to this machine itself: a tab never reaches the
+host layer through the proxy, whose address is the host's. The
+target is resolved once, refused if any address it names is one the host can bind, and the
+tunnel opens to the address that was checked, so a name cannot resolve elsewhere in between.
+"""
+from __future__ import annotations
+
+import datetime
+import errno
+import hashlib
+import hmac
+import http.client
+import os
+import secrets
+import selectors
+import socket
+import socketserver
+import ssl
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Callable
+from urllib.parse import urlsplit
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+from . import credential
+from .events import EventLog
+from .runtime import ContainerRuntime
+from .runtime.base import Mount
+
+UPSTREAM = "https://api.anthropic.com"
+# The one host whose traffic is opened here; every other CONNECT is tunnelled as it is.
+INTERCEPTED = urlsplit(UPSTREAM).hostname
+# Where an agent container finds the authority it trusts for that host.
+CA_TARGET = "/usr/local/share/raigolmi/proxy-ca.pem"
+TUNNEL_TIMEOUT = 30.0
+# Fixed, because containers started before a daemon restart keep the URL they were given.
+PORT = 47100
+OAUTH, API_KEY = credential.CREDENTIAL_KEYS
+SHAPE = {OAUTH: "sk-ant-oat01-rai-", API_KEY: "sk-ant-api03-rai-"}
+# Hop-by-hop headers (RFC 9110 §7.6.1) and the ones this proxy sets itself.
+HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+                 "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length"})
+UPSTREAM_TIMEOUT = 600.0
+
+
+class ProxyError(Exception):
+    """A request the proxy refuses to forward."""
+
+
+class Placeholders:
+    """Issued and checked against one secret, made on first use and kept 0600."""
+
+    def __init__(self, secret: Path) -> None:
+        self.secret_path = secret
+        self._key = self._load()
+
+    def _load(self) -> bytes:
+        try:
+            fd = os.open(self.secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return bytes.fromhex(self.secret_path.read_text(encoding="ascii").strip())
+        with os.fdopen(fd, "w", encoding="ascii") as out:
+            out.write(secrets.token_hex(32))
+        return bytes.fromhex(self.secret_path.read_text(encoding="ascii").strip())
+
+    def _mac(self, owner: str) -> str:
+        return hmac.new(self._key, owner.encode(), hashlib.sha256).hexdigest()[:40]
+
+    def issue(self, owner: str, kind: str) -> str:
+        return f"{SHAPE[kind]}{owner}-{self._mac(owner)}"
+
+    def owner_of(self, token: str) -> str | None:
+        """The owner a placeholder was issued to, or None for anything else."""
+        for prefix in SHAPE.values():
+            if token.startswith(prefix):
+                owner, _, mac = token[len(prefix):].rpartition("-")
+                if owner and hmac.compare_digest(mac, self._mac(owner)):
+                    return owner
+        return None
+
+
+class Authority:
+    """The machine's own certificate authority, made on first use, the key kept 0600: what an
+    agent trusts for `INTERCEPTED`, and nothing else is ever signed by it."""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.cert = directory / "ca.pem"
+        self._key_path = directory / "ca.key"
+        if not self._key_path.is_file():
+            self._make()
+        self._key = serialization.load_pem_private_key(self._key_path.read_bytes(), None)
+        self._ca = x509.load_pem_x509_certificate(self.cert.read_bytes())
+
+    def _make(self) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "RaiGolmi credential proxy")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - datetime.timedelta(days=1))
+                .not_valid_after(now + datetime.timedelta(days=3650))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+                .add_extension(x509.KeyUsage(
+                    digital_signature=False, content_commitment=False, key_encipherment=False,
+                    data_encipherment=False, key_agreement=False, key_cert_sign=True,
+                    crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
+                .sign(key, hashes.SHA256()))
+        _write_private(self._key_path, key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption()))
+        self.cert.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
+    def context_for(self, host: str) -> ssl.SSLContext:
+        """A server context presenting a certificate for `host` under this authority."""
+        key = ec.generate_private_key(ec.SECP256R1())
+        now = datetime.datetime.now(datetime.timezone.utc)
+        leaf = (x509.CertificateBuilder()
+                .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)]))
+                .issuer_name(self._ca.subject).public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - datetime.timedelta(days=1))
+                .not_valid_after(now + datetime.timedelta(days=365))
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+                               critical=False)
+                .sign(self._key, hashes.SHA256()))
+        chain = self.directory / f"{host}.pem"
+        _write_private(chain, key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption()) + leaf.public_bytes(serialization.Encoding.PEM))
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(chain)
+        return context
+
+
+def _write_private(path: Path, content: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        out.write(content)
+
+
+class Broker:
+    """The credential, and what an agent container is given in its place."""
+
+    def __init__(self, credentials: Path, secret: Path, authority: Path,
+                 runtime: ContainerRuntime) -> None:
+        self.credentials = credentials
+        self.placeholders = Placeholders(secret)
+        self.authority = Authority(authority)
+        self.runtime = runtime
+
+    def environment(self, owner: str) -> dict[str, str]:
+        """Raises what `credential.read` raises: an agent is never started without one."""
+        [kind] = credential.read(self.credentials)
+        proxy = f"http://{self.runtime.bridge_gateway()}:{PORT}"
+        return {kind: self.placeholders.issue(owner, kind),
+                "HTTPS_PROXY": proxy, "https_proxy": proxy,
+                "NODE_EXTRA_CA_CERTS": CA_TARGET}
+
+    def mounts(self) -> tuple[Mount, ...]:
+        return (Mount(source=str(self.authority.cert), target=CA_TARGET, read_only=True),)
+
+
+class _Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server: "_Server"
+
+    def do_GET(self) -> None:
+        self._forward()
+
+    do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = do_GET
+
+    def log_message(self, format: str, *args) -> None:
+        """Every refusal is an event; a request forwarded is not worth one."""
+
+    def do_CONNECT(self) -> None:
+        host, _, port = self.path.rpartition(":")
+        proxy = self.server.proxy
+        if host == proxy.intercepted and port == "443":
+            self.send_response(200)
+            self.end_headers()
+            # The requests inside are read by this same handler's loop, over TLS.
+            try:
+                self.connection = proxy.tls.wrap_socket(self.connection, server_side=True)
+            except (ssl.SSLError, OSError) as exc:
+                # What an agent that does not trust the authority says: CA_TARGET not mounted.
+                proxy.events.emit("credproxy.handshake_failed", target=self.path, error=str(exc))
+                self.close_connection = True
+                return
+            self.rfile = self.connection.makefile("rb", self.rbufsize)
+            self.wfile = socketserver._SocketWriter(self.connection)
+            self.close_connection = False
+            return
+        try:
+            remote = _tunnel_to(host.strip("[]"), int(port), proxy.this_machine)
+        except ProxyError as exc:
+            proxy.events.emit("credproxy.tunnel_refused", target=self.path, reason=str(exc))
+            self.send_error(403, str(exc))
+            return
+        except (OSError, ValueError) as exc:
+            proxy.events.emit("credproxy.tunnel_failed", target=self.path, error=str(exc))
+            self.send_error(502, f"cannot reach {self.path}: {exc}")
+            return
+        self.send_response(200)
+        self.end_headers()
+        self.close_connection = True
+        _pipe(self.connection, remote)
+
+    def _forward(self) -> None:
+        proxy = self.server.proxy
+        try:
+            owner, outgoing = proxy.outgoing(self.headers.items())
+        except ProxyError as exc:
+            proxy.events.emit("credproxy.refused", path=self.path, reason=str(exc))
+            self._refuse(401, str(exc))
+            return
+        body = self._body()
+        upstream = urlsplit(proxy.upstream)
+        connect = (http.client.HTTPSConnection if upstream.scheme == "https"
+                   else http.client.HTTPConnection)
+        conn = connect(upstream.hostname, upstream.port, timeout=UPSTREAM_TIMEOUT)
+        started = time.monotonic()
+        try:
+            try:
+                conn.request(self.command, self.path, body=body, headers=outgoing)
+                answer = conn.getresponse()
+            except OSError as exc:
+                proxy.events.emit("credproxy.upstream_failed", owner=owner, path=self.path,
+                                  error=str(exc))
+                self._refuse(502, f"Anthropic's API could not be reached: {exc}", "api_error")
+                return
+            try:
+                self._relay(answer)
+            except OSError as exc:
+                # The agent hung up before its answer was through — its own timeout or a
+                # request it abandoned — which is not the API failing.
+                proxy.events.emit("credproxy.client_gone", owner=owner, path=self.path,
+                                  status=answer.status, error=str(exc),
+                                  seconds=round(time.monotonic() - started, 3))
+                self.close_connection = True
+        finally:
+            conn.close()
+
+    def _relay(self, answer: http.client.HTTPResponse) -> None:
+        self.send_response(answer.status, answer.reason)
+        for name, value in answer.getheaders():
+            if name.lower() not in HOP:
+                self.send_header(name, value)
+        if self.command == "HEAD" or answer.status in (204, 304):
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        while chunk := answer.read1(65536):
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.flush()
+        self.wfile.write(b"0\r\n\r\n")
+
+    def _body(self) -> bytes | None:
+        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+            parts = []
+            while (size := int(self.rfile.readline().split(b";")[0], 16)) > 0:
+                parts.append(self.rfile.read(size))
+                self.rfile.readline()
+            while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                pass
+            return b"".join(parts)
+        length = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(length) if length else None
+
+    def _refuse(self, status: int, why: str, kind: str = "authentication_error") -> None:
+        body = (f'{{"type":"error","error":{{"type":"{kind}",'
+                f'"message":"raigolmi credential proxy: {why}"}}}}').encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def is_this_machine(address: str) -> bool:
+    """Whether `address` is the host's own — loopback, an unspecified address, or one on any
+    of its interfaces. Positive evidence: the kernel lets the host bind only its own."""
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((address, 0))
+        except OSError as exc:
+            if exc.errno == errno.EADDRNOTAVAIL:
+                return False
+            raise
+    return True
+
+
+def _tunnel_to(host: str, port: int,
+               this_machine: Callable[[str], bool]) -> socket.socket:
+    addresses = [info[4] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+    mine = [sockaddr[0] for sockaddr in addresses if this_machine(sockaddr[0])]
+    if mine:
+        raise ProxyError(f"{host} is this machine ({', '.join(mine)}); a tab does not reach "
+                         "the host through the proxy")
+    failures = []
+    for sockaddr in addresses:
+        try:
+            return socket.create_connection(sockaddr[:2], timeout=TUNNEL_TIMEOUT)
+        except OSError as exc:
+            failures.append(f"{sockaddr[0]}: {exc}")
+    raise OSError("; ".join(failures))
+
+
+def _pipe(a: socket.socket, b: socket.socket) -> None:
+    """Bytes both ways until either side closes."""
+    with b, selectors.DefaultSelector() as sel:
+        a.settimeout(None)
+        b.settimeout(None)
+        sel.register(a, selectors.EVENT_READ, b)
+        sel.register(b, selectors.EVENT_READ, a)
+        while True:
+            for key, _ in sel.select():
+                try:
+                    data = key.fileobj.recv(65536)
+                    if not data:
+                        return
+                    key.data.sendall(data)
+                except OSError:
+                    return
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # Every tab's session opens several connections at its start.
+    request_queue_size = 64
+    proxy: "CredentialProxy"
+
+
+class CredentialProxy:
+    def __init__(self, broker: Broker, events: EventLog, open_owner: Callable[[str], bool],
+                 host: str, port: int = PORT, upstream: str = UPSTREAM,
+                 intercepted: str = INTERCEPTED,
+                 this_machine: Callable[[str], bool] = is_this_machine) -> None:
+        self.broker = broker
+        self.this_machine = this_machine
+        self.events = events
+        self.open_owner = open_owner
+        self.upstream = upstream
+        self.intercepted = intercepted
+        self.tls = broker.authority.context_for(intercepted)
+        self._server = _Server((host, port), _Handler)
+        self._server.proxy = self
+
+    @property
+    def address(self) -> tuple[str, int]:
+        return self._server.server_address[:2]
+
+    def outgoing(self, headers: list[tuple[str, str]]) -> tuple[str | None, dict[str, str]]:
+        """The request's owner and the headers it goes upstream with: the credential in
+        place of the placeholder, everything else as sent. No owner: it carried none."""
+        sent = {name.lower(): value for name, value in headers}
+        token = (sent.get("authorization", "").removeprefix("Bearer ").strip()
+                 or sent.get("x-api-key", "").strip())
+        if not token:
+            return None, {name: value for name, value in headers
+                          if name.lower() not in HOP}
+        owner = self.broker.placeholders.owner_of(token)
+        if owner is None:
+            raise ProxyError("the request carries no placeholder this machine issued")
+        if not self.open_owner(owner):
+            raise ProxyError(f"{owner} is closed")
+        [(kind, real)] = credential.read(self.broker.credentials).items()
+        out = {name: value for name, value in headers
+               if name.lower() not in HOP | {"authorization", "x-api-key"}}
+        if kind == OAUTH:
+            out["Authorization"] = f"Bearer {real}"
+        else:
+            out["x-api-key"] = real
+        return owner, out
+
+    def serve(self) -> None:
+        self.events.emit("credproxy.listening", host=self.address[0], port=self.address[1])
+        self._server.serve_forever()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()

@@ -1,0 +1,211 @@
+"""The credential never enters a tab (`credproxy.py`): every agent is
+given a placeholder, and the proxy swaps the credential in for one it issued, for an owner still
+open, passing everything else — `anthropic-beta` above all — and streaming the answer back."""
+from __future__ import annotations
+
+import http.client
+import json
+import socket
+import ssl
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from raigolmid import credential
+from raigolmid.credproxy import Broker, CredentialProxy, Placeholders
+from raigolmid.events import EventLog
+from tests.fakeruntime import FakeRuntime
+
+EVENTS = [b"event: message_start\ndata: {}\n\n", b"event: message_stop\ndata: {}\n\n"]
+
+
+class Upstream(BaseHTTPRequestHandler):
+    """Anthropic's API as the proxy meets it: what it was sent, and a streamed answer."""
+    protocol_version = "HTTP/1.1"
+    seen: list[dict] = []
+
+    def do_POST(self) -> None:
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        Upstream.seen.append({"path": self.path, "headers": dict(self.headers.items()),
+                              "body": body})
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        for event in EVENTS:
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(event), event))
+        self.wfile.write(b"0\r\n\r\n")
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+@pytest.fixture()
+def machine(tmp_path):
+    Upstream.seen = []
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    credentials = tmp_path / "agent-credentials"
+    credential.write(credentials, "CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-the-real-one")
+    broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", FakeRuntime())
+    events = EventLog(tmp_path / "events.jsonl", epoch=1)
+    open_tabs = {"tab-1", "raigolmid-judge"}
+    proxy = CredentialProxy(broker, events, open_tabs.__contains__, host="127.0.0.1", port=0,
+                            upstream=f"http://127.0.0.1:{upstream.server_address[1]}",
+                            intercepted="api.test")
+    threading.Thread(target=proxy.serve, daemon=True).start()
+    yield broker, proxy, events, open_tabs
+    proxy.close()
+    upstream.shutdown()
+
+
+def _post(proxy, headers: dict[str, str], body: bytes = b'{"model":"x"}'):
+    conn = http.client.HTTPConnection(*proxy.address, timeout=10)
+    conn.request("POST", "/v1/messages?beta=true", body=body, headers=headers)
+    answer = conn.getresponse()
+    return answer.status, answer.read()
+
+
+def test_a_placeholder_names_its_owner_and_nothing_else_passes(tmp_path):
+    placeholders = Placeholders(tmp_path / "proxy-secret")
+    token = placeholders.issue("tab-12", "CLAUDE_CODE_OAUTH_TOKEN")
+    assert token.startswith("sk-ant-oat01-") and placeholders.owner_of(token) == "tab-12"
+    assert placeholders.owner_of(token[:-1] + ("0" if token[-1] != "0" else "1")) is None
+    assert placeholders.owner_of(token.replace("tab-12", "tab-13")) is None
+    assert placeholders.owner_of("sk-ant-oat01-the-real-one") is None
+    again = Placeholders(tmp_path / "proxy-secret")
+    assert again.owner_of(token) == "tab-12", "a restarted daemon honours what it issued"
+    assert (tmp_path / "proxy-secret").stat().st_mode & 0o777 == 0o600
+
+
+def test_the_credential_is_swapped_in_and_the_rest_passes_verbatim(machine):
+    broker, proxy, _, _ = machine
+    placeholder = broker.environment("tab-1")["CLAUDE_CODE_OAUTH_TOKEN"]
+    status, body = _post(proxy, {
+        "Authorization": f"Bearer {placeholder}", "anthropic-beta": "oauth-2025-04-20,x",
+        "anthropic-version": "2023-06-01", "Content-Type": "application/json"})
+    assert status == 200 and body == b"".join(EVENTS), "the stream comes back whole"
+    [sent] = Upstream.seen
+    assert sent["headers"]["Authorization"] == "Bearer sk-ant-oat01-the-real-one"
+    assert sent["headers"]["anthropic-beta"] == "oauth-2025-04-20,x"
+    assert sent["path"] == "/v1/messages?beta=true" and sent["body"] == b'{"model":"x"}'
+
+
+def test_an_api_key_goes_as_x_api_key(machine, tmp_path):
+    broker, proxy, _, _ = machine
+    broker.credentials.unlink()
+    credential.write(broker.credentials, "ANTHROPIC_API_KEY", "sk-ant-api03-real")
+    env = broker.environment("tab-1")
+    assert env["ANTHROPIC_API_KEY"].startswith("sk-ant-api03-rai-")
+    status, _ = _post(proxy, {"x-api-key": env["ANTHROPIC_API_KEY"]})
+    assert status == 200
+    [sent] = Upstream.seen
+    assert sent["headers"]["x-api-key"] == "sk-ant-api03-real"
+    assert "Authorization" not in sent["headers"]
+
+
+@pytest.mark.parametrize("token, why", [
+    ("sk-ant-oat01-something-else", "no placeholder this machine issued"),
+    (None, "tab-9 is closed"),
+])
+def test_what_it_did_not_issue_or_whose_owner_closed_is_refused(machine, token, why):
+    broker, proxy, events, _ = machine
+    token = token or broker.environment("tab-9")["CLAUDE_CODE_OAUTH_TOKEN"]
+    status, body = _post(proxy, {"Authorization": f"Bearer {token}"})
+    assert status == 401 and why in json.loads(body)["error"]["message"]
+    assert Upstream.seen == []
+    refused = [e for e in events.tail(50) if e.type == "credproxy.refused"]
+    assert refused and token not in json.dumps(refused[-1].data)
+
+
+def test_a_request_with_no_credential_goes_on_untouched(machine):
+    """Claude Code's connectivity check (`/api/hello`) carries none."""
+    _, proxy, events, _ = machine
+    status, _ = _post(proxy, {"Content-Type": "application/json"})
+    assert status == 200
+    [sent] = Upstream.seen
+    assert "Authorization" not in sent["headers"] and "x-api-key" not in sent["headers"]
+    assert not [e for e in events.tail(50) if e.type == "credproxy.refused"]
+
+
+def _connect(proxy, target: str) -> socket.socket:
+    sock = socket.create_connection(proxy.address, timeout=10)
+    sock.sendall(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+    head = b""
+    while not head.endswith(b"\r\n\r\n"):
+        head += sock.recv(1)
+    assert head.startswith(b"HTTP/1.1 200"), head
+    return sock
+
+
+def test_the_api_host_is_opened_under_the_machines_authority_and_swapped_like_any_request(
+        machine):
+    """Claude Code sends its flags and bootstrap straight to the API host, whatever its base
+    URL: they have to pass through here, as the agent's HTTPS proxy, or every flag is off."""
+    broker, proxy, _, _ = machine
+    trusted = ssl.create_default_context(cafile=str(broker.authority.cert))
+    tls = trusted.wrap_socket(_connect(proxy, "api.test:443"), server_hostname="api.test")
+    conn = http.client.HTTPConnection("api.test")
+    conn.sock = tls
+    token = broker.environment("tab-1")["CLAUDE_CODE_OAUTH_TOKEN"]
+    conn.request("POST", "/api/eval/sdk-x", body=b"{}",
+                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    answer = conn.getresponse()
+    assert answer.status == 200 and answer.read() == b"".join(EVENTS)
+    [seen] = Upstream.seen
+    assert seen["path"] == "/api/eval/sdk-x"
+    assert seen["headers"]["Authorization"] == "Bearer sk-ant-oat01-the-real-one"
+
+
+def test_any_other_host_is_a_plain_tunnel(machine):
+    """Agents browse; only the API host is opened. The only
+    server a test can reach is on this machine, so it is declared not to be."""
+    _, proxy, _, _ = machine
+    proxy.this_machine = lambda address: False
+    echo = socket.create_server(("127.0.0.1", 0))
+
+    def serve() -> None:
+        conn, _ = echo.accept()
+        with conn:
+            conn.sendall(conn.recv(100).upper())
+    threading.Thread(target=serve, daemon=True).start()
+    with _connect(proxy, f"127.0.0.1:{echo.getsockname()[1]}") as tunnel:
+        tunnel.sendall(b"raw bytes")
+        assert tunnel.recv(100) == b"RAW BYTES"
+    echo.close()
+
+
+def test_a_tunnel_to_this_machine_is_refused(machine):
+    """A tab never reaches the host layer through the proxy, whose address is the host's:
+    loopback, and the host's own addresses, by name or number."""
+    _, proxy, events, _ = machine
+    listening = socket.create_server(("127.0.0.1", 0))
+    port = listening.getsockname()[1]
+    for target in (f"127.0.0.1:{port}", f"localhost:{port}", f"{proxy.address[0]}:{port}"):
+        with socket.create_connection(proxy.address, timeout=10) as sock:
+            sock.sendall(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+            assert sock.recv(100).startswith(b"HTTP/1.1 403"), target
+    listening.close()
+    assert len([e for e in events.tail(50) if e.type == "credproxy.tunnel_refused"]) == 3
+
+
+def test_an_agent_is_pointed_at_the_proxy_and_given_the_authority(machine):
+    broker, _, _, _ = machine
+    env = broker.environment("tab-1")
+    assert env["HTTPS_PROXY"].endswith(":47100") and "ANTHROPIC_BASE_URL" not in env
+    [mount] = broker.mounts()
+    assert (mount.source, mount.target, mount.read_only) == (
+        str(broker.authority.cert), env["NODE_EXTRA_CA_CERTS"], True)
+    assert oct((broker.authority.directory / "ca.key").stat().st_mode & 0o777) == "0o600"
+
+
+
+
+def test_the_hosts_firewall_opens_the_proxys_port():
+    """The host drops every container's traffic to it but this port (host/firewall/); the
+    two are written apart and must agree, or every tab loses the API."""
+    from pathlib import Path
+    from raigolmid.credproxy import PORT
+    rules = (Path(__file__).resolve().parents[2] / "host" / "firewall" / "raigolmi.nft")
+    assert f"tcp dport {PORT} accept" in rules.read_text()

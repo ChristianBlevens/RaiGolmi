@@ -1,0 +1,7 @@
+[Unit]
+Description=RaiGolmi host compositor session
+# Reached by sway itself once it has handed its environment to the user manager, so
+# anything wanting a Wayland display can be ordered after it rather than polling for one.
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

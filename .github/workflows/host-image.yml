@@ -1,0 +1,99 @@
+# The host image and its bootable disk. bootc-image-builder needs a privileged container;
+# the blueprint and the equivalent local command live in host/ci/.
+name: host-image
+
+# ⚠ **No push trigger, deliberately.** The workflow runs only when dispatched
+# (`gh workflow run host-image.yml`); the usual build is local (`host/ci/build-local.sh`).
+# A build on every push would spend the Actions budget unasked.
+on:
+  workflow_dispatch:
+    inputs:
+      disk_type:
+        description: 'Disk format bootc-image-builder produces'
+        default: qcow2
+        type: choice
+        options: [qcow2, raw, anaconda-iso, vmdk]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # A hosted runner has roughly 14 GB free on /, and the disk build needs the source
+      # image, the builder's object store and then a second copy of the finished disk when
+      # it is exported — all on that one filesystem. The preinstalled toolchains below are
+      # tens of gigabytes this job never touches.
+      #
+      # `df` runs before and after, and again before the export, because "no space left on
+      # device" gives no clue which of the three stages grew: a recurrence should be
+      # readable from the log rather than reasoned about.
+      - name: Make room on the runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h /
+
+      # An OCI repository name must be lowercase and a GitHub owner name need not be, so
+      # `github.repository_owner` cannot be dropped into a tag as it stands. Actions
+      # expressions have no lowercase function; bash's `,,` does it (as `nixery_reference`
+      # lowercases for the same reason).
+      - name: Resolve the image reference
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/raigolmi-host" >> "$GITHUB_ENV"
+
+      # The build context is the repository root: the Containerfile installs raigolmid and
+      # ui from source, both of which live above host/.
+      - name: Build the host container
+        run: sudo podman build -t localhost/raigolmi-host-base:latest -f host/Containerfile .
+
+      # The host's own images, built from the tree the image above ships and baked into it
+      # (raigolmid/raigolmid/hostimages.py).
+      - name: Bake in the host's own images
+        run: |
+          bash host/ci/bake-host-images.sh localhost/raigolmi-host-base:latest \
+              "$IMAGE:${{ github.sha }}" "$RUNNER_TEMP/host-images"
+          sudo podman tag "$IMAGE:${{ github.sha }}" "$IMAGE:latest"
+          df -h /
+
+      - name: Push
+        run: |
+          sudo podman login ghcr.io -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}'
+          sudo podman push "$IMAGE:${{ github.sha }}"
+          sudo podman push "$IMAGE:latest"
+
+      # One disk per run; the type is an input. `qcow2` is the default because the
+      # launcher's hypervisor is QEMU; the others stay selectable.
+      #
+      # `bootc upgrade` pulls by this reference, so the image inside the disk must name
+      # the registry it will be updated from rather than the local build tag.
+      #
+      # Every podman call in this job is `sudo`: the builder reads the image out of root's
+      # container storage, and an image built rootless would sit in the runner user's
+      # storage where it cannot be found.
+      - name: Build the bootable disk
+        run: |
+          mkdir -p output
+          df -h /
+          # --rootfs: `quay.io/fedora/fedora-bootc` declares no default root filesystem
+          # type, and bootc-image-builder refuses rather than picking one —
+          # "missing required info: DefaultRootFs". xfs rather than btrfs because Docker's
+          # overlay2 driver is what runs every body on this host, and overlay2 wants a
+          # filesystem with d_type; mkfs.xfs gives that by default.
+          sudo podman run --rm --privileged --security-opt label=type:unconfined_t \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v "$PWD/host/ci/config.toml:/config.toml:ro" \
+            -v "$PWD/output:/output" \
+            quay.io/centos-bootc/bootc-image-builder:latest \
+            --type '${{ inputs.disk_type || 'qcow2' }}' --rootfs xfs "$IMAGE:${{ github.sha }}"
+          sudo chown -R "$USER" output
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raigolmi-host-disk
+          path: output/**
+          retention-days: 1

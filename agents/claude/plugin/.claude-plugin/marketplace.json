@@ -1,0 +1,5 @@
+{
+  "name": "raigolmi",
+  "owner": {"name": "RaiGolmi"},
+  "plugins": [{"name": "raigolmi", "source": "./raigolmi", "description": "Every agent tab's RaiGolmi MCP server, which is also its channel"}]
+}

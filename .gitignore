@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# raigolmid runtime state (derived or machine-local, never committed)
+*.sock
+/state/
+/run/
+
+# Nix build output
+result
+result-*
+
+# Host image artifacts
+*.vmdk
+*.qcow2
+*.iso
+*.raw
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# The launcher and its disk, built on Windows by the root build.bat
+/windows/RaiGolmi.exe
+/windows/RaiGolmi.pdb
+/windows/bin/
+/windows/obj/
+/windows/qemu.log
+/windows/qemu.previous.log
+/windows/screen.ppm
+/windows/screen.ppm.partial
+# Machine-local: the public keys the launcher lets in beside its own
+/windows/authorized_keys
+
+# The working documents and the VM toolkit: kept on disk, never in the repository.
+/ARCHITECTURE.md
+/SESSION-START.md
+/docs/
+/spikes/
+/disk/
+/RaiGolmi.lnk

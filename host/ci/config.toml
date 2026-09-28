@@ -1,0 +1,12 @@
+#  bootc-image-builder blueprint for the RaiGolmi host disk image.
+#
+#  Deliberately almost empty. The user, the groups, the socket directory and the session
+#  are all created by the image's own sysusers.d / tmpfiles.d / systemd units, so they
+#  exist identically however the image is installed — a blueprint that also declared them
+#  would be a second source for facts the image already states.
+
+[[customizations.filesystem]]
+mountpoint = "/"
+# Bodies, toolbelt closures and agent images all live in Docker's storage under /var.
+# A body rebuild is the operation that runs out of room first.
+minsize = "60 GiB"

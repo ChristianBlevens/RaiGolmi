@@ -1,0 +1,44 @@
+# What the disk build's context (the checkout) holds that is not the OS's source: git's own
+# store, and the machine-local files .gitignore names, in this file's syntax (a pattern is
+# anchored at the context's root; `**/` reaches into directories).
+.git
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/*.sock
+**/*.vmdk
+**/*.qcow2
+**/*.iso
+**/*.raw
+windows/RaiGolmi.exe
+windows/RaiGolmi.pdb
+windows/bin
+windows/obj
+windows/qemu.log
+windows/qemu.previous.log
+windows/*.ppm
+windows/authorized_keys
+windows/*.ppm.partial
+**/.venv
+**/dist
+**/.eggs
+**/build
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+**/result
+**/result-*
+**/.DS_Store
+**/*.swp
+**/.idea
+**/.vscode
+
+# The working documents and the VM toolkit are not the machine's source.
+ARCHITECTURE.md
+SESSION-START.md
+docs
+spikes
+disk
+RaiGolmi.lnk

@@ -1,0 +1,34 @@
+# The notification popup as a container image, for the reason the control is one: the host's
+# `/` is a read-only ostree overlay with no GTK, and there is no `dnf install` on it.
+FROM docker.io/library/fedora:42
+
+# ⚠ Byte-identical to the selector's and the control's, so the three share one cached layer
+# and a fresh machine runs this `dnf` once, not three times.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gtk4 gtk4-layer-shell python3-gobject \
+        mesa-dri-drivers mesa-libEGL libglvnd-gles \
+        google-noto-color-emoji-fonts \
+    && dnf clean all
+
+# The daemon's socket is the desktop user's, so the client runs as that uid.
+RUN useradd --uid 1000 --create-home notify
+USER 1000:1000
+
+# Built from the repository root: the repository's own `ui` modules and the daemon's client.
+COPY --chown=1000:1000 ui/__init__.py ui/copyable.py ui/hostevents.py ui/layershell.py ui/theme.py ui/edge.py \
+     ui/slide.py ui/surfaces.py \
+     /opt/raigolmi/ui/
+COPY --chown=1000:1000 ui/notify_popup/ /opt/raigolmi/ui/notify_popup/
+COPY --chown=1000:1000 raigolmid/raigolmid/__init__.py raigolmid/raigolmid/client.py \
+     raigolmid/raigolmid/paths.py /opt/raigolmi/raigolmid/
+
+# ⚠ LD_PRELOAD is required: gtk4-layer-shell must load before libwayland-client, or an
+# ordinary window appears and `ui/layershell.py` refuses to run on. The SONAME, because an
+# LD_PRELOAD naming a missing file is ignored silently.
+ENV HOME=/home/notify \
+    XDG_RUNTIME_DIR=/run/user/1000 \
+    GDK_BACKEND=wayland \
+    PYTHONPATH=/opt/raigolmi \
+    LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0
+
+ENTRYPOINT ["python3", "-m", "ui.notify_popup.popup"]

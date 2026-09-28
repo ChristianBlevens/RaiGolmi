@@ -1,0 +1,173 @@
+"""The machine's settings: one TOML document of the user's, so that nothing is stuck how it was set.
+
+A value is a setting when the user chose it or it is how their keys are; an engineering timeout is not. Each is read where it is used, at the moment
+it is used, so a save takes effect without a restart: the keys, the keyboard, the display and
+the look by the settings watch (`daemon._watch_settings`, `keyboard.py`, `look.py`), the model and the context
+budget at a tab's next start, the lapse and the history's age at their next check.
+
+The document ships as `settings.toml` beside this module and is written to the user's config the
+first time the daemon starts (`install`); from then on the file is the only place a value
+lives. A file that is missing, missing a setting, or wrong is an error that names it, because
+filling the gap would be the daemon inventing an answer; the catalog's save runs `parse`
+first, so a wrong file is refused before it is written.
+"""
+from __future__ import annotations
+
+import re
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+from . import hostkeys
+
+
+class SettingsError(Exception):
+    pass
+
+
+_MODEL = re.compile(r"^[A-Za-z0-9._\[\]-]+$")
+# xkb names; no quote or `;`, which would end the compositor command they are sent in.
+_LAYOUT = re.compile(r"^[a-z0-9_-]+(,[a-z0-9_-]+)*$")
+_VARIANT = re.compile(r"^[A-Za-z0-9_,-]*$")
+_COLOUR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+SHIPPED = Path(__file__).with_name("settings.toml")
+
+# (section, key) → the kind of value it holds. What each one is, and its value, are the
+# shipped document's.
+SCHEMA: dict[str, dict[str, str]] = {
+    "keys": {"selector": "key", "ai_terminal": "key"},
+    "agents": {"model": "model", "context_budget_tokens": "whole"},
+    "keyboard": {"layout": "layout", "variant": "variant", "repeat_rate": "whole",
+                 "repeat_delay": "whole"},
+    "display": {"scale": "positive"},
+    "look": {**{name: "colour" for name in (
+                 "bg", "surface", "raised", "border", "text", "muted", "dim", "accent",
+                 "accent_bg", "ok", "warn", "bad")},
+             **{name: "whole" for name in (
+                 "tab_length", "tab_depth", "reveal_ms", "drawer_max",
+                 "terminal_height_percent", "menu_width", "menu_max_height", "card_width")},
+             **{name: "share" for name in (
+                 "drawer_share", "catalog_width_share", "catalog_height_share",
+                 "catalog_backdrop")}},
+    "questions": {"lapse_minutes": "positive"},
+    "history": {"kept_days": "positive"},
+}
+
+
+@dataclass(frozen=True)
+class Settings:
+    keys: dict[str, str]
+    model: str
+    budget_tokens: int
+    layout: str
+    variant: str
+    repeat_rate: int
+    repeat_delay: int
+    scale: float
+    look: dict[str, object]     # the fields of `ui.theme.Look`
+    lapse_seconds: float
+    kept_seconds: float
+
+
+def install(path: Path) -> None:
+    """The shipped document becomes the user's, once: a file they have is never touched."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(f".{path.name}.new")
+    staged.write_text(SHIPPED.read_text(encoding="utf-8"), encoding="utf-8")
+    staged.replace(path)
+
+
+def _positive(raw: dict, section: str, key: str, source: str) -> float:
+    value = _value(raw, section, key, source)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise SettingsError(f"{source}: [{section}].{key} must be a positive number, "
+                            f"not {value!r}")
+    return float(value)
+
+
+def _value(raw: dict, section: str, key: str, source: str):
+    table = raw.get(section, {})
+    if key not in table:
+        raise SettingsError(f"{source}: [{section}].{key} is missing; every setting is in "
+                            f"the document ({SHIPPED} holds each one's first value)")
+    return table[key]
+
+
+def _whole(raw: dict, section: str, key: str, source: str, least: int) -> int:
+    value = _value(raw, section, key, source)
+    if isinstance(value, bool) or not isinstance(value, int) or value < least:
+        raise SettingsError(f"{source}: [{section}].{key} must be a whole number of at least "
+                            f"{least}, not {value!r}")
+    return value
+
+
+def _named(raw: dict, section: str, key: str, source: str, form: re.Pattern, what: str) -> str:
+    value = _value(raw, section, key, source)
+    if not isinstance(value, str) or not form.match(value):
+        raise SettingsError(f"{source}: [{section}].{key} must be {what}, not {value!r}")
+    return value
+
+
+def _look(raw: dict, source: str) -> dict[str, object]:
+    look: dict[str, object] = {}
+    for key, kind in SCHEMA["look"].items():
+        if kind == "colour":
+            look[key] = _named(raw, "look", key, source, _COLOUR, "a colour written #rrggbb")
+        elif kind == "share":
+            look[key] = _positive(raw, "look", key, source)
+            if look[key] > 1:
+                raise SettingsError(f"{source}: [look].{key} is a share, 0 to 1, "
+                                    f"not {look[key]!r}")
+        else:
+            look[key] = _whole(raw, "look", key, source, 1)
+    if look["terminal_height_percent"] > 100:
+        raise SettingsError(f"{source}: [look].terminal_height_percent is at most 100, "
+                            f"not {look['terminal_height_percent']!r}")
+    return look
+
+
+def parse(text: str, source: str) -> Settings:
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise SettingsError(f"{source} is not valid TOML: {exc}") from exc
+    unknown = set(raw) - set(SCHEMA)
+    if unknown:
+        raise SettingsError(f"{source}: unknown section(s) {sorted(unknown)}; the settings "
+                            f"are {sorted(SCHEMA)}")
+    for section, table in raw.items():
+        if not isinstance(table, dict):
+            raise SettingsError(f"{source}: [{section}] must be a table")
+        extra = set(table) - set(SCHEMA[section])
+        if extra and section != "keys":         # hostkeys names the two reserved keys
+            raise SettingsError(f"{source}: unknown setting(s) {sorted(extra)} in "
+                                f"[{section}]; it holds {sorted(SCHEMA[section])}")
+    for action in SCHEMA["keys"]:
+        _value(raw, "keys", action, source)
+    try:
+        keys = hostkeys.keys_from(raw["keys"], source)
+    except hostkeys.HostKeyError as exc:
+        raise SettingsError(str(exc)) from exc
+    model = _named(raw, "agents", "model", source, _MODEL, "a model id")
+    return Settings(
+        keys=keys, model=model,
+        budget_tokens=_whole(raw, "agents", "context_budget_tokens", source, 1000),
+        layout=_named(raw, "keyboard", "layout", source, _LAYOUT,
+                      "xkb layout names, comma-separated"),
+        variant=_named(raw, "keyboard", "variant", source, _VARIANT, "an xkb variant name"),
+        repeat_rate=_whole(raw, "keyboard", "repeat_rate", source, 0),
+        repeat_delay=_whole(raw, "keyboard", "repeat_delay", source, 1),
+        scale=_positive(raw, "display", "scale", source),
+        look=_look(raw, source),
+        lapse_seconds=_positive(raw, "questions", "lapse_minutes", source) * 60,
+        kept_seconds=_positive(raw, "history", "kept_days", source) * 24 * 3600)
+
+
+def load(path: Path) -> Settings:
+    if not path.is_file():
+        raise SettingsError(f"{path} does not exist; raigolmid writes it from {SHIPPED} when "
+                            f"it starts")
+    return parse(path.read_text(encoding="utf-8"), str(path))

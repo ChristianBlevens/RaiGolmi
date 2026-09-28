@@ -1,0 +1,21 @@
+[Unit]
+Description=RaiGolmi control plane
+# A *user* unit, and that is load-bearing: each session view's uid is the launcher socket
+# directory's owner, which is this process's.
+PartOf=sway-session.target
+
+[Service]
+Type=exec
+# The definitions are the user's, made empty by the daemon and theirs to fill.
+Environment=RAIGOLMID_FACE_PATH=%h/raigolmi/faces
+Environment=RAIGOLMID_TOOLBELT_PATH=%h/raigolmi/toolbelts
+Environment=RAIGOLMID_BODY_PATH=%h/raigolmi/bodies
+ExecStart=/usr/bin/raigolmid
+# SIGTERM to the daemon alone: its shutdown stops its own children (the clipboard's
+# watches), and one killed under it first reads as a part of the machine that died.
+KillMode=mixed
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=sway-session.target

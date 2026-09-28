@@ -1,0 +1,86 @@
+# The machine's settings. Every value is read where it is used, so a save
+# takes effect without a restart. Every setting is here; one left out is an error.
+
+[keys]
+# opens and closes the selector; sway's bindsym syntax. A bare tap is the keysym
+# (Super_L), never the modifier name (Mod4), which binds and then never fires
+selector = "--release Super_L"
+# shows and hides the AI terminal
+ai_terminal = "Mod4+grave"
+
+[agents]
+# the model every tab runs, from its next start
+model = "claude-opus-5-5"
+# the context every agent keeps to; a managed tab at it is restarted fresh by the machine tab
+context_budget_tokens = 400000
+
+[keyboard]
+# xkb layout, or several comma-separated; the host's and the face's
+layout = "us"
+# xkb variant of the layout, empty for its plain form
+variant = ""
+# characters a second while a key is held; 0 turns repeat off
+repeat_rate = 25
+# milliseconds a key is held before it repeats
+repeat_delay = 600
+
+[display]
+# the screen's scale; 2 draws everything twice the size
+scale = 1
+
+[look]
+# the desktop, and every surface's own background
+bg = "#101014"
+# a panel or a button at rest
+surface = "#16161e"
+# a button under the pointer
+raised = "#1f2335"
+# lines between things
+border = "#2a2a36"
+# text
+text = "#d8d8e0"
+# secondary text
+muted = "#a9b1d6"
+# unavailable, and hints
+dim = "#565f89"
+# titles, and wherever the keyboard is
+accent = "#7aa2f7"
+# a selection's background
+accent_bg = "#283457"
+# selected
+ok = "#9ece6a"
+# a warning
+warn = "#e0af68"
+# a failure
+bad = "#f7768e"
+# pixels: the tab each edge surface is at rest, along its edge
+tab_length = 120
+# pixels: the same tab, out from its edge
+tab_depth = 24
+# how long a surface takes to slide out from its tab
+reveal_ms = 140
+# the selector's share of the screen's width, 0 to 1
+drawer_share = 0.2
+# pixels: the selector's widest
+drawer_max = 420
+# the AI terminal's share of the screen's height
+terminal_height_percent = 38
+# pixels: the history menu's width
+menu_width = 520
+# pixels: the history menu's tallest
+menu_max_height = 520
+# pixels: a catalog card's width and height
+card_width = 236
+# the catalog's share of the screen's width, and of its height
+catalog_width_share = 0.78
+catalog_height_share = 0.84
+# how dark the screen behind the catalog goes, 0 to 1
+catalog_backdrop = 0.45
+
+[questions]
+# an unanswered question or permission gets no answer after this
+lapse_minutes = 30
+
+[history]
+# history older than this is deleted
+kept_days = 7

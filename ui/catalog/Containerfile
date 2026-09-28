@@ -1,0 +1,32 @@
+# The catalog window as a container image.
+#
+# The selector's reason: GTK4, PyGObject and gtk4-layer-shell cannot be installed on the host,
+# whose `/` is a read-only ostree overlay. What it needs from the project is the API
+# client and the surfaces' own modules.
+FROM docker.io/library/fedora:42
+
+# The surfaces share this line byte for byte, so each build after the first is a cache hit.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gtk4 gtk4-layer-shell python3-gobject \
+        mesa-dri-drivers mesa-libEGL libglvnd-gles \
+        google-noto-color-emoji-fonts \
+    && dnf clean all
+
+# The sockets are the desktop user's and the identity comes from the host.
+RUN useradd --uid 1000 --create-home catalog
+USER 1000:1000
+
+COPY --chown=1000:1000 ui/__init__.py ui/copyable.py ui/layershell.py ui/surfaces.py ui/theme.py \
+     /opt/raigolmi/ui/
+COPY --chown=1000:1000 ui/catalog/ /opt/raigolmi/ui/catalog/
+COPY --chown=1000:1000 raigolmid/raigolmid/__init__.py raigolmid/raigolmid/client.py \
+     raigolmid/raigolmid/paths.py /opt/raigolmi/raigolmid/
+
+# ⚠ LD_PRELOAD is required: `ui/selector_native/Containerfile` says why, and why the SONAME.
+ENV HOME=/home/catalog \
+    XDG_RUNTIME_DIR=/run/user/1000 \
+    GDK_BACKEND=wayland \
+    PYTHONPATH=/opt/raigolmi \
+    LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0
+
+ENTRYPOINT ["python3", "-m", "ui.catalog.window"]

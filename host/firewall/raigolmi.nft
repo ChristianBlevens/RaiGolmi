@@ -1,0 +1,18 @@
+#!/usr/sbin/nft -f
+# The host stays up whatever the agents do: a container reaches the
+# host only through what it serves them — its sockets, mounted in, and the credential proxy.
+# Traffic from a container to the host arrives on a Docker bridge (`docker0`, `br-…`) at the
+# input hook; Docker's own rules (DOCKER-USER included) filter only what is forwarded. Its
+# own table, so Docker's tables are never touched and a reload replaces only this one.
+table inet raigolmi
+delete table inet raigolmi
+table inet raigolmi {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iifname != "docker0" iifname != "br-*" accept
+		ct state established,related accept
+		# The credential proxy (raigolmid/raigolmid/credproxy.py `PORT`).
+		tcp dport 47100 accept
+		counter drop
+	}
+}

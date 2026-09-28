@@ -1,0 +1,101 @@
+#  RaiGolmi host image: kernel, systemd, networking, Docker + Compose, Sway, raigolmid,
+#  foot + tmux, minimal fonts, and nothing else. Python is raigolmid's own runtime; work
+#  happens in bodies and session views, which bring their own.
+#
+#  Built by CI (see ci/): bootc-image-builder needs privileges an unprivileged builder lacks.
+FROM quay.io/fedora/fedora-bootc:42
+
+#  Docker CE from Docker's repository rather than Fedora's moby-engine: raigolmid drives
+#  `docker compose`, which docker-compose-plugin provides. The repofile is copied because
+#  `dnf config-manager` flags differ between dnf4 and dnf5.
+COPY host/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
+RUN dnf -y install \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+        sway foot tmux wl-clipboard \
+        git \
+        openssh-server \
+        nftables \
+        python3 python3-pip \
+        dejavu-sans-fonts dejavu-sans-mono-fonts \
+        google-noto-color-emoji-fonts && \
+    dnf clean all
+
+#  raigolmid, rai, and the `ui` package that ships with them. In /usr: immutable at runtime,
+#  replaced wholesale by `bootc upgrade`. Not editable, which would tie /usr to a path
+#  outside the image.
+#
+#  A venv, not the system interpreter: Fedora's python3 is externally managed (PEP 668), and
+#  `--break-system-packages` would let pip write over site-packages dnf owns. Entry points
+#  are linked into PATH so the unit and the shell name them the same way.
+COPY raigolmid /src/raigolmid
+COPY ui /src/ui
+RUN python3 -m venv /usr/lib/raigolmi && \
+    /usr/lib/raigolmi/bin/pip install --no-cache-dir /src/raigolmid && \
+    ln -s /usr/lib/raigolmi/bin/raigolmid /usr/bin/raigolmid && \
+    ln -s /usr/lib/raigolmi/bin/rai /usr/bin/rai && \
+    rm -rf /src
+
+#  The disk's own source tree (.containerignore drops machine-local files): the host images
+#  build from it in the repository's layout, and the manager reads it to understand the OS.
+#  The images are built by host/ci/bake-host-images.sh and added by Containerfile.images,
+#  since nothing in this build can run a container (raigolmid/hostimages.py).
+COPY . /usr/share/raigolmi/src
+
+COPY host/sway/config /etc/sway/config
+COPY host/foot/foot.ini /etc/xdg/foot/foot.ini
+
+#  The desktop user. raigolmid runs as this user, not root, because the session view's uid
+#  is the launcher socket directory's owner; `docker` membership covers what root would.
+#  Without sudo the user cannot set a password (`passwd` asks a passwordless account for
+#  its current one). Checked at build time: a malformed drop-in disables sudo entirely.
+COPY host/sudoers-raigolmi /etc/sudoers.d/raigolmi
+RUN chmod 0440 /etc/sudoers.d/raigolmi && visudo -c -f /etc/sudoers.d/raigolmi
+
+COPY host/sysusers/raigolmi.conf  /usr/lib/sysusers.d/raigolmi.conf
+COPY host/tmpfiles/raigolmi.conf  /usr/lib/tmpfiles.d/raigolmi.conf
+
+#  sshd deliberately: the host shares no clipboard with its display, so diagnostics are
+#  otherwise retyped, and it is the second way in when the compositor is broken. Password
+#  auth with no password shipped: `passwd` on the console opens it. The other way in is a
+#  key handed in at boot as a systemd credential (tmpfiles/raigolmi.conf) by the launcher.
+COPY host/sshd/raigolmi.conf /etc/ssh/sshd_config.d/10-raigolmi.conf
+COPY host/systemd/tmpfiles-setup-credentials.conf \
+     /usr/lib/systemd/system/systemd-tmpfiles-setup.service.d/raigolmi-credentials.conf
+#
+#  Auto-login on tty1, Sway started from its login shell. No display manager is needed.
+COPY host/systemd/getty-autologin.conf \
+     /usr/lib/systemd/system/getty@tty1.service.d/autologin.conf
+COPY host/systemd/getty-autologin-recovery.conf \
+     /usr/lib/systemd/system/getty@tty2.service.d/autologin.conf
+COPY host/systemd/user-after-docker.conf \
+     /usr/lib/systemd/system/user@.service.d/raigolmi-after-docker.conf
+COPY host/systemd/sway-session.target      /usr/lib/systemd/user/sway-session.target
+COPY host/systemd/raigolmid.service         /usr/lib/systemd/user/raigolmid.service
+COPY host/systemd/profile-sway.sh          /usr/share/raigolmi/profile-sway.sh
+COPY host/systemd/raigolmi-follow-display.service \
+     /usr/lib/systemd/user/raigolmi-follow-display.service
+COPY host/systemd/follow-display.sh        /usr/libexec/raigolmi/follow-display
+#  The machine's timezone is Windows': the launcher hands it in as a credential.
+COPY host/systemd/raigolmi-timezone.service /usr/lib/systemd/system/raigolmi-timezone.service
+COPY host/systemd/set-timezone             /usr/libexec/raigolmi/set-timezone
+#  The host stays up whatever the agents do: no container reaches it over the network but
+#  for the credential proxy, applied before Docker starts.
+COPY host/firewall/raigolmi.nft           /usr/lib/raigolmi/firewall.nft
+COPY host/systemd/raigolmi-firewall.service \
+     /usr/lib/systemd/system/raigolmi-firewall.service
+#  The base image's update timer is masked: the OS updates only when the user asks, and its
+#  `--apply` reboots without a word.
+RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh && \
+    mkdir -p /usr/lib/systemd/user/sway-session.target.wants && \
+    ln -s ../raigolmid.service \
+          /usr/lib/systemd/user/sway-session.target.wants/raigolmid.service && \
+    ln -s ../raigolmi-follow-display.service \
+          /usr/lib/systemd/user/sway-session.target.wants/raigolmi-follow-display.service && \
+    chmod 0755 /usr/libexec/raigolmi/set-timezone && \
+    systemctl enable docker.service sshd.service raigolmi-timezone.service \
+        raigolmi-firewall.service && \
+    systemctl mask bootc-fetch-apply-updates.timer
+
+#  bootc's own check that the image is a valid bootable container: a base that lost its
+#  kernel or its initramfs fails here rather than at first boot.
+RUN bootc container lint

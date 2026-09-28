@@ -1,0 +1,51 @@
+# The host control as a container image.
+#
+# GTK4, PyGObject and gtk4-layer-shell are three things the host image does not carry and
+# cannot be given: `/` is a read-only ostree overlay, so there is no `dnf install` on the
+# machine this runs on. Shipped as an image, as a face's compositor is, the host stays
+# minimal rather than growing a toolkit.
+#
+# It is an ordinary Wayland client of the host compositor, and it reaches the compositor's IPC
+# socket the same way — both live in XDG_RUNTIME_DIR, which is the only thing mounted in.
+FROM docker.io/library/fedora:42
+
+# ⚠ Byte-identical to the selector's, and kept so on purpose: Docker keys a layer on the
+# instruction and its parent, so an identical line means the second of the two images built on
+# a fresh machine is a cache hit instead of a second 70-second `dnf`. That is most of the wait
+# between power-on and a usable screen. The emoji font is not needed here and is installed
+# anyway, because a few megabytes is the price of the line matching.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gtk4 gtk4-layer-shell python3-gobject \
+        mesa-dri-drivers mesa-libEGL libglvnd-gles \
+        google-noto-color-emoji-fonts \
+    && dnf clean all
+
+# The socket is the desktop user's and the identity comes from the host, so the
+# client runs as that uid rather than chowning anything.
+RUN useradd --uid 1000 --create-home control
+USER 1000:1000
+
+# Built from the repository root, as the selector is: the control imports `ui.hostipc` and
+# `ui.layershell`, which are the repository's modules and not copies.
+COPY --chown=1000:1000 ui/__init__.py ui/copyable.py ui/hostevents.py ui/hostipc.py ui/layershell.py \
+     ui/theme.py ui/edge.py ui/slide.py ui/surfaces.py /opt/raigolmi/ui/
+COPY --chown=1000:1000 ui/host_control/ /opt/raigolmi/ui/host_control/
+COPY --chown=1000:1000 raigolmid/raigolmid/__init__.py raigolmid/raigolmid/client.py \
+     raigolmid/raigolmid/paths.py /opt/raigolmi/raigolmid/
+
+# `docker run --user` does not read /etc/passwd, so an unset HOME resolves to `/`, which is
+# read-only; GTK writes a module cache under it before it maps a window.
+# ⚠ LD_PRELOAD is required, not belt-and-braces. gtk4-layer-shell has to be loaded before
+# libwayland-client or its init is a no-op, and a linker cannot guarantee that when GTK is
+# reached through PyGObject at runtime. Without it an ordinary window appears instead of an
+# overlay — `ui/layershell.py` asks whether the surface really became a layer surface and
+# refuses to run on, so this going missing is loud rather than invisible.
+# The SONAME, not a bare `.so`: only the -devel package ships the unversioned symlink, and an
+# LD_PRELOAD naming a file that is not there fails silently.
+ENV HOME=/home/control \
+    XDG_RUNTIME_DIR=/run/user/1000 \
+    GDK_BACKEND=wayland \
+    PYTHONPATH=/opt/raigolmi \
+    LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0
+
+ENTRYPOINT ["python3", "-m", "ui.host_control.control"]

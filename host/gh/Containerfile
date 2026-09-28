@@ -1,0 +1,17 @@
+# GitHub's CLI, for the machine's GitHub sign-in (`rai registry-token --login`): baked into the
+# disk like every image the machine itself uses, so a first sign-in pulls nothing. Pinned by
+# version and by the release's own checksum. The first RUN line is the door's, byte for byte,
+# so the three share their layers; python3 fetches and unpacks because it is already there.
+FROM fedora:42
+RUN dnf install -y --setopt=install_weak_deps=False python3 && dnf clean all
+ARG GH_VERSION=2.101.0
+ARG GH_SHA256=9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8
+RUN python3 -c 'import hashlib, io, sys, tarfile, urllib.request; \
+v, want = sys.argv[1], sys.argv[2]; \
+data = urllib.request.urlopen(f"https://github.com/cli/cli/releases/download/v{v}/gh_{v}_linux_amd64.tar.gz").read(); \
+got = hashlib.sha256(data).hexdigest(); \
+got == want or sys.exit(f"gh {v}: sha256 {got}, expected {want}"); \
+t = tarfile.open(fileobj=io.BytesIO(data)); \
+open("/usr/local/bin/gh", "wb").write(t.extractfile(f"gh_{v}_linux_amd64/bin/gh").read())' \
+    "$GH_VERSION" "$GH_SHA256" \
+ && chmod 0755 /usr/local/bin/gh && gh --version

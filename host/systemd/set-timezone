@@ -1,0 +1,11 @@
+#!/bin/sh
+# set-timezone — /etc/localtime pointed at the zone the Windows launcher handed in as the
+# raigolmi.timezone credential (windows/RaiGolmi.cs).
+set -eu
+zone=$(cat "$CREDENTIALS_DIRECTORY/raigolmi.timezone")
+if [ ! -f "/usr/share/zoneinfo/$zone" ]; then
+    echo "set-timezone: the launcher handed in '$zone', which is no zone in /usr/share/zoneinfo" >&2
+    exit 1
+fi
+ln -sfn "../usr/share/zoneinfo/$zone" /etc/localtime
+echo "set-timezone: $zone"

@@ -1,0 +1,13 @@
+[Unit]
+Description=RaiGolmi: each display at the mode it prefers when it changes
+# host/systemd/follow-display.sh says why sway needs telling.
+PartOf=sway-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/raigolmi/follow-display
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=sway-session.target
