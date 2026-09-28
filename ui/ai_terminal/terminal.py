@@ -179,7 +179,7 @@ def ensure_session() -> None:
         commands += [";", "bind-key", "-T", "root", key, command]
     for key in MENUS:
         commands += [";", "unbind-key", "-q", "-T", "root", key]
-    # A permission's menu dismissed with Escape is put back by this key (`offer_permission`).
+    # A permission's menu that could not be drawn is drawn by this key (`offer_permission`).
     commands += [";", "bind-key", "-T", "prefix", PERMISSION_KEY,
                  "run-shell -b 'rai ai permission 2>&1 | systemd-cat -t rai-ai'"]
     _tmux(*commands[1:])
@@ -422,15 +422,57 @@ def offer_permission(client, tab: str, unless: str | None = None,
                      wait: bool = False) -> str | None:
     """The tab's pending permission answered in its own window, as a tmux menu on the
     attached terminal — yes or no, either kept *always* for its project or everywhere.
-    Escape leaves it pending, and `PERMISSION_KEY` puts it back. Returns the permission offered, or None with none pending; `unless` is one
-    already offered, not offered again. `display-menu` waits for the choice: on its own
-    thread for `follow`, which goes on listening, and here with `wait` for a command that
-    would otherwise exit before the menu was drawn. One that could not be drawn says why on
-    the status line."""
+    Only an answer closes it: closed any other way (Escape, a click outside it) while the
+    permission is pending and its tab in view, it is drawn again. Returns the permission
+    offered, or None with none pending; `unless` is one already offered, not offered again.
+    `display-menu` waits for the choice: on its own thread for `follow`, which goes on
+    listening, and here with `wait` for a command that would otherwise exit before the menu
+    was drawn. One that could not be drawn says why on the status line, and
+    `PERMISSION_KEY` draws it again."""
     item = next((i for i in client.call("questions") if i["kind"] == "permission"
                  and i["tab"] == tab), None)
     if item is None or item["id"] == unless:
         return None if item is None else unless
+    menu = _permission_menu(item, tab)
+    if menu is None:
+        return None
+    answered = _answered(item)
+
+    def show() -> None:
+        command = menu
+        while command:
+            client_name = command[command.index("-c") + 1]
+            proc = subprocess.run(command, capture_output=True, text=True)
+            if proc.returncode != 0:
+                _tmux("display-message", "-c", client_name,
+                      f"permission {item['id']}: the menu could not be drawn: "
+                      f"{proc.stderr.strip()}".replace("#", "##"), check=False)
+                return
+            if _tmux("show-options", "-gqv", answered).stdout.strip():
+                _tmux("set-option", "-gu", answered)
+                return
+            pending = any(i["id"] == item["id"] for i in client.call("questions"))
+            if not pending or client.call("status")["terminal"]["viewing"] != tab:
+                return
+            command = _permission_menu(item, tab)
+    if menu:
+        if wait:
+            show()
+        else:
+            threading.Thread(target=show, name=f"permission-{item['id']}", daemon=True).start()
+    return item["id"]
+
+
+def _answered(item: dict) -> str:
+    """The tmux option a choice sets before its `run-shell`: its commands run on the terminal's
+    client, not the one `display-menu` returns on, and this is how the return tells a choice
+    from a close."""
+    return f"@answered-{item['id']}"
+
+
+def _permission_menu(item: dict, tab: str) -> list[str] | None:
+    """The `display-menu` command for `item`, sized to the attached terminal as it is now; None
+    with no terminal attached, and [] for one too small, which is told so on its status line."""
     clients = _tmux("list-clients", "-t", SESSION, "-F",
                     "#{client_name} #{client_width} #{client_height}").stdout.split("\n")
     attached = next((c.split() for c in clients if c.strip()), None)
@@ -450,28 +492,17 @@ def offer_permission(client, tab: str, unless: str | None = None,
                 f" --always {scope}" if scope else "")
             items += [f"{choice.capitalize()}{label}".replace("#", "##"),
                       key if not suffix else (suffix if choice == "yes" else suffix.upper()),
+                      f"set-option -g {_answered(item)} 1 ; "
                       f"run-shell -b \"{answer} 2>&1 | systemd-cat -t rai-ai\""]
     title = f" {tab} asks permission "
     if len(title) + 4 > width or len(lines) + 1 + 6 + 2 > height:
         _tmux("display-message", "-c", attached[0],
               f"permission {item['id']}: the terminal ({width}x{height}) is too small for its "
               f"menu; enlarge it and press prefix+{PERMISSION_KEY}", check=False)
-        return item["id"]
+        return []
     # `-M`: a menu not opened by a click takes no mouse, and closes at any click, without it.
-    command = ["tmux", "display-menu", "-M", "-c", attached[0], "-t", f"{SESSION}:{tab}*",
-               "-T", title, "-x", "C", "-y", "C", "--", *items]
-
-    def show() -> None:
-        proc = subprocess.run(command, capture_output=True, text=True)
-        if proc.returncode != 0:
-            _tmux("display-message", "-c", attached[0],
-                  f"permission {item['id']}: the menu could not be drawn: "
-                  f"{proc.stderr.strip()}".replace("#", "##"), check=False)
-    if wait:
-        show()
-    else:
-        threading.Thread(target=show, name=f"permission-{item['id']}", daemon=True).start()
-    return item["id"]
+    return ["tmux", "display-menu", "-M", "-c", attached[0], "-t", f"{SESSION}:{tab}*",
+            "-T", title, "-x", "C", "-y", "C", "--", *items]
 
 
 def _container_running(container: str) -> bool:

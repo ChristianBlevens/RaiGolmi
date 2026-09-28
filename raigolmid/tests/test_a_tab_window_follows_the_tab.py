@@ -88,19 +88,27 @@ class _Tmux:
     A menu larger than it is drawn by nothing and still exits 0, as tmux 3.5a's is: a menu is
     as wide as its title at least, and every line of it wider than the client is trimmed."""
 
-    def __init__(self, monkeypatch, size: tuple[int, int] = (155, 21)) -> None:
+    def __init__(self, monkeypatch, size: tuple[int, int] = (155, 21), dismiss: int = 0) -> None:
         self.told: list[tuple] = []
         self.menus: list[list[str]] = []
-        self.size = size
+        self.size, self.dismiss = size, dismiss
+        self.options: dict[str, str] = {}
         monkeypatch.setattr(terminal, "_tmux", self)
         monkeypatch.setattr(terminal.subprocess, "run", self.run)
         monkeypatch.setattr(terminal.threading, "Thread", _Inline)
 
     def __call__(self, *args, **_kwargs):
         self.told.append(args)
-        clients = "/dev/pts/0 %d %d\n" % self.size
-        return terminal.subprocess.CompletedProcess(
-            args, 0, clients if args[0] == "list-clients" else "", "")
+        out = ""
+        if args[0] == "list-clients":
+            out = "/dev/pts/0 %d %d\n" % self.size
+        elif args[:2] == ("show-options", "-gqv"):
+            out = self.options.get(args[2], "")
+        elif args[:2] == ("set-option", "-gu"):
+            self.options.pop(args[2], None)
+        elif args[:2] == ("set-option", "-g"):
+            self.options[args[2]] = args[3]
+        return terminal.subprocess.CompletedProcess(args, 0, out, "")
 
     def run(self, command, **_kwargs):
         assert command[:2] == ["tmux", "display-menu"], command
@@ -108,6 +116,14 @@ class _Tmux:
         title = command[command.index("-T") + 1].replace("##", "#")
         if len(title) + 4 <= width and len(_rows(command)) + 2 <= height:
             self.menus.append(command)
+            if self.dismiss:
+                self.dismiss -= 1
+            else:
+                # The first choice's commands, as tmux runs them on the terminal's client.
+                chosen = next(r for r in _rows(command) if len(r) == 3 and r[2])
+                for part in chosen[2].split(" ; "):
+                    if part.startswith("set-option "):
+                        self(*part.split())
         return terminal.subprocess.CompletedProcess(command, 0, "", "")
 
 
@@ -210,6 +226,26 @@ def test_a_permission_longer_than_the_terminal_is_wide_is_still_drawn(monkeypatc
     tmux = _Tmux(monkeypatch, (60, 8))
     assert terminal._keep(machine, TAB, "%7", None) == "q4" and tmux.menus == []
     assert "too small" in tmux.told[-1][-1], "a menu that cannot be drawn says so"
+
+
+def test_only_an_answer_closes_the_permission_menu(monkeypatch):
+    """Closed twice without a choice it is drawn again each time; once answered, it stays shut."""
+    tmux = _Tmux(monkeypatch, dismiss=2)
+    machine = _Machine("permission", viewing=TAB, permission=PERMISSION)
+    assert terminal.offer_permission(machine, TAB) == "q4"
+    assert len(tmux.menus) == 3 and tmux.options == {}
+
+    tmux = _Tmux(monkeypatch, dismiss=1)
+    menus = []
+    real_run = tmux.run
+
+    def leaves(command, **kwargs):
+        menus.append(command)
+        machine.viewing = None      # he hid the terminal while it was up
+        return real_run(command, **kwargs)
+    monkeypatch.setattr(terminal.subprocess, "run", leaves)
+    terminal.offer_permission(machine, TAB)
+    assert len(menus) == 1, "a tab out of view is offered again when it comes back, not now"
 
 
 def test_the_menus_choice_answers_the_permission_and_the_key_puts_it_back(monkeypatch):
