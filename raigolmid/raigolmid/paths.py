@@ -174,7 +174,8 @@ class Paths:
 
     @property
     def registry_token(self) -> Path:
-        # The GitHub token a catalog upload uses: the daemon's alone, never an agent's.
+        # The user's GitHub sign-in: a catalog upload's, and every agent's through the
+        # credential proxy, which alone reads it (`credproxy.py`).
         return self.config.parent / PROJECT / "registry-token"
 
     @property

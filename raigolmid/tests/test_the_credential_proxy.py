@@ -3,6 +3,7 @@ given a placeholder, and the proxy swaps the credential in for one it issued, fo
 open, passing everything else — `anthropic-beta` above all — and streaming the answer back."""
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import socket
@@ -48,12 +49,16 @@ def machine(tmp_path):
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
     credentials = tmp_path / "agent-credentials"
     credential.write(credentials, "CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-the-real-one")
-    broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", FakeRuntime())
+    credential.write(tmp_path / "registry-token", "GITHUB_TOKEN", "ghp_the-real-one",
+                     credential.REGISTRY_KEYS)
+    broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", FakeRuntime(),
+                    tmp_path / "registry-token")
     events = EventLog(tmp_path / "events.jsonl", epoch=1)
     open_tabs = {"tab-1", "raigolmid-judge"}
     proxy = CredentialProxy(broker, events, open_tabs.__contains__, host="127.0.0.1", port=0,
                             upstream=f"http://127.0.0.1:{upstream.server_address[1]}",
-                            intercepted="api.test")
+                            intercepted="api.test",
+                            github={"git.test": f"http://127.0.0.1:{upstream.server_address[1]}"})
     threading.Thread(target=proxy.serve, daemon=True).start()
     yield broker, proxy, events, open_tabs
     proxy.close()
@@ -194,9 +199,11 @@ def test_an_agent_is_pointed_at_the_proxy_and_given_the_authority(machine):
     broker, _, _, _ = machine
     env = broker.environment("tab-1")
     assert env["HTTPS_PROXY"].endswith(":47100") and "ANTHROPIC_BASE_URL" not in env
-    [mount] = broker.mounts()
-    assert (mount.source, mount.target, mount.read_only) == (
+    ca, bundle = broker.mounts()
+    assert (ca.source, ca.target, ca.read_only) == (
         str(broker.authority.cert), env["NODE_EXTRA_CA_CERTS"], True)
+    assert bundle.read_only and broker.authority.bundle.read_bytes().endswith(
+        broker.authority.cert.read_bytes())
     assert oct((broker.authority.directory / "ca.key").stat().st_mode & 0o777) == "0o600"
 
 
@@ -209,3 +216,31 @@ def test_the_hosts_firewall_opens_the_proxys_port():
     from raigolmid.credproxy import PORT
     rules = (Path(__file__).resolve().parents[2] / "host" / "firewall" / "raigolmi.nft")
     assert f"tcp dport {PORT} accept" in rules.read_text()
+
+
+def _inside(broker, proxy, host: str) -> http.client.HTTPConnection:
+    trusted = ssl.create_default_context(cafile=str(broker.authority.cert))
+    conn = http.client.HTTPConnection(host)
+    conn.sock = trusted.wrap_socket(_connect(proxy, f"{host}:443"), server_hostname=host)
+    return conn
+
+
+def test_the_github_sign_in_is_swapped_in_on_githubs_hosts_and_only_there(machine):
+    """git sends the placeholder as Basic auth's password; the sign-in goes in its place. Each
+    kind of placeholder is refused on the other's hosts."""
+    broker, proxy, _, _ = machine
+    env = broker.environment("tab-1")
+    basic = base64.b64encode(f"x-access-token:{env['GH_TOKEN']}".encode()).decode()
+    conn = _inside(broker, proxy, "git.test")
+    conn.request("POST", "/o/r.git/git-receive-pack", body=b"pack",
+                 headers={"Authorization": f"Basic {basic}"})
+    assert conn.getresponse().read() == b"".join(EVENTS)
+    [seen] = Upstream.seen
+    assert base64.b64decode(seen["headers"]["Authorization"].removeprefix("Basic ")) == (
+        b"x-access-token:ghp_the-real-one")
+
+    for host, token in (("git.test", env["CLAUDE_CODE_OAUTH_TOKEN"]), ("api.test", env["GH_TOKEN"])):
+        conn = _inside(broker, proxy, host)
+        conn.request("POST", "/", body=b"{}", headers={"Authorization": f"Bearer {token}"})
+        assert conn.getresponse().status == 401, host
+    assert len(Upstream.seen) == 1

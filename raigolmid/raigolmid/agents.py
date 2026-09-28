@@ -278,7 +278,8 @@ class Agents:
         self.events = events
         self.epoch = epoch
         self.broker = credproxy.Broker(paths.agent_credentials, paths.proxy_secret,
-                                       paths.proxy_authority, runtime)
+                                       paths.proxy_authority, runtime,
+                                       paths.registry_token)
 
     # --- context --------------------------------------------------------
     @property

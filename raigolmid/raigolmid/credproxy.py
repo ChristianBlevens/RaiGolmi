@@ -25,14 +25,23 @@ is set and must choose the one the credential needs.
 its feature flags and bootstrap straight to `api.anthropic.com` whatever the base URL says, and
 a placeholder there turns every flag off — a tab's channel among them. So `CONNECT api.anthropic.com` is answered here under
 a certificate from the machine's own authority (`Authority`), which the agent is told to trust,
-and every request inside it has its placeholder swapped like any other. `CONNECT` to anywhere
-else is a plain tunnel — agents browse — except to this machine itself: a tab never reaches the
+and every request inside it has its placeholder swapped like any other.
+
+The user's GitHub sign-in (`Paths.registry_token`) reaches agents the same way: a second
+placeholder in `GH_TOKEN`, which gh reads and git's credential helper hands on, swapped in on
+`GITHUB_HOSTS`, which are opened like the API host. A placeholder is honoured only on its own
+kind's hosts, so neither credential can be spent on the other's. The system bundle an agent
+mounts carries the authority, so git, gh and curl trust those hosts as Node does.
+
+`CONNECT` to anywhere else is a plain tunnel — agents browse — except to this machine itself: a tab never reaches the
 host layer through the proxy, whose address is the host's. The
 target is resolved once, refused if any address it names is one the host can bind, and the
 tunnel opens to the address that was checked, so a name cannot resolve elsewhere in between.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime
 import errno
 import hashlib
@@ -61,15 +70,24 @@ from .runtime import ContainerRuntime
 from .runtime.base import Mount
 
 UPSTREAM = "https://api.anthropic.com"
-# The one host whose traffic is opened here; every other CONNECT is tunnelled as it is.
 INTERCEPTED = urlsplit(UPSTREAM).hostname
-# Where an agent container finds the authority it trusts for that host.
+# The hosts the user's GitHub sign-in is swapped in for: git over HTTPS, the API gh and a
+# REST call use, and release uploads. Each goes on to itself.
+GITHUB_HOSTS = ("github.com", "api.github.com", "uploads.github.com")
+# Where an agent container finds the authority: Node reads it alone, everything else in the
+# system bundle it is appended to.
 CA_TARGET = "/usr/local/share/raigolmi/proxy-ca.pem"
+BUNDLE_TARGET = "/etc/ssl/certs/ca-certificates.crt"
 TUNNEL_TIMEOUT = 30.0
 # Fixed, because containers started before a daemon restart keep the URL they were given.
 PORT = 47100
 OAUTH, API_KEY = credential.CREDENTIAL_KEYS
-SHAPE = {OAUTH: "sk-ant-oat01-rai-", API_KEY: "sk-ant-api03-rai-"}
+[GITHUB] = credential.REGISTRY_KEYS
+SHAPE = {OAUTH: "sk-ant-oat01-rai-", API_KEY: "sk-ant-api03-rai-", GITHUB: "ghp_rai-"}
+# The variable gh reads its token from; git's credential helper hands it on.
+GITHUB_VARIABLE = "GH_TOKEN"
+GIT_HELPER = ('!f() { test "$1" = get && printf "username=x-access-token\\npassword=%s\\n" '
+              '"$GH_TOKEN"; }; f')
 # Hop-by-hop headers (RFC 9110 §7.6.1) and the ones this proxy sets itself.
 HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                  "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length"})
@@ -102,9 +120,9 @@ class Placeholders:
     def issue(self, owner: str, kind: str) -> str:
         return f"{SHAPE[kind]}{owner}-{self._mac(owner)}"
 
-    def owner_of(self, token: str) -> str | None:
-        """The owner a placeholder was issued to, or None for anything else."""
-        for prefix in SHAPE.values():
+    def owner_of(self, token: str, kinds: tuple[str, ...] = tuple(SHAPE)) -> str | None:
+        """The owner a placeholder of one of `kinds` was issued to, or None for anything else."""
+        for prefix in (SHAPE[kind] for kind in kinds):
             if token.startswith(prefix):
                 owner, _, mac = token[len(prefix):].rpartition("-")
                 if owner and hmac.compare_digest(mac, self._mac(owner)):
@@ -114,16 +132,24 @@ class Placeholders:
 
 class Authority:
     """The machine's own certificate authority, made on first use, the key kept 0600: what an
-    agent trusts for `INTERCEPTED`, and nothing else is ever signed by it."""
+    agent trusts for the intercepted hosts, and nothing else is ever signed by it. `bundle` is
+    the host's trusted roots with it appended, rewritten at each start so the roots stay the
+    host's current ones."""
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.cert = directory / "ca.pem"
+        self.bundle = directory / "bundle.pem"
         self._key_path = directory / "ca.key"
         if not self._key_path.is_file():
             self._make()
         self._key = serialization.load_pem_private_key(self._key_path.read_bytes(), None)
         self._ca = x509.load_pem_x509_certificate(self.cert.read_bytes())
+        roots = ssl.get_default_verify_paths().cafile
+        if roots is None:
+            raise ProxyError("this machine's OpenSSL names no trusted-roots file to extend")
+        self.bundle.write_bytes(Path(roots).read_bytes().rstrip(b"\n") + b"\n"
+                                + self.cert.read_bytes())
 
     def _make(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -179,8 +205,9 @@ class Broker:
     """The credential, and what an agent container is given in its place."""
 
     def __init__(self, credentials: Path, secret: Path, authority: Path,
-                 runtime: ContainerRuntime) -> None:
+                 runtime: ContainerRuntime, github: Path) -> None:
         self.credentials = credentials
+        self.github = github
         self.placeholders = Placeholders(secret)
         self.authority = Authority(authority)
         self.runtime = runtime
@@ -189,12 +216,19 @@ class Broker:
         """Raises what `credential.read` raises: an agent is never started without one."""
         [kind] = credential.read(self.credentials)
         proxy = f"http://{self.runtime.bridge_gateway()}:{PORT}"
+        # The GitHub placeholder is issued whether or not the user has signed in yet: the
+        # sign-in is read on each request, so one made later holds in tabs already open.
         return {kind: self.placeholders.issue(owner, kind),
+                GITHUB_VARIABLE: self.placeholders.issue(owner, GITHUB),
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
+                "GIT_CONFIG_VALUE_0": GIT_HELPER,
                 "HTTPS_PROXY": proxy, "https_proxy": proxy,
                 "NODE_EXTRA_CA_CERTS": CA_TARGET}
 
     def mounts(self) -> tuple[Mount, ...]:
-        return (Mount(source=str(self.authority.cert), target=CA_TARGET, read_only=True),)
+        return (Mount(source=str(self.authority.cert), target=CA_TARGET, read_only=True),
+                Mount(source=str(self.authority.bundle), target=BUNDLE_TARGET, read_only=True))
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -212,12 +246,13 @@ class _Handler(BaseHTTPRequestHandler):
     def do_CONNECT(self) -> None:
         host, _, port = self.path.rpartition(":")
         proxy = self.server.proxy
-        if host == proxy.intercepted and port == "443":
+        if host in proxy.upstreams and port == "443":
             self.send_response(200)
             self.end_headers()
             # The requests inside are read by this same handler's loop, over TLS.
+            self.intercepted = host
             try:
-                self.connection = proxy.tls.wrap_socket(self.connection, server_side=True)
+                self.connection = proxy.tls[host].wrap_socket(self.connection, server_side=True)
             except (ssl.SSLError, OSError) as exc:
                 # What an agent that does not trust the authority says: CA_TARGET not mounted.
                 proxy.events.emit("credproxy.handshake_failed", target=self.path, error=str(exc))
@@ -244,14 +279,16 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _forward(self) -> None:
         proxy = self.server.proxy
+        # A request sent to the proxy itself rather than inside a CONNECT is for Anthropic.
+        host = getattr(self, "intercepted", proxy.intercepted)
         try:
-            owner, outgoing = proxy.outgoing(self.headers.items())
+            owner, outgoing = proxy.outgoing(self.headers.items(), host)
         except ProxyError as exc:
-            proxy.events.emit("credproxy.refused", path=self.path, reason=str(exc))
+            proxy.events.emit("credproxy.refused", host=host, path=self.path, reason=str(exc))
             self._refuse(401, str(exc))
             return
         body = self._body()
-        upstream = urlsplit(proxy.upstream)
+        upstream = urlsplit(proxy.upstreams[host])
         connect = (http.client.HTTPSConnection if upstream.scheme == "https"
                    else http.client.HTTPConnection)
         conn = connect(upstream.hostname, upstream.port, timeout=UPSTREAM_TIMEOUT)
@@ -263,7 +300,7 @@ class _Handler(BaseHTTPRequestHandler):
             except OSError as exc:
                 proxy.events.emit("credproxy.upstream_failed", owner=owner, path=self.path,
                                   error=str(exc))
-                self._refuse(502, f"Anthropic's API could not be reached: {exc}", "api_error")
+                self._refuse(502, f"{host} could not be reached: {exc}", "api_error")
                 return
             try:
                 self._relay(answer)
@@ -374,14 +411,16 @@ class CredentialProxy:
     def __init__(self, broker: Broker, events: EventLog, open_owner: Callable[[str], bool],
                  host: str, port: int = PORT, upstream: str = UPSTREAM,
                  intercepted: str = INTERCEPTED,
+                 github: dict[str, str] | None = None,
                  this_machine: Callable[[str], bool] = is_this_machine) -> None:
         self.broker = broker
         self.this_machine = this_machine
         self.events = events
         self.open_owner = open_owner
-        self.upstream = upstream
         self.intercepted = intercepted
-        self.tls = broker.authority.context_for(intercepted)
+        self.github = github if github is not None else {h: f"https://{h}" for h in GITHUB_HOSTS}
+        self.upstreams = {intercepted: upstream, **self.github}
+        self.tls = {h: broker.authority.context_for(h) for h in self.upstreams}
         self._server = _Server((host, port), _Handler)
         self._server.proxy = self
 
@@ -389,20 +428,19 @@ class CredentialProxy:
     def address(self) -> tuple[str, int]:
         return self._server.server_address[:2]
 
-    def outgoing(self, headers: list[tuple[str, str]]) -> tuple[str | None, dict[str, str]]:
-        """The request's owner and the headers it goes upstream with: the credential in
-        place of the placeholder, everything else as sent. No owner: it carried none."""
+    def outgoing(self, headers: list[tuple[str, str]],
+                 host: str) -> tuple[str | None, dict[str, str]]:
+        """The request's owner and the headers it goes upstream to `host` with: the credential
+        in place of the placeholder, everything else as sent. No owner: it carried none."""
+        if host in self.github:
+            return self._outgoing_github(headers)
         sent = {name.lower(): value for name, value in headers}
         token = (sent.get("authorization", "").removeprefix("Bearer ").strip()
                  or sent.get("x-api-key", "").strip())
         if not token:
             return None, {name: value for name, value in headers
                           if name.lower() not in HOP}
-        owner = self.broker.placeholders.owner_of(token)
-        if owner is None:
-            raise ProxyError("the request carries no placeholder this machine issued")
-        if not self.open_owner(owner):
-            raise ProxyError(f"{owner} is closed")
+        owner = self._owner(token, (OAUTH, API_KEY))
         [(kind, real)] = credential.read(self.broker.credentials).items()
         out = {name: value for name, value in headers
                if name.lower() not in HOP | {"authorization", "x-api-key"}}
@@ -410,6 +448,39 @@ class CredentialProxy:
             out["Authorization"] = f"Bearer {real}"
         else:
             out["x-api-key"] = real
+        return owner, out
+
+    def _owner(self, token: str, kinds: tuple[str, ...]) -> str:
+        owner = self.broker.placeholders.owner_of(token, kinds)
+        if owner is None:
+            raise ProxyError("the request carries no placeholder this machine issued for "
+                             "this host")
+        if not self.open_owner(owner):
+            raise ProxyError(f"{owner} is closed")
+        return owner
+
+    def _outgoing_github(self, headers: list[tuple[str, str]]) -> tuple[str | None, dict[str, str]]:
+        """git sends the placeholder as Basic auth's password, gh as a `token` or Bearer."""
+        out = {name: value for name, value in headers if name.lower() not in HOP}
+        sent = next((value for name, value in headers if name.lower() == "authorization"), "")
+        if not sent:
+            return None, out
+        scheme, _, value = sent.strip().partition(" ")
+        if scheme.lower() == "basic":
+            try:
+                user, _, token = base64.b64decode(value, validate=True).decode().partition(":")
+            except (binascii.Error, UnicodeDecodeError) as exc:
+                raise ProxyError(f"unreadable Basic authorization: {exc}") from exc
+        else:
+            user, token = None, value.strip()
+        owner = self._owner(token, (GITHUB,))
+        try:
+            real = credential.read(self.broker.github, credential.REGISTRY_KEYS)[GITHUB]
+        except credential.CredentialError as exc:
+            raise ProxyError(str(exc)) from exc
+        out = {name: value for name, value in out.items() if name.lower() != "authorization"}
+        out["Authorization"] = (f"Basic {base64.b64encode(f'{user}:{real}'.encode()).decode()}"
+                                if user is not None else f"{scheme} {real}")
         return owner, out
 
     def serve(self) -> None:

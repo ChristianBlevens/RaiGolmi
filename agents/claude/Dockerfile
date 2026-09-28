@@ -21,6 +21,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         procps python3 python3-pip ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
+# GitHub's CLI, as the user's GitHub account through the credential proxy (`GH_TOKEN` is a
+# placeholder). The version and checksum are `host/gh/Containerfile`'s.
+ARG GH_VERSION=2.101.0
+ARG GH_SHA256=9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8
+RUN curl -fsSL -o /tmp/gh.tgz \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+    && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/gh.tgz -C /usr/local/bin --strip-components=2 "gh_${GH_VERSION}_linux_amd64/bin/gh" \
+    && rm /tmp/gh.tgz && gh --version
+
 # The pinned base image already owns 1000: `node:22-bookworm-slim` ships a `node` user and
 # group at that id. 1000 is not negotiable here — it has to match the host user across the
 # /work bind mount — so the occupant is renamed and renumbered rather than duplicated.

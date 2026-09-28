@@ -337,7 +337,8 @@ def standalone(tmp_path: Path, monkeypatch):
     # What the daemon's start writes before anything reads a setting.
     settings.install(paths.settings)
     questions = Questions(events, paths)
-    broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", runtime)
+    broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", runtime,
+                    paths.registry_token)
     return events, questions, Judge(events, runtime, tmp_path / "preferences.md", broker,
                                     1), runtime
 

@@ -216,7 +216,7 @@ def test_what_is_asked_and_an_overturn_held_outlive_the_daemon(tmp_path, monkeyp
     restarted = Questions(events, Paths(state=tmp_path, data=tmp_path, config=tmp_path / "raigolmid", runtime=tmp_path))
     judge = Judge(events, runtime, tmp_path / "preferences.md",
                   Broker(tmp_path / "agent-credentials", tmp_path / "proxy-secret",
-                         tmp_path / "proxy-ca", runtime), 2)
+                         tmp_path / "proxy-ca", runtime, tmp_path / "registry-token"), 2)
     assert list(restarted.items()) == [done, held, waiting]
     assert restarted.tab_state("tab-1") == "asking"
     assert restarted.ask("tab-2", "Next?") not in (done, held, waiting)
