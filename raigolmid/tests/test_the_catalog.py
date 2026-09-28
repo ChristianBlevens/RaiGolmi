@@ -89,11 +89,13 @@ def test_a_download_is_somebody_elses_until_it_is_the_users_and_is_never_uploade
     assert _state(h, "toolbelt", "python-dev")["authored"] is True
 
 
-def test_a_trial_that_has_ended_does_not_keep_its_faces_images(tmp_path, monkeypatch):
+
+def _an_installed_face_alone(tmp_path, monkeypatch):
+    """`minimal` installed as the only face, so its compositor is its own."""
     h = Harness(tmp_path, monkeypatch)
     h.runtime.one_shot[naming.closure_copy()] = ClosureCopies(h.runtime)
     for other in [f for f in h.session.catalogue.faces.values() if f.id != "minimal"]:
-        shutil.rmtree(other.directory)      # its compositor is then this face's alone
+        shutil.rmtree(other.directory)
     h.session.rediscover()
     face = h.session.catalogue.faces["minimal"]
     compositor = face.directory.parent / "_compositors" / "sway"
@@ -101,6 +103,11 @@ def test_a_trial_that_has_ended_does_not_keep_its_faces_images(tmp_path, monkeyp
     (compositor / "Containerfile").write_text("FROM fedora\n")
     h.session.catalog.install("face", "minimal")
     _settle(h)
+    return h, face
+
+
+def test_a_trial_that_has_ended_does_not_keep_its_faces_images(tmp_path, monkeypatch):
+    h, face = _an_installed_face_alone(tmp_path, monkeypatch)
     h.session.faces.start_trial(face)
     h.runtime.stop(naming.face_trial())
 
@@ -108,3 +115,15 @@ def test_a_trial_that_has_ended_does_not_keep_its_faces_images(tmp_path, monkeyp
 
     assert removed and all(h.runtime.image(ref) is None for ref in removed)
     assert h.runtime.inspect(naming.face_trial()) is None
+
+
+def test_a_face_with_half_its_images_has_that_half_deleted_before_its_definition(tmp_path, monkeypatch):
+    h, face = _an_installed_face_alone(tmp_path, monkeypatch)
+    h.runtime.remove_image(h.session.faces.apps_reference(face))
+    assert _state(h, "face", "minimal")["state"] == "downloaded"
+
+    result = h.session.catalog.delete("face", "minimal")
+
+    assert result["state"] == "downloaded" and len(result["removed"]) == 1
+    assert h.runtime.image(result["removed"][0]) is None
+    assert face.directory.exists()

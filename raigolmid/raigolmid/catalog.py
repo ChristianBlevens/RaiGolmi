@@ -331,8 +331,11 @@ class Catalog:
             raise CatalogError(f"{kind} '{layer_id}' is in use: {held}")
         if isinstance(layer, Face):
             self.session.remove_ended_trial()
-        if self._installed(layer):
-            removed = self._remove_images(kind, layer)
+        # Whatever of its images is here, not only a whole install: a half left by an install
+        # or a delete that failed partway would otherwise outlive the definition naming it.
+        refs = self._own_images(layer)
+        if refs:
+            removed = self._remove_images(kind, layer, refs)
             self.session.events.emit("catalog.deleted", kind=kind, id=layer_id,
                                      what="images", images=removed)
             return {"kind": kind, "id": layer_id, "state": "downloaded", "removed": removed}
@@ -344,21 +347,24 @@ class Catalog:
         self.session.events.emit("catalog.deleted", kind=kind, id=layer_id, what="definition")
         return {"kind": kind, "id": layer_id, "state": None}
 
-    def _remove_images(self, kind: str, layer) -> list[str]:
+    def _own_images(self, layer) -> list[str]:
+        """Its images here that no other layer shares."""
         if isinstance(layer, Body):
-            refs = self._body_images(layer)
-        elif isinstance(layer, Toolbelt):
-            refs = self._toolbelt_images(layer)
-        else:
-            refs, _ = self._face_images(layer)
-            if layer.desktop is not None:
-                compositor = hostimages.face_compositor(layer.directory.parent,
-                                                        layer.desktop.compositor).tag()
-                sharing = [f.id for f in self.session.catalogue.faces.values()
-                           if f.id != layer.id and f.desktop is not None
-                           and f.desktop.compositor == layer.desktop.compositor]
-                if sharing and compositor in refs:
-                    refs.remove(compositor)     # the other faces' too
+            return self._body_images(layer)
+        if isinstance(layer, Toolbelt):
+            return self._toolbelt_images(layer)
+        refs, _ = self._face_images(layer)
+        if layer.desktop is not None:
+            compositor = hostimages.face_compositor(layer.directory.parent,
+                                                    layer.desktop.compositor).tag()
+            sharing = [f.id for f in self.session.catalogue.faces.values()
+                       if f.id != layer.id and f.desktop is not None
+                       and f.desktop.compositor == layer.desktop.compositor]
+            if sharing and compositor in refs:
+                refs.remove(compositor)     # the other faces' too
+        return refs
+
+    def _remove_images(self, kind: str, layer, refs: list[str]) -> list[str]:
         removed = []
         for ref in refs:
             try:
