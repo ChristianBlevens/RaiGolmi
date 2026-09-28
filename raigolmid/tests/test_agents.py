@@ -433,9 +433,12 @@ def test_the_mcp_tools_answer_in_the_paths_the_agent_sees(h, monkeypatch):
 
     tools = build_server(h.served(build_tab_methods(h.session, Questions(h.events, h.paths), Channels(h.session, h.events),
                                                           tab)))
-    payload = str(asyncio.run(tools.call_tool("status", {})))
-    assert host not in payload
-    assert "'working_copy': '/work'" in payload or '"working_copy": "/work"' in payload
+    # Every tool that answers with the tab's status: `select` and `deselect` answer with it too.
+    for name, args in (("status", {}), ("select", {"kind": "body", "id": "myapi"}),
+                       ("deselect", {"kind": "face"})):
+        payload = str(asyncio.run(tools.call_tool(name, args)))
+        assert host not in payload, name
+        assert "'working_copy': '/work'" in payload or '"working_copy": "/work"' in payload, name
 
 
 def test_the_index_routes_to_the_documents_that_exist_and_every_layer(h, monkeypatch):

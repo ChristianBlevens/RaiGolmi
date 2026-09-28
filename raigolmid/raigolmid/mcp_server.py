@@ -312,7 +312,7 @@ def build_server(client: ApiClient):
                              "it; you stay the tab you are, on the /work you have, and their "
                              "terminal stays where they left it.")
     def select(kind: str, id: str) -> dict[str, Any]:
-        return client.call("select", kind=kind, id=id)
+        return call("select", kind=kind, id=id)
 
     @tool(server, description="Open your sandbox — your body on your /work, with the toolbelt "
                              "you name — when you need to run something: `exec`, a build, the "
@@ -334,7 +334,7 @@ def build_server(client: ApiClient):
     @tool(server, description="Deselect the face or body (`kind`). The same rules as "
                              "`select`.")
     def deselect(kind: str) -> dict[str, Any]:
-        return client.call("deselect", kind=kind)
+        return call("deselect", kind=kind)
 
     @tool(server, name="ask_user", description=ASK_USER)
     def ask_user_tool(message: str, choices: list[str] | None = None) -> dict[str, Any]:
