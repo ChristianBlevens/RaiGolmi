@@ -457,7 +457,8 @@ def offer_permission(client, tab: str, unless: str | None = None,
               f"permission {item['id']}: the terminal ({width}x{height}) is too small for its "
               f"menu; enlarge it and press prefix+{PERMISSION_KEY}", check=False)
         return item["id"]
-    command = ["tmux", "display-menu", "-c", attached[0], "-t", f"{SESSION}:{tab}*",
+    # `-M`: a menu not opened by a click takes no mouse, and closes at any click, without it.
+    command = ["tmux", "display-menu", "-M", "-c", attached[0], "-t", f"{SESSION}:{tab}*",
                "-T", title, "-x", "C", "-y", "C", "--", *items]
 
     def show() -> None:

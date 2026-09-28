@@ -187,6 +187,7 @@ def test_a_permission_is_offered_in_its_window_once_each_time_he_comes_to_it(mon
 
     menu = tmux.menus[0]
     assert menu[menu.index("-c") + 1] == "/dev/pts/0"
+    assert "-M" in menu, "not opened by a click, a menu takes no mouse without it"
     rows = _rows(menu)
     assert rows[:2] == [("-Swap the toolbelt to ##python?", "", ""), ("",)], \
         "shown, not chosen; a # is not a format"
