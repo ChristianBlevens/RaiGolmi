@@ -205,12 +205,14 @@ class Machine
     // The device list is load-bearing (no usb-tablet, no absolute pointer). The GPU is virgl
     // and QEMU has no window: its display goes to this program alone, over a socket handed to
     // it (Display.cs). A vCPU is a QEMU thread Windows schedules like any other, not a reserved
-    // core, so the guest gets every logical processor and an idle one costs nothing.
+    // core, so the guest gets every logical processor and an idle one costs nothing. The
+    // hypervisor emulates each vCPU's local APIC (kernel-irqchip=on, required, so a host that
+    // cannot fails QEMU's start): off, every IPI, timer and EOI exits to QEMU under its one lock.
     public string Arguments()
     {
         var a = new List<string>();
         a.Add("-name RaiGolmi");
-        a.Add("-machine type=q35,accel=whpx,kernel-irqchip=off -cpu max -m 8192 -smp " + Environment.ProcessorCount);
+        a.Add("-machine type=q35,accel=whpx,kernel-irqchip=on -cpu max -m 8192 -smp " + Environment.ProcessorCount);
         a.Add("-drive " + Quote("if=pflash,format=raw,readonly=on,file=" + Opt(Firmware)));
         a.Add("-drive " + Quote("if=pflash,format=raw,file=" + Opt(Vars)));
         a.Add("-drive " + Quote("file=" + Opt(Disk) + ",format=qcow2"));
