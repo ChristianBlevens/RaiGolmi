@@ -46,7 +46,8 @@ When it's done there's an `RaiGolmi` shortcut next to `build.bat`. Run it from t
 it wherever you want.
 
 Running `build.bat` again rebuilds the app. It only builds a new disk if you say yes, since
-your machine lives on the old one.
+your machine lives on the old one. `build-launcher.bat` rebuilds just the app and leaves the
+disk alone.
 
 ### On bare metal
 

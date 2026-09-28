@@ -1,5 +1,6 @@
-#  What build.ps1 and build-disk.ps1 share: asking, installing what is missing, and building a
-#  disk in WSL. Dot-sourced by both; not run on its own.
+#  What build.ps1, build-disk.ps1 and build-launcher.ps1 share: asking, installing what is
+#  missing, building a disk in WSL, and building the launcher. Dot-sourced by each; not run
+#  on its own.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework
 
@@ -124,4 +125,100 @@ function Build-Disk([string]$type, [string]$target) {
               "[ `$(printf '%s\n' `$f | grep -c .) = 1 ] || { echo 'the build did not write one image:' `$f >&2; exit 1; }; " +
               "mv `$f '$wslTarget' && rm -rf /root/raigolmi-build")
     if ((Wsl-Root $moved) -ne 0) { Fail "The disk built but could not be moved to $target." }
+}
+
+# --- the window: the launcher and what it runs on --------------------------------------------
+
+$virgl = 'mingw-w64-ucrt-x86_64-virglrenderer'
+
+function Msys([string]$command) {
+    & "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 CHERE_INVOKING=1 /usr/bin/bash -lc $command
+    if ($LASTEXITCODE -ne 0) { Fail "MSYS2 failed running: $command" }
+}
+
+# What the window needs: the hypervisor platform, the SDK the launcher builds with, and the
+# QEMU it runs. Entries shaped as Disk-Prerequisites' are.
+function Launcher-Prerequisites {
+    $missing = @()
+
+    # Asked of the hypervisor platform itself, through the API QEMU's WHPX accelerator uses: the
+    # feature list can disagree with a platform that works. No WinHvPlatform.dll is no platform.
+    Add-Type -Namespace RaiGolmi -Name Whp -MemberDefinition @'
+[DllImport("WinHvPlatform.dll")]
+public static extern int WHvGetCapability(int code, out int present, uint size, out uint written);
+'@
+    $hypervisor = $false
+    $present = 0; $written = 0
+    try {
+        $hypervisor = ([RaiGolmi.Whp]::WHvGetCapability(0, [ref]$present, 4, [ref]$written) -eq 0) -and
+                      ($present -ne 0)
+    } catch {
+        # PowerShell wraps what a .NET call throws; only a missing DLL means no platform.
+        $cause = $_.Exception
+        while ($cause.InnerException) { $cause = $cause.InnerException }
+        if ($cause -isnot [System.DllNotFoundException]) { throw }
+    }
+    if (-not $hypervisor) {
+        $missing += @{ What = 'Windows Hypervisor Platform (QEMU runs the machine on it; needs a restart)'
+                       How  = 'As administrator: dism /online /enable-feature /featurename:HypervisorPlatform /all'
+                       Do   = { Start-Process dism.exe -Verb RunAs -Wait -ArgumentList `
+                                    '/online /enable-feature /featurename:HypervisorPlatform /all /norestart'
+                                $script:restart = $true } }
+    }
+
+    if (-not ((Get-Command dotnet -ErrorAction SilentlyContinue) -and
+              ((& dotnet --list-sdks 2>$null) -match '^8\.'))) {
+        $missing += @{ What = '.NET 8 SDK (builds the launcher)'
+                       How  = 'winget install Microsoft.DotNet.SDK.8'
+                       Do   = { Winget 'Microsoft.DotNet.SDK.8' } }
+    }
+
+    if (-not (Test-Path "$msys2\usr\bin\bash.exe")) {
+        $missing += @{ What = "MSYS2 at $msys2 (QEMU comes from it)"
+                       How  = 'winget install MSYS2.MSYS2'
+                       Do   = { Winget 'MSYS2.MSYS2' } }
+    }
+
+    if (-not (Test-Path "$msys2\ucrt64\bin\qemu-system-x86_64w.exe")) {
+        $missing += @{ What = 'QEMU, in MSYS2'
+                       How  = 'In the MSYS2 UCRT64 window: pacman -S mingw-w64-ucrt-x86_64-qemu'
+                       Do   = { Msys 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-qemu' } }
+    }
+
+    # The stock virglrenderer cannot show the boot console (windows/virglrenderer/build.sh).
+    $patched = (Test-Path "$msys2\usr\bin\bash.exe") -and
+               ((& "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 /usr/bin/bash -lc "pacman -Q $virgl" 2>$null) -match '1\.3\.0-1\.1')
+    if (-not $patched) {
+        $missing += @{ What = 'the patched virglrenderer, compiled in MSYS2 (without it the boot screen never shows)'
+                       How  = 'In the MSYS2 MSYS window, in windows\virglrenderer: bash build.sh'
+                       Do   = { Push-Location (Join-Path $repo 'windows\virglrenderer')
+                                try { & "$msys2\usr\bin\env.exe" MSYSTEM=MSYS CHERE_INVOKING=1 /usr/bin/bash -l ./build.sh }
+                                finally { Pop-Location }
+                                if ($LASTEXITCODE -ne 0) { Fail 'The virglrenderer build failed; its output is above.' } } }
+    }
+
+    return $missing
+}
+
+# windows\RaiGolmi.exe. A running launcher holds the file, and publishing over it fails with
+# an error that does not say so.
+function Build-Launcher {
+    if (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
+        Fail 'RaiGolmi is running. Close its window, then build again.'
+    }
+    Write-Host 'Building RaiGolmi.exe...'
+    dotnet publish (Join-Path $repo 'windows\RaiGolmi.csproj') -c Release -nologo -v q -o (Join-Path $repo 'windows')
+    if ($LASTEXITCODE -ne 0) { Fail 'The launcher did not build; the compiler''s errors are above.' }
+}
+
+# RaiGolmi.lnk beside the build scripts, to run from here or drag anywhere. It points at the
+# exe, which stays in windows\ beside the files it writes; with no disk recorded, the launcher
+# asks for one.
+function New-Shortcut {
+    $exe = Join-Path $repo 'windows\RaiGolmi.exe'
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $repo 'RaiGolmi.lnk'))
+    $link.TargetPath = $exe
+    $link.WorkingDirectory = Split-Path $exe
+    $link.IconLocation = "$exe,0"
+    $link.Save()
 }
