@@ -20,6 +20,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from dataclasses import dataclass
@@ -430,10 +431,17 @@ def offer_permission(client, tab: str, unless: str | None = None,
                  and i["tab"] == tab), None)
     if item is None or item["id"] == unless:
         return None if item is None else unless
-    attached = _tmux("list-clients", "-t", SESSION, "-F", "#{client_name}").stdout.split()
-    if not attached:
+    clients = _tmux("list-clients", "-t", SESSION, "-F",
+                    "#{client_name} #{client_width} #{client_height}").stdout.split("\n")
+    attached = next((c.split() for c in clients if c.strip()), None)
+    if attached is None:
         return None
-    items: list[str] = []
+    width, height = int(attached[1]), int(attached[2])
+    # tmux draws nothing, and exits 0, for a menu larger than the client, and a menu is at
+    # least as wide as its title: the message is wrapped into the menu's own lines instead.
+    # A line is disabled by a leading `-`, so the entries follow `--` or the first is an option.
+    lines = textwrap.wrap(item["message"], max(width - 4, 1))
+    items = [x for line in lines for x in ("-" + line.replace("#", "##"), "", "")] + [""]
     for choice, key in (("yes", "y"), ("no", "n")):
         for scope, suffix, label in ((None, "", ""),
                                      ("project", "p", f", always in {item['project']}"),
@@ -443,9 +451,14 @@ def offer_permission(client, tab: str, unless: str | None = None,
             items += [f"{choice.capitalize()}{label}".replace("#", "##"),
                       key if not suffix else (suffix if choice == "yes" else suffix.upper()),
                       f"run-shell -b \"{answer} 2>&1 | systemd-cat -t rai-ai\""]
-    title = f" {item['message']} ".replace("#", "##")
+    title = f" {tab} asks permission "
+    if len(title) + 4 > width or len(lines) + 1 + 6 + 2 > height:
+        _tmux("display-message", "-c", attached[0],
+              f"permission {item['id']}: the terminal ({width}x{height}) is too small for its "
+              f"menu; enlarge it and press prefix+{PERMISSION_KEY}", check=False)
+        return item["id"]
     command = ["tmux", "display-menu", "-c", attached[0], "-t", f"{SESSION}:{tab}*",
-               "-T", title, "-x", "C", "-y", "C", *items]
+               "-T", title, "-x", "C", "-y", "C", "--", *items]
 
     def show() -> None:
         proc = subprocess.run(command, capture_output=True, text=True)

@@ -84,24 +84,47 @@ def test_a_reopened_tab_is_attached_again_in_the_same_window(monkeypatch):
 
 
 class _Tmux:
-    """What `_tmux` was told, answering `list-clients` with one attached terminal."""
+    """What `_tmux` was told, answering `list-clients` with one attached terminal of `size`.
+    A menu larger than it is drawn by nothing and still exits 0, as tmux 3.5a's is: a menu is
+    as wide as its title at least, and every line of it wider than the client is trimmed."""
 
-    def __init__(self, monkeypatch) -> None:
+    def __init__(self, monkeypatch, size: tuple[int, int] = (155, 21)) -> None:
         self.told: list[tuple] = []
         self.menus: list[list[str]] = []
+        self.size = size
         monkeypatch.setattr(terminal, "_tmux", self)
         monkeypatch.setattr(terminal.subprocess, "run", self.run)
         monkeypatch.setattr(terminal.threading, "Thread", _Inline)
 
     def __call__(self, *args, **_kwargs):
         self.told.append(args)
+        clients = "/dev/pts/0 %d %d\n" % self.size
         return terminal.subprocess.CompletedProcess(
-            args, 0, "/dev/pts/0\n" if args[0] == "list-clients" else "", "")
+            args, 0, clients if args[0] == "list-clients" else "", "")
 
     def run(self, command, **_kwargs):
         assert command[:2] == ["tmux", "display-menu"], command
-        self.menus.append(command)
+        width, height = self.size
+        title = command[command.index("-T") + 1].replace("##", "#")
+        if len(title) + 4 <= width and len(_rows(command)) + 2 <= height:
+            self.menus.append(command)
         return terminal.subprocess.CompletedProcess(command, 0, "", "")
+
+
+def _rows(menu: list[str]) -> list[tuple[str, ...]]:
+    """A `display-menu` command's rows, read as tmux reads them: an empty name is a separator
+    alone, anything else a name, a key and a command. An entry after the options that starts
+    with `-` is itself an option unless `--` came first."""
+    entries, rows, i = menu[menu.index("C", menu.index("-y")) + 1:], [], 0
+    if entries[:1] == ["--"]:
+        entries = entries[1:]
+    else:
+        assert not entries[0].startswith("-"), f"tmux reads {entries[0]!r} as its options"
+    while i < len(entries):
+        step = 1 if entries[i] == "" else 3
+        rows.append(tuple(entries[i:i + step]))
+        i += step
+    return rows
 
 
 class _Inline:
@@ -164,13 +187,28 @@ def test_a_permission_is_offered_in_its_window_once_each_time_he_comes_to_it(mon
 
     menu = tmux.menus[0]
     assert menu[menu.index("-c") + 1] == "/dev/pts/0"
-    assert "##python" in menu[menu.index("-T") + 1], "a # is not a tmux format"
-    entries = menu[menu.index("C", menu.index("-y")) + 1:]
-    labels, keys, commands = entries[0::3], entries[1::3], entries[2::3]
-    assert labels == ["Yes", "Yes, always in myapi", "Yes, always everywhere",
-                      "No", "No, always in myapi", "No, always everywhere"]
-    assert keys == ["y", "p", "e", "n", "P", "E"]
+    rows = _rows(menu)
+    assert rows[:2] == [("-Swap the toolbelt to ##python?", "", ""), ("",)], \
+        "shown, not chosen; a # is not a format"
+    labels, keys, commands = zip(*rows[2:])
+    assert labels == ("Yes", "Yes, always in myapi", "Yes, always everywhere",
+                      "No", "No, always in myapi", "No, always everywhere")
+    assert keys == ("y", "p", "e", "n", "P", "E")
     assert "rai ai permission q4 --answer yes --always project" in commands[1]
+
+
+def test_a_permission_longer_than_the_terminal_is_wide_is_still_drawn(monkeypatch):
+    """The toolbelt swap's message is 161 characters; his terminal was 155 wide."""
+    tmux = _Tmux(monkeypatch, (155, 21))
+    long = dict(PERMISSION, message="The agent wants to swap this sandbox's toolbelt to "
+                "'letthemrise'. Its language servers and your terminals' shells in the sandbox "
+                "end, and the body keeps running.")
+    machine = _Machine("permission", viewing=TAB, permission=long)
+    assert terminal._keep(machine, TAB, "%7", None) == "q4" and len(tmux.menus) == 1
+
+    tmux = _Tmux(monkeypatch, (60, 8))
+    assert terminal._keep(machine, TAB, "%7", None) == "q4" and tmux.menus == []
+    assert "too small" in tmux.told[-1][-1], "a menu that cannot be drawn says so"
 
 
 def test_the_menus_choice_answers_the_permission_and_the_key_puts_it_back(monkeypatch):
