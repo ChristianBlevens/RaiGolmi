@@ -5,13 +5,15 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import tarfile
 
 import pytest
 
-from raigolmid import registry
+from raigolmid import naming, registry
 from raigolmid.catalog import QUEUE, Catalog, CatalogError
 from tests.fakegithub import FakeGitHub
+from tests.fakes import ClosureCopies
 from tests.harness import Harness
 
 
@@ -85,3 +87,24 @@ def test_a_download_is_somebody_elses_until_it_is_the_users_and_is_never_uploade
     with pytest.raises(CatalogError, match="carol"):
         h.session.catalog.upload_files("toolbelt", "shared")
     assert _state(h, "toolbelt", "python-dev")["authored"] is True
+
+
+def test_a_trial_that_has_ended_does_not_keep_its_faces_images(tmp_path, monkeypatch):
+    h = Harness(tmp_path, monkeypatch)
+    h.runtime.one_shot[naming.closure_copy()] = ClosureCopies(h.runtime)
+    for other in [f for f in h.session.catalogue.faces.values() if f.id != "minimal"]:
+        shutil.rmtree(other.directory)      # its compositor is then this face's alone
+    h.session.rediscover()
+    face = h.session.catalogue.faces["minimal"]
+    compositor = face.directory.parent / "_compositors" / "sway"
+    compositor.mkdir(parents=True)
+    (compositor / "Containerfile").write_text("FROM fedora\n")
+    h.session.catalog.install("face", "minimal")
+    _settle(h)
+    h.session.faces.start_trial(face)
+    h.runtime.stop(naming.face_trial())
+
+    removed = h.session.catalog.delete("face", "minimal")["removed"]
+
+    assert removed and all(h.runtime.image(ref) is None for ref in removed)
+    assert h.runtime.inspect(naming.face_trial()) is None

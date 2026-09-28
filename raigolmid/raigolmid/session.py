@@ -1424,6 +1424,10 @@ class Session:
             self.faces.stop_trial()
         return {"trial": None}
 
+    def remove_ended_trial(self) -> None:
+        with self._trial_lock:
+            self.faces.remove_ended_trial()
+
     def face_input(self, tab_id: str, action: str, text: str | None = None,
                    x: int | None = None, y: int | None = None,
                    button: str = "left", trial: bool = False) -> dict[str, Any]:

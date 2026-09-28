@@ -329,6 +329,8 @@ class Catalog:
         held = self._in_use(layer)
         if held is not None:
             raise CatalogError(f"{kind} '{layer_id}' is in use: {held}")
+        if isinstance(layer, Face):
+            self.session.remove_ended_trial()
         if self._installed(layer):
             removed = self._remove_images(kind, layer)
             self.session.events.emit("catalog.deleted", kind=kind, id=layer_id,

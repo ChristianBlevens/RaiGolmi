@@ -456,6 +456,14 @@ class Faces:
         if info is not None:
             self.events.emit("face.trial_stopped", face=info.labels.get(labels.FACE, ""))
 
+    def remove_ended_trial(self) -> None:
+        """Remove a trial that is no longer running. `trial` already reads it as gone, but its
+        container outlives it — the machine going down, or its compositor exiting — and holds
+        its face's images until removed."""
+        info = self.runtime.inspect(naming.face_trial())
+        if info is not None and info.status != "running":
+            self.stop_trial()
+
     def settings(self, face_id: str) -> Path:
         """Where the face's apps keep their config and state, in the user's home."""
         return self.paths.face_home / FACE_SETTINGS / face_id
