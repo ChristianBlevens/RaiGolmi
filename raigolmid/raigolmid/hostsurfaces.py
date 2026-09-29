@@ -223,13 +223,18 @@ FOOT_COLOURS = {"background": "bg", "foreground": "text", "selection-background"
 # Ctrl+Enter sends what Alt+Enter does (ESC CR), which Claude Code reads as a new line; left
 # alone it is a bare CR, Enter. The AI terminal's alone: in an editor ESC CR is not a new line.
 NEWLINE_BINDING = r"-o 'text-bindings.\x1b\x0d=Control+Return'"
+# The size the window is given, to the pixel: foot otherwise rounds a floating window down to
+# whole cells, and the few pixels short at the sides and the bottom show the face behind and
+# take the pointer, which closes the terminal (`ui/host_control/control.py`).
+WHOLE_SIZE = "-o resize-by-cells=no"
 
 
 def ai_terminal_command(paths: Paths) -> str:
     palette = settings.load(paths.settings).look
     colours = " ".join(f"-o colors.{key}={str(palette[name]).lstrip('#')}"
                        for key, name in FOOT_COLOURS.items())
-    return f"foot {colours} {NEWLINE_BINDING} --app-id={surfaces.TERMINAL_APP_ID} rai ai"
+    return (f"foot {colours} {NEWLINE_BINDING} {WHOLE_SIZE} "
+            f"--app-id={surfaces.TERMINAL_APP_ID} rai ai")
 
 
 def close_ai_terminal() -> bool:
