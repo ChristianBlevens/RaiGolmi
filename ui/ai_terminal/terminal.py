@@ -161,11 +161,16 @@ def ensure_session() -> None:
     # Also on a session this did not create: the host config's floor starts bare tmux on
     # the same session name, and adopting it should not leave it unstyled.
     commands: list[str] = []
-    for option, value in style(theme.load()).items():
+    look = theme.load()
+    for option, value in style(look).items():
         commands += [";", "set-option", "-t", SESSION, option, value]
     # A tab's conversation is written into its pane's scrollback (`agents.py`), not redrawn
-    # by the agent, so the scrollback holds a long one; tmux's default keeps 2000 lines.
-    commands += [";", "set-option", "-t", SESSION, "history-limit", "100000"]
+    # by the agent, so the scrollback holds a long one; tmux's default keeps 2000 lines. The
+    # scrollbar is always shown, on every window, and is dragged or clicked like any other.
+    commands += [";", "set-option", "-t", SESSION, "history-limit", "100000",
+                 ";", "set-option", "-wg", "pane-scrollbars", "on",
+                 ";", "set-option", "-wg", "pane-scrollbars-style",
+                 Template("bg=$surface,fg=$dim,width=1,pad=0").substitute(look.palette)]
     # A closed tab leaves the terminal ready again: closing the last agent opens the next.
     # Its account goes to the journal, since a hook has no terminal to print on.
     commands += [";", "set-hook", "-t", SESSION, "window-unlinked",

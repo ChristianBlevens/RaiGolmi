@@ -3,7 +3,7 @@
 #  happens in bodies and session views, which bring their own.
 #
 #  Built by CI (see ci/): bootc-image-builder needs privileges an unprivileged builder lacks.
-FROM quay.io/fedora/fedora-bootc:42
+FROM quay.io/fedora/fedora-bootc:44
 
 #  Docker CE from Docker's repository rather than Fedora's moby-engine: raigolmid drives
 #  `docker compose`, which docker-compose-plugin provides. The repofile is copied because

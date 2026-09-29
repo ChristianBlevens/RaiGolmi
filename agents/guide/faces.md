@@ -51,7 +51,7 @@ upload of the face carries it. A new compositor must be wlroots-based (below). T
 - carries `sh`, which a startup `exec` waits on the apps with (below).
 
 ```dockerfile
-FROM docker.io/library/fedora:42
+FROM docker.io/library/fedora:44
 RUN dnf install -y --setopt=install_weak_deps=False sway foot \
         mesa-dri-drivers mesa-libEGL mesa-libgbm glibc-langpack-en \
         dejavu-sans-mono-fonts dejavu-sans-fonts adwaita-cursor-theme && dnf clean all

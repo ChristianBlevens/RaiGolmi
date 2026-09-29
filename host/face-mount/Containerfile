@@ -2,5 +2,5 @@
 # and nothing else. The daemon mounts the script at run time, so changing it needs no image. Its
 # own image because it is the only thing that needs one with host pids and mount capabilities,
 # and borrowing a surface's image would tie a mount to what a drawer is built from.
-FROM fedora:42
+FROM fedora:44
 RUN dnf install -y --setopt=install_weak_deps=False python3 && dnf clean all

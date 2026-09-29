@@ -31,7 +31,7 @@ def rig(tmp_path, monkeypatch):
     (tmp_path / "run").mkdir()
     source = tmp_path / "src"
     (source / "ui" / "selector_native").mkdir(parents=True)
-    (source / "ui" / "selector_native" / "Containerfile").write_text("FROM fedora:42\n")
+    (source / "ui" / "selector_native" / "Containerfile").write_text("FROM fedora:44\n")
     monkeypatch.setenv(hostimages.SOURCE_ENV, str(source))
     runtime = FakeRuntime()
     runtime.add_image(hostimages.selector().tag())

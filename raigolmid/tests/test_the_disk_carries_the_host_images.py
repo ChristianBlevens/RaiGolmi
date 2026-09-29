@@ -33,7 +33,7 @@ def _archive(path: Path, tags: list[str]) -> Path:
 def _image(root: Path, name: str) -> HostImage:
     context = root / name
     context.mkdir()
-    (context / "Containerfile").write_text("FROM docker.io/library/fedora:42\n")
+    (context / "Containerfile").write_text("FROM docker.io/library/fedora:44\n")
     return HostImage(name, context, context / "Containerfile")
 
 

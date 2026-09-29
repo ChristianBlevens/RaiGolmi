@@ -144,7 +144,7 @@ def a_face(tmp_path: Path, *, desktop: bool = True, compositor: str = "sway",
         package = tmp_path / "_compositors" / compositor
         package.mkdir(parents=True, exist_ok=True)
         (package / "Containerfile").write_text(
-            f"FROM fedora:42\nCOPY {compositor}.conf /etc/face/{compositor}.conf\n")
+            f"FROM fedora:44\nCOPY {compositor}.conf /etc/face/{compositor}.conf\n")
         (package / f"{compositor}.conf").write_text("# the compositor's shipped config\n")
     return Face(
         id="writing", name="Writing", requires_toolbelt_capabilities=(),

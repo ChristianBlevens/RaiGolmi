@@ -4,7 +4,7 @@
 # on the host, whose `/` is a read-only ostree overlay. What it needs from the project
 # is the view-model and the API client, and nothing else — `raigolmid.client` is separate from
 # `raigolmid.api` precisely so this image does not carry a Docker SDK to talk to a socket.
-FROM docker.io/library/fedora:42
+FROM docker.io/library/fedora:44
 
 # The three surfaces share this line byte for byte, so each build after the first is a cache hit.
 RUN dnf install -y --setopt=install_weak_deps=False \

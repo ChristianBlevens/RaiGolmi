@@ -48,7 +48,7 @@ class _Store:
 
 
 def _image(tmp_path: Path) -> HostImage:
-    (tmp_path / "Containerfile").write_text("FROM fedora:42\n")
+    (tmp_path / "Containerfile").write_text("FROM fedora:44\n")
     return HostImage("claude", tmp_path, tmp_path / "Containerfile")
 
 

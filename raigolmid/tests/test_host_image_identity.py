@@ -87,7 +87,7 @@ def test_an_image_changes_with_what_it_copies_and_nothing_else(tmp_path):
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "main.py").write_text("print(1)\n")
     (tmp_path / "docs.md").write_text("notes\n")
-    (tmp_path / "Containerfile").write_text("FROM fedora:42\nCOPY --chown=1:1 app/ \\\n  /opt/app/\n")
+    (tmp_path / "Containerfile").write_text("FROM fedora:44\nCOPY --chown=1:1 app/ \\\n  /opt/app/\n")
     image = HostImage("x", tmp_path, tmp_path / "Containerfile")
     before = image.digest()
     (tmp_path / "docs.md").write_text("other notes\n")
@@ -105,7 +105,7 @@ def test_a_new_tag_removes_the_old_ones_nothing_was_created_from(tmp_path, monke
     for old in ("raigolmi/claude:aaa", "raigolmi/claude:bbb", "raigolmi/notify:ccc"):
         runtime.add_image(old)
     runtime.run(ContainerSpec(name="tab-1", image="raigolmi/claude:bbb"))
-    (tmp_path / "Containerfile").write_text("FROM fedora:42\n")
+    (tmp_path / "Containerfile").write_text("FROM fedora:44\n")
     image = hostimages.HostImage("claude", tmp_path, tmp_path / "Containerfile")
     tag = hostimages.ensure(runtime, image)
     tags = {t for i in runtime.list_images() for t in i.tags}

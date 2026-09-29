@@ -3,7 +3,7 @@
 # The selector's reason: GTK4, PyGObject and gtk4-layer-shell cannot be installed on the host,
 # whose `/` is a read-only ostree overlay. What it needs from the project is the API
 # client and the surfaces' own modules.
-FROM docker.io/library/fedora:42
+FROM docker.io/library/fedora:44
 
 # The surfaces share this line byte for byte, so each build after the first is a cache hit.
 RUN dnf install -y --setopt=install_weak_deps=False \

@@ -12,7 +12,7 @@ into Docker's storage:
 that is `/var`, which bootc seeds only at install, so every upgrade after the first would run
 images older than the daemon; `/usr` is replaced wholesale.
 
-A build needs the network (`fedora:42` and dnf), as a body's does.
+A build needs the network (`fedora:44` and dnf), as a body's does.
 """
 from __future__ import annotations
 

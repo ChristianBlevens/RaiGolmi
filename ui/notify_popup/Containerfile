@@ -1,6 +1,6 @@
 # The notification popup as a container image, for the reason the control is one: the host's
 # `/` is a read-only ostree overlay with no GTK, and there is no `dnf install` on it.
-FROM docker.io/library/fedora:42
+FROM docker.io/library/fedora:44
 
 # ⚠ Byte-identical to the selector's and the control's, so the three share one cached layer
 # and a fresh machine runs this `dnf` once, not three times.

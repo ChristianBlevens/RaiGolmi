@@ -7,7 +7,7 @@
 #
 # It is an ordinary Wayland client of the host compositor, and it reaches the compositor's IPC
 # socket the same way — both live in XDG_RUNTIME_DIR, which is the only thing mounted in.
-FROM docker.io/library/fedora:42
+FROM docker.io/library/fedora:44
 
 # ⚠ Byte-identical to the selector's, and kept so on purpose: Docker keys a layer on the
 # instruction and its parent, so an identical line means the second of the two images built on

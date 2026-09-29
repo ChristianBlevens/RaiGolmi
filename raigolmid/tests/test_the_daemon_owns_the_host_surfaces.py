@@ -69,7 +69,7 @@ def _sources(root: Path) -> Path:
         (root / "ui" / surface).mkdir(parents=True, exist_ok=True)
         # Copying its own directory, as each surface's does: an image is what it copies.
         (root / "ui" / surface / "Containerfile").write_text(
-            f"FROM fedora:42\nCOPY ui/{surface}/ /opt/raigolmi/ui/{surface}/\n")
+            f"FROM fedora:44\nCOPY ui/{surface}/ /opt/raigolmi/ui/{surface}/\n")
     (root / "agents" / "claude").mkdir(parents=True, exist_ok=True)
     (root / "agents" / "claude" / "Dockerfile").write_text("FROM scratch\n")
     return root
