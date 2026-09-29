@@ -22,8 +22,23 @@ sealed class Display
 
     readonly DBusPeer _display;
     readonly Action<string> _note;
+    DBusPeer _listener;
+    volatile bool _stopped;
 
     Display(DBusPeer display, Action<string> note) { _display = display; _note = note; }
+
+    // QEMU stops sending frames here: its listener goes when this connection closes
+    // (ui/dbus-console.c listener_vanished_cb). Before a shutdown, because QEMU 11.1.1 aborts
+    // reading back a frame whose size changed between the desktop and the guest's console
+    // (ui/dbus-listener.c dbus_call_update_gl, ui/egl-helpers.c egl_fb_read_rect), and nothing
+    // reads back with no listener. Input still goes over the display connection.
+    public void StopListening()
+    {
+        if (_stopped) return;
+        _stopped = true;
+        _note("listener: closed before the shutdown, so QEMU sends no more frames");
+        _listener.Close();
+    }
 
     // Blocks until QEMU is listening to us; `qmp` is a connection no one else is using.
     // `lost` is told when QEMU stops listening to us or calling us while it still runs.
@@ -44,13 +59,14 @@ sealed class Display
         var (lOurs, lTheirs) = Win32Socket.Pair();
         var listener = new Listener(renderer, note);
         var peer = new DBusPeer(lOurs, "listener", note) { OnCall = listener.Handle };
-        peer.Closed += () => lost("the listener connection");
+        var result = new Display(display, note) { _listener = peer };
+        peer.Closed += () => { if (!result._stopped) lost("the listener connection"); };
         var info = Win32Socket.DuplicateFor(lTheirs, qemuPid);
         display.Call(ConsolePath, "org.qemu.Display1.Console", "RegisterListener", "ay", w => w.Bytes(info));
         lTheirs.Dispose();
         peer.Authenticate();
         peer.Start();
-        return new Display(display, note);
+        return result;
     }
 
     public void Key(bool down, int qnum) =>

@@ -752,6 +752,9 @@ class Window : Form
         {
             try
             {
+                Display d = display;
+                if (d != null)
+                    d.StopListening();
                 Qmp.Execute(machine.ControlPort, "system_powerdown", null);
                 shutdownSent = true;
                 Note("asked the guest to shut down");

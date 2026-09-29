@@ -146,7 +146,7 @@ function Upgrade-Archive([string]$disk) {
 
 # `$archive` installed on the machine the launcher boots, then that machine started on it:
 # the launcher is opened if it is not, the image copied in and switched to over the
-# launcher's ssh, and the guest powered off, which closes the window, and opened again. A
+# launcher's ssh, and the window closed, which shuts the guest down, and opened again. A
 # patched daemon's unit drop-in would outlive the upgrade and run the old tree, so it goes.
 function Apply-Upgrade([string]$archive) {
     # ssh writes to stderr while the guest boots, and under 'Stop' Windows PowerShell turns a
@@ -202,8 +202,11 @@ function Apply-Upgrade([string]$archive) {
     }
     Remove-Item $archive -ErrorAction Stop
     Write-Host 'Restarting the machine on the new image...'
-    # The connection ends with the machine, so its exit code says nothing.
-    & $ssh -F $config raigolmi 'sudo systemctl poweroff' 2>&1 | Out-Null
+    # Closed as a person closes it, so the launcher stops taking frames before the guest
+    # shuts down (Display.StopListening) and the shutdown cannot abort QEMU.
+    foreach ($p in Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
+        if (-not $p.CloseMainWindow()) { Fail 'RaiGolmi has no window to close; close it, then open it again to start on the new image.' }
+    }
     Wait-Process -Name RaiGolmi -Timeout 300 -ErrorAction SilentlyContinue
     if (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
         Fail 'The machine was upgraded but did not power off within 5 minutes. Close RaiGolmi and open it again to start on the new image.'

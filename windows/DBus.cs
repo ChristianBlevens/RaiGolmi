@@ -226,6 +226,13 @@ sealed class DBusPeer
     }
 
     public event Action? Closed;
+    // Ends the connection from this side; the read loop then ends and `Closed` is raised.
+    public void Close()
+    {
+        try { _sock.Shutdown(SocketShutdown.Both); }
+        catch (ObjectDisposedException) { return; }
+        _s.Dispose();
+    }
 
     void Dispatch(Msg m)
     {
