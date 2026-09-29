@@ -122,7 +122,7 @@ class LauncherError : Exception
 // and screen beside the exe.
 class Machine
 {
-    public string Qemu, Firmware, Vars, Disk, Log, Screen;
+    public string Qemu, Firmware, Vars, Disk, Log, Screen, Placement;
     // Two control sockets, because QEMU serves one client per socket: the close has one no
     // probe can hold, and everything that only looks shares the other.
     public int ControlPort, WatchPort;
@@ -144,6 +144,8 @@ class Machine
         m.Screen = Path.Combine(Application.StartupPath, "screen.ppm");
         // The UEFI variable store is written by the firmware, so it is this machine's copy.
         m.Vars = Path.Combine(home, "uefi-vars.fd");
+        // Where the window was when it last closed, and its size: "x y width height".
+        m.Placement = Path.Combine(home, "window.txt");
         if (!File.Exists(m.Vars))
             File.Copy(Require(Launcher.QemuPath(@"share\qemu\edk2-i386-vars.fd")), m.Vars);
         try
@@ -265,6 +267,15 @@ class Window : Form
         StartPosition = FormStartPosition.CenterScreen;
         Rectangle area = Screen.PrimaryScreen.WorkingArea;
         ClientSize = new Size(area.Width * 3 / 4, area.Height * 3 / 4);
+        // Opened where and as large as it last closed, so the guest boots at the size it will
+        // be shown at: its console keeps its boot size, and QEMU aborts when the scanout
+        // changes size between the console and the desktop (ui/egl-helpers.c egl_fb_read_rect).
+        Rectangle? last = LastPlacement(machine.Placement);
+        if (last.HasValue)
+        {
+            StartPosition = FormStartPosition.Manual;
+            Bounds = last.Value;
+        }
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         // A drag resizes the window many times a second; the guest is asked once it stops.
         sizeSettle.Interval = 300;
@@ -702,9 +713,35 @@ class Window : Form
 
     // --- closing is a clean shutdown ---------------------------------------------------
 
+    // The window's last placement, or null when there is none or it is on no screen now (a
+    // monitor since unplugged). The file is this program's own; one it cannot read is a defect.
+    static Rectangle? LastPlacement(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+        string[] parts = File.ReadAllText(path).Trim().Split(' ');
+        int x, y, w, h;
+        if (parts.Length != 4 || !int.TryParse(parts[0], out x) || !int.TryParse(parts[1], out y) ||
+            !int.TryParse(parts[2], out w) || !int.TryParse(parts[3], out h) || w <= 0 || h <= 0)
+            throw new LauncherError(path + " is not a window placement (\"x y width height\"). " +
+                                    "Delete it and RaiGolmi opens at its default size.");
+        var bounds = new Rectangle(x, y, w, h);
+        foreach (Screen screen in Screen.AllScreens)
+            if (screen.WorkingArea.IntersectsWith(bounds))
+                return bounds;
+        return null;
+    }
+
+    void SavePlacement()
+    {
+        Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        File.WriteAllText(machine.Placement, b.X + " " + b.Y + " " + b.Width + " " + b.Height);
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         Note("close requested (" + e.CloseReason + ")");
+        SavePlacement();
         if (exited)
         {
             base.OnFormClosing(e);
