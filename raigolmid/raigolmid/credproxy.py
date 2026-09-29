@@ -141,7 +141,7 @@ class Authority:
         self.cert = directory / "ca.pem"
         self.bundle = directory / "bundle.pem"
         self._key_path = directory / "ca.key"
-        if not self._key_path.is_file():
+        if not self._key_path.is_file() or not _identified(self.cert):
             self._make()
         self._key = serialization.load_pem_private_key(self._key_path.read_bytes(), None)
         self._ca = x509.load_pem_x509_certificate(self.cert.read_bytes())
@@ -165,6 +165,8 @@ class Authority:
                     digital_signature=False, content_commitment=False, key_encipherment=False,
                     data_encipherment=False, key_agreement=False, key_cert_sign=True,
                     crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
+                .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+                               critical=False)
                 .sign(key, hashes.SHA256()))
         _write_private(self._key_path, key.private_bytes(
             serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
@@ -185,6 +187,8 @@ class Authority:
                 .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
                 .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
                                critical=False)
+                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                    self._ca.public_key()), critical=False)
                 .sign(self._key, hashes.SHA256()))
         chain = self.directory / f"{host}.pem"
         _write_private(chain, key.private_bytes(
@@ -193,6 +197,18 @@ class Authority:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(chain)
         return context
+
+
+def _identified(cert: Path) -> bool:
+    """Whether the authority carries its key identifier, which OpenSSL's strict verification
+    (Python's default context from 3.13) requires of a CA, as it requires the matching
+    authority key identifier of every certificate the CA signs. One without is made again."""
+    ca = x509.load_pem_x509_certificate(cert.read_bytes())
+    try:
+        ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+    except x509.ExtensionNotFound:
+        return False
+    return True
 
 
 def _write_private(path: Path, content: bytes) -> None:
