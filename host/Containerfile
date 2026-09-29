@@ -95,7 +95,7 @@ RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh &&
           /usr/lib/systemd/user/sway-session.target.wants/raigolmid.service && \
     ln -s ../raigolmi-follow-display.service \
           /usr/lib/systemd/user/sway-session.target.wants/raigolmi-follow-display.service && \
-    chmod 0755 /usr/libexec/raigolmi/set-timezone && \
+    chmod 0755 /usr/libexec/raigolmi/set-timezone /usr/libexec/raigolmi/follow-display && \
     systemctl enable docker.service sshd.service raigolmi-timezone.service \
         raigolmi-firewall.service raigolmi-trim.service && \
     systemctl mask bootc-fetch-apply-updates.timer
