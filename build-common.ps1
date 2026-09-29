@@ -226,15 +226,23 @@ function Msys([string]$command) {
     if ($LASTEXITCODE -ne 0) { Fail "MSYS2 failed running: $command" }
 }
 
-# pacman's stderr stays inside bash: a native command's stderr is a terminating error here.
-function Patched-Installed([string]$name, [string]$version) {
-    (Test-Path "$msys2\usr\bin\bash.exe") -and
-        ((& "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 /usr/bin/bash -lc "pacman -Q $name 2>/dev/null") -eq "$name $version")
+# Every command handed to bash here carries no double quote: Windows PowerShell 5.1, which
+# build.bat runs, passes one to a native program unescaped, and bash receives the command cut
+# apart at it.
+
+# Each package at the release's version and pinned; one without its pin is put back to stock
+# by the next `pacman -Syu`. pacman's stderr stays inside bash: a native command's stderr is a
+# terminating error here.
+function Patched-Installed([string[]]$names, [string]$version) {
+    if (-not (Test-Path "$msys2\usr\bin\bash.exe")) { return $false }
+    $full = $names | ForEach-Object { "mingw-w64-ucrt-x86_64-$_" }
+    $said = @(& "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 /usr/bin/bash -lc `
+                "pacman -Q $($full -join ' ') 2>/dev/null; grep '^IgnorePkg = ' /etc/pacman.conf")
+    -not ($full | Where-Object { ($said -notcontains "$_ $version") -or ($said -notcontains "IgnorePkg = $_") })
 }
 
-# A release's packages, installed over the stock ones and pinned, so the next `pacman -Syu`
-# skips them rather than putting the stock ones back. Downloaded first and installed as local
-# files: those are what MSYS2's pacman takes unsigned.
+# A release's packages, pinned and then installed over the stock ones. Downloaded first and
+# installed as local files: those are what MSYS2's pacman takes unsigned.
 function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
     if (Get-Process -Name qemu-system-x86_64w -ErrorAction SilentlyContinue) {
         Fail 'QEMU is running and holds the files being replaced: close the RaiGolmi window, then run this again.'
@@ -249,11 +257,12 @@ function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
         $file = "$name-$version-any.pkg.tar.zst"
         Invoke-WebRequest "$packages/download/$tag/$file" -OutFile "$dir\$file" -UseBasicParsing
     }
+    foreach ($name in $full) {
+        Msys ("grep -qx 'IgnorePkg = $name' /etc/pacman.conf || " +
+              "sed -i '/^\[options\]$/a IgnorePkg = $name' /etc/pacman.conf; " +
+              "grep -qx 'IgnorePkg = $name' /etc/pacman.conf")
+    }
     Msys 'pacman -U --noconfirm /tmp/raigolmi-packages/*.pkg.tar.zst'
-    Msys ('for p in NAMES; do grep -qx "IgnorePkg = $p" /etc/pacman.conf || ' +
-          'sed -i "/^\[options\]$/a IgnorePkg = $p" /etc/pacman.conf; ' +
-          'grep -qx "IgnorePkg = $p" /etc/pacman.conf || { echo "could not pin $p in /etc/pacman.conf" >&2; exit 1; }; ' +
-          'done').Replace('NAMES', $full -join ' ')
     Remove-Item -Recurse -Force $dir
 }
 
@@ -303,12 +312,12 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     # The stock virglrenderer cannot show the boot console, and the stock QEMU has no discard
     # on Windows, so the disk image never gives back what the guest frees: both come patched
     # from ChristianBlevens/raigolmi-packages.
-    if (-not (Patched-Installed 'mingw-w64-ucrt-x86_64-virglrenderer' $virglVersion)) {
+    if (-not (Patched-Installed @('virglrenderer') $virglVersion)) {
         $missing += @{ What = "the patched virglrenderer $virglVersion (without it the boot screen never shows)"
                        How  = "$packages/virglrenderer-$virglVersion"
                        Do   = { Install-Patched "virglrenderer-$virglVersion" $virglVersion @('virglrenderer') } }
     }
-    if (-not (Patched-Installed 'mingw-w64-ucrt-x86_64-qemu' $qemuVersion)) {
+    if (-not (Patched-Installed @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') $qemuVersion)) {
         $missing += @{ What = "the patched QEMU $qemuVersion (without it the disk image never shrinks)"
                        How  = "$packages/qemu-$qemuVersion"
                        Do   = { Install-Patched "qemu-$qemuVersion" $qemuVersion `
