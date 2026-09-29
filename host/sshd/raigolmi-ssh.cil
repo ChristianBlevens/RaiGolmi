@@ -1,0 +1,4 @@
+; The launcher's login key, written by tmpfiles to /run/raigolmi/ssh (tmpfiles/raigolmi.conf),
+; labelled as an authorized-keys file: sshd's per-login process (sshd_session_t) may not read
+; a plain /run file, and refuses the key without saying why but in the audit log.
+(filecon "/run/raigolmi/ssh(/.*)?" any (system_u object_r ssh_home_t ((s0) (s0))))

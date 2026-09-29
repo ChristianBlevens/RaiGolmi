@@ -59,6 +59,9 @@ COPY host/tmpfiles/raigolmi.conf  /usr/lib/tmpfiles.d/raigolmi.conf
 #  auth with no password shipped: `passwd` on the console opens it. The other way in is a
 #  key handed in at boot as a systemd credential (tmpfiles/raigolmi.conf) by the launcher.
 COPY host/sshd/raigolmi.conf /etc/ssh/sshd_config.d/10-raigolmi.conf
+#  -n: no policy to load into during a build; the module is in the store the machine boots.
+COPY host/sshd/raigolmi-ssh.cil /tmp/raigolmi-ssh.cil
+RUN semodule -n -i /tmp/raigolmi-ssh.cil && rm /tmp/raigolmi-ssh.cil
 COPY host/systemd/tmpfiles-setup-credentials.conf \
      /usr/lib/systemd/system/systemd-tmpfiles-setup.service.d/raigolmi-credentials.conf
 #
