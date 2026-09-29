@@ -1,0 +1,12 @@
+# Once per machine, before Docker first starts on overlay2 (host/systemd/docker-store.sh).
+[Unit]
+Description=Remove the images Docker kept before it stored them in overlay2
+Before=containerd.service docker.service
+ConditionPathExists=!/var/lib/raigolmi/docker-store-overlay2
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/raigolmi/docker-store
+
+[Install]
+RequiredBy=docker.service

@@ -90,6 +90,12 @@ COPY host/firewall/raigolmi.nft           /usr/lib/raigolmi/firewall.nft
 COPY host/systemd/raigolmi-firewall.service \
      /usr/lib/systemd/system/raigolmi-firewall.service
 COPY host/systemd/raigolmi-trim.service   /usr/lib/systemd/system/raigolmi-trim.service
+#  Docker's images unpacked only: containerd's image store, Docker 29's default, also keeps
+#  every layer compressed as the registry sent it, which nothing here reads.
+COPY host/docker/daemon.json               /etc/docker/daemon.json
+COPY host/systemd/raigolmi-docker-store.service \
+     /usr/lib/systemd/system/raigolmi-docker-store.service
+COPY host/systemd/docker-store.sh          /usr/libexec/raigolmi/docker-store
 #  The base image's update timer is masked: the OS updates only when the user asks, and its
 #  `--apply` reboots without a word.
 RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh && \
@@ -101,9 +107,9 @@ RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh &&
     ln -s ../raigolmi-drop-rollback.service \
           /usr/lib/systemd/user/sway-session.target.wants/raigolmi-drop-rollback.service && \
     chmod 0755 /usr/libexec/raigolmi/set-timezone /usr/libexec/raigolmi/follow-display \
-          /usr/libexec/raigolmi/drop-rollback && \
+          /usr/libexec/raigolmi/drop-rollback /usr/libexec/raigolmi/docker-store && \
     systemctl enable docker.service sshd.service raigolmi-timezone.service \
-        raigolmi-firewall.service raigolmi-trim.service && \
+        raigolmi-firewall.service raigolmi-trim.service raigolmi-docker-store.service && \
     systemctl mask bootc-fetch-apply-updates.timer
 
 #  bootc's own check that the image is a valid bootable container: a base that lost its
