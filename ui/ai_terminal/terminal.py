@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -265,6 +266,29 @@ def attach_command(container: str) -> list[str]:
     return ["docker", "attach", "--detach-keys=ctrl-p,ctrl-q", container]
 
 
+# What a terminal answers rather than draws: device attributes, the version, the keyboard
+# protocol, a status or mode report, a colour, a capability, the window's size. Replayed, each
+# would be answered again, and the answer would reach the agent as typed input.
+_QUERIES = re.compile(
+    rb"\x1b\[(?:[>=]?[0-9;]*c|>[0-9;]*q|\?u|\??[0-9;]*n|\??[0-9;]*\$p|1[468]t)"
+    rb"|\x1b\][0-9;]*;\?(?:\x07|\x1b\\)"
+    rb"|\x1bP\+q[0-9A-Fa-f;]*(?:\x07|\x1b\\)")
+
+
+def _replay(container: str) -> None:
+    """Everything the container's agent has written, into the pane, before it is attached:
+    an attach carries only what is written after it, and a tab resumed at boot or opened in a
+    new window wrote its conversation before any window attached. What the agent writes
+    between the two is not shown until it draws again. Docker's refusal is said in the pane,
+    and the attach after it says the rest."""
+    logs = subprocess.run(["docker", "logs", container], capture_output=True)
+    if logs.returncode != 0:
+        _out(logs.stderr.decode(errors="replace"))
+        return
+    sys.stdout.buffer.write(_QUERIES.sub(b"", logs.stdout))
+    sys.stdout.buffer.flush()
+
+
 def follow(client, tab: str) -> int:
     """What a tab's window runs: the tab's agent, through every container the
     daemon puts under it — a reopen after a crash, a restart — so a window closes
@@ -343,6 +367,7 @@ def follow(client, tab: str) -> int:
         if agent is None:
             return 0
         if agent["status"] == "running":
+            _replay(naming.agent(tab))
             subprocess.run(attach_command(naming.agent(tab)))
             if _container_running(naming.agent(tab)):
                 return 0

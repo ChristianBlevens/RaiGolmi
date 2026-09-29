@@ -8,9 +8,12 @@ replaced by what the daemon does while the window is attached.
 """
 from __future__ import annotations
 
+import io
 import queue
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from ui.ai_terminal import terminal        # noqa: E402
 
 TAB = "tab-1"
+# A resumed agent's first output: its conversation, and the three queries Claude Code 2.1.283
+# asks its terminal at start. Replayed, a query would be answered into the agent's input.
+SHOWN = b"\x1b[1m> the first thing he asked\x1b[0m\r\n"
+CONVERSATION = b"\x1b[c\x1b[>0q\x1b[?u\x1b[>1u" + SHOWN
 
 
 class _Daemon:
@@ -50,13 +57,19 @@ def _follow(monkeypatch, daemon: _Daemon, while_attached: list, *,
             detached: bool = False) -> tuple[int, int, str]:
     attaches: list = []
     written: list[str] = []
+    pane = io.BytesIO()
 
     def run(command, **_kwargs):
+        if command[:2] == ["docker", "logs"]:
+            return subprocess.CompletedProcess(command, 0, stdout=CONVERSATION, stderr=b"")
         assert command[:2] == ["docker", "attach"], command
+        assert pane.getvalue().count(SHOWN) == len(attaches) + 1, \
+            "each container's conversation is in the pane before it is attached"
         attaches.append(command)
         while_attached[len(attaches) - 1](daemon)
 
     monkeypatch.setattr(terminal.subprocess, "run", run)
+    monkeypatch.setattr(terminal.sys, "stdout", SimpleNamespace(buffer=pane))
     monkeypatch.setattr(terminal, "_container_running", lambda _name: detached)
     monkeypatch.setattr(terminal, "_out", written.append)
     # The mark reads `status` too; `test_a_tab_that_needs_the_user_marks_its_own_window` is its.
@@ -81,6 +94,10 @@ def test_a_reopened_tab_is_attached_again_in_the_same_window(monkeypatch):
     code, attaches, written = _follow(monkeypatch, daemon, [_reopened, _closed])
     assert (code, attaches) == (0, 2)
     assert "could not bring it back" not in written, "a crash being reopened is not final"
+
+
+def test_the_replay_draws_everything_and_asks_the_terminal_nothing():
+    assert terminal._QUERIES.sub(b"", CONVERSATION) == b"\x1b[>1u" + SHOWN
 
 
 class _Tmux:
