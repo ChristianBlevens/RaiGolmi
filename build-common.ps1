@@ -216,11 +216,45 @@ function Apply-Upgrade([string]$archive) {
 
 # --- the window: the launcher and what it runs on --------------------------------------------
 
-$virgl = 'mingw-w64-ucrt-x86_64-virglrenderer'
+# Published by ChristianBlevens/raigolmi-packages' workflow, one release per version.
+$packages = 'https://github.com/ChristianBlevens/raigolmi-packages/releases'
+$qemuVersion = '11.1.1-3.1'
+$virglVersion = '1.3.0-1.1'
 
 function Msys([string]$command) {
     & "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 CHERE_INVOKING=1 /usr/bin/bash -lc $command
     if ($LASTEXITCODE -ne 0) { Fail "MSYS2 failed running: $command" }
+}
+
+# pacman's stderr stays inside bash: a native command's stderr is a terminating error here.
+function Patched-Installed([string]$name, [string]$version) {
+    (Test-Path "$msys2\usr\bin\bash.exe") -and
+        ((& "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 /usr/bin/bash -lc "pacman -Q $name 2>/dev/null") -eq "$name $version")
+}
+
+# A release's packages, installed over the stock ones and pinned, so the next `pacman -Syu`
+# skips them rather than putting the stock ones back. Downloaded first and installed as local
+# files: those are what MSYS2's pacman takes unsigned.
+function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
+    if (Get-Process -Name qemu-system-x86_64w -ErrorAction SilentlyContinue) {
+        Fail 'QEMU is running and holds the files being replaced: close the RaiGolmi window, then run this again.'
+    }
+    $dir = "$msys2\tmp\raigolmi-packages"
+    if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    # Windows PowerShell redraws its progress bar per chunk, which slows a download many times.
+    $ProgressPreference = 'SilentlyContinue'
+    $full = $names | ForEach-Object { "mingw-w64-ucrt-x86_64-$_" }
+    foreach ($name in $full) {
+        $file = "$name-$version-any.pkg.tar.zst"
+        Invoke-WebRequest "$packages/download/$tag/$file" -OutFile "$dir\$file" -UseBasicParsing
+    }
+    Msys 'pacman -U --noconfirm /tmp/raigolmi-packages/*.pkg.tar.zst'
+    Msys ('for p in NAMES; do grep -qx "IgnorePkg = $p" /etc/pacman.conf || ' +
+          'sed -i "/^\[options\]$/a IgnorePkg = $p" /etc/pacman.conf; ' +
+          'grep -qx "IgnorePkg = $p" /etc/pacman.conf || { echo "could not pin $p in /etc/pacman.conf" >&2; exit 1; }; ' +
+          'done').Replace('NAMES', $full -join ' ')
+    Remove-Item -Recurse -Force $dir
 }
 
 # What the window needs: the hypervisor platform, the SDK the launcher builds with, and the
@@ -266,36 +300,19 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
                        Do   = { Winget 'MSYS2.MSYS2' } }
     }
 
-    if (-not (Test-Path "$msys2\ucrt64\bin\qemu-system-x86_64w.exe")) {
-        $missing += @{ What = 'QEMU, in MSYS2'
-                       How  = 'In the MSYS2 UCRT64 window: pacman -S mingw-w64-ucrt-x86_64-qemu'
-                       Do   = { Msys 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-qemu' } }
+    # The stock virglrenderer cannot show the boot console, and the stock QEMU has no discard
+    # on Windows, so the disk image never gives back what the guest frees: both come patched
+    # from ChristianBlevens/raigolmi-packages.
+    if (-not (Patched-Installed 'mingw-w64-ucrt-x86_64-virglrenderer' $virglVersion)) {
+        $missing += @{ What = "the patched virglrenderer $virglVersion (without it the boot screen never shows)"
+                       How  = "$packages/virglrenderer-$virglVersion"
+                       Do   = { Install-Patched "virglrenderer-$virglVersion" $virglVersion @('virglrenderer') } }
     }
-
-    # The stock virglrenderer cannot show the boot console (windows/virglrenderer/build.sh).
-    $patched = (Test-Path "$msys2\usr\bin\bash.exe") -and
-               ((& "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 /usr/bin/bash -lc "pacman -Q $virgl" 2>$null) -match '1\.3\.0-1\.1')
-    if (-not $patched) {
-        $missing += @{ What = 'the patched virglrenderer, compiled in MSYS2 (without it the boot screen never shows)'
-                       How  = 'In the MSYS2 MSYS window, in windows\virglrenderer: bash build.sh'
-                       Do   = { Push-Location (Join-Path $repo 'windows\virglrenderer')
-                                try { & "$msys2\usr\bin\env.exe" MSYSTEM=MSYS CHERE_INVOKING=1 /usr/bin/bash -l ./build.sh }
-                                finally { Pop-Location }
-                                if ($LASTEXITCODE -ne 0) { Fail 'The virglrenderer build failed; its output is above.' } } }
-    }
-
-    # The stock QEMU has no discard on Windows, so the disk image never gives back what the
-    # guest frees (windows/qemu/build.sh). pacman's stderr stays inside bash: a native
-    # command's stderr is a terminating error here.
-    $qemuPatched = (Test-Path "$msys2\usr\bin\bash.exe") -and
-                   ((& "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 /usr/bin/bash -lc "pacman -Q mingw-w64-ucrt-x86_64-qemu 2>/dev/null") -match '11\.1\.1-\d+\.1$')
-    if (-not $qemuPatched) {
-        $missing += @{ What = 'the patched QEMU, compiled in MSYS2 (without it the disk image never shrinks)'
-                       How  = 'In the MSYS2 MSYS window, in windows\qemu: bash build.sh'
-                       Do   = { Push-Location (Join-Path $repo 'windows\qemu')
-                                try { & "$msys2\usr\bin\env.exe" MSYSTEM=MSYS CHERE_INVOKING=1 /usr/bin/bash -l ./build.sh }
-                                finally { Pop-Location }
-                                if ($LASTEXITCODE -ne 0) { Fail 'The QEMU build failed; its output is above.' } } }
+    if (-not (Patched-Installed 'mingw-w64-ucrt-x86_64-qemu' $qemuVersion)) {
+        $missing += @{ What = "the patched QEMU $qemuVersion (without it the disk image never shrinks)"
+                       How  = "$packages/qemu-$qemuVersion"
+                       Do   = { Install-Patched "qemu-$qemuVersion" $qemuVersion `
+                                    @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') } }
     }
 
     return $missing
