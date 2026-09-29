@@ -45,8 +45,10 @@ minutes.
 When it's done there's an `RaiGolmi` shortcut next to `build.bat`. Run it from there or drag
 it wherever you want.
 
-Running `build.bat` again rebuilds the app. It only builds a new disk if you say yes, since
-your machine lives on the old one. `build-launcher.bat` rebuilds just the app and leaves the
+Running `build.bat` again rebuilds the app and upgrades your disk in place: the new system
+goes on, and your files, layers and agents' work stay. It closes and reopens the app to start
+on it, and the old system stays in the boot menu if you need to go back. For a fresh disk,
+delete `disk\raigolmi.qcow2` first. `build-launcher.bat` rebuilds just the app and leaves the
 disk alone.
 
 ### On bare metal
@@ -57,7 +59,10 @@ Run `build-disk.bat` and pick a disk:
 - **installer ISO**: put it on a USB stick; it installs onto the first disk it finds and
   **wipes it**;
 - **qcow2**: for running it in a VM of your own. This is the same file the Windows app
-  boots, so it asks before replacing one that's there.
+  boots.
+
+If the disk you pick is already there, it builds an upgrade for the machine you installed
+from it instead, and says how to apply it there; delete the disk first for a fresh one.
 
 It only needs WSL with Ubuntu and podman, and the same DNS fix as above. The disk ends up in
 `disk\`. A raw disk is 60 GB from the start; the qcow2 grows to that as it's used. On Linux,

@@ -1,6 +1,8 @@
 #!/bin/bash
 #  Build the host image and a disk from it (TYPE: qcow2, raw or anaconda-iso) on a machine
-#  with a working container runtime.
+#  with a working container runtime; or, with TYPE=oci-archive, the image alone as one file
+#  (raigolmi-host.ociarchive) that a machine already installed switches to with
+#  `bootc switch --transport oci-archive`, keeping everything under /var.
 #
 #  ⚠ bootc-image-builder needs --privileged and access to the host's container storage.
 #
@@ -31,18 +33,22 @@ base=localhost/raigolmi-host-base:latest
 sudo podman build --network=host -t "$base" -f "$repo/host/Containerfile" "$repo"
 bash "$repo/host/ci/bake-host-images.sh" "$base" "$image" "$out/host-images"
 
-#  The storage mount is what lets the builder read the image just built into this
-#  machine's container storage rather than pulling it from a registry.
-#
-#  --rootfs: the Fedora bootc base declares no default root filesystem type and the builder
-#  refuses rather than choosing one. xfs because Docker's overlay2 driver runs every body
-#  here and wants d_type, which mkfs.xfs provides by default.
-sudo podman run --rm -it --privileged --network=host --security-opt label=type:unconfined_t \
-    -v /var/lib/containers/storage:/var/lib/containers/storage \
-    -v "$repo/host/ci/config.toml:/config.toml:ro" \
-    -v "$out:/output" \
-    quay.io/centos-bootc/bootc-image-builder:latest \
-    --type "$type" --rootfs "${ROOTFS:-xfs}" "$image"
+if [ "$type" = oci-archive ]; then
+    sudo podman save --format oci-archive -o "$out/raigolmi-host.ociarchive" "$image"
+else
+    #  The storage mount is what lets the builder read the image just built into this
+    #  machine's container storage rather than pulling it from a registry.
+    #
+    #  --rootfs: the Fedora bootc base declares no default root filesystem type and the builder
+    #  refuses rather than choosing one. xfs because Docker's overlay2 driver runs every body
+    #  here and wants d_type, which mkfs.xfs provides by default.
+    sudo podman run --rm -it --privileged --network=host --security-opt label=type:unconfined_t \
+        -v /var/lib/containers/storage:/var/lib/containers/storage \
+        -v "$repo/host/ci/config.toml:/config.toml:ro" \
+        -v "$out:/output" \
+        quay.io/centos-bootc/bootc-image-builder:latest \
+        --type "$type" --rootfs "${ROOTFS:-xfs}" "$image"
+fi
 
 sudo chown -R "$(id -u):$(id -g)" "$out"
-echo "disk image under $out"
+echo "built under $out"

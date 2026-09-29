@@ -102,29 +102,97 @@ function Install-Missing($missing, [string]$entry) {
     }
 }
 
-# The disk in `$type` (a bootc-image-builder type: qcow2, raw, anaconda-iso) at `$target`.
-# One already there is replaced only with a yes, since a machine may live on it.
-function Build-Disk([string]$type, [string]$target) {
-    if ((Test-Path $target) -and -not (Ask ("A disk is already built at $target.`n`nBuild a new " +
-            "one in its place? Everything on the current one is lost."))) {
-        Write-Host 'The disk is kept.'
-        return
-    }
+# What `build-local.sh` makes for `$type` (a bootc-image-builder type: qcow2, raw,
+# anaconda-iso; or oci-archive, the image alone), moved to `$target`. Built on ext4 under
+# root's home: drvfs is slow to write an image to and holds no ownership.
+function Build-InWsl([string]$type, [string]$target) {
     New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
-    Write-Host "Building the $type disk in WSL (about 11 minutes the first time)..."
     $wslRepo   = (wsl.exe -d $distro --exec wslpath -a ($repo -replace '\\', '/')).Trim()
     $wslTarget = (wsl.exe -d $distro --exec wslpath -a ($target -replace '\\', '/')).Trim()
-    # Built on ext4 under root's home: drvfs is slow to write a disk image to and holds no
-    # ownership. Called directly, not through Wsl-Root, so the builder keeps its terminal.
+    # Called directly, not through Wsl-Root, so the builder keeps its terminal.
     wsl.exe -d $distro -u root --exec bash -c "OUT=/root/raigolmi-build TYPE=$type bash '$wslRepo/host/ci/build-local.sh'"
-    if ($LASTEXITCODE -ne 0) { Fail 'The disk did not build; its output is above.' }
-    # The builder names its file by type; the one image it wrote is the disk. What else is
-    # there is its manifest, and its layers stay in podman's store for the next build.
+    if ($LASTEXITCODE -ne 0) { Fail "The $type build did not finish; its output is above." }
+    # The builder names its file by type; the one image it wrote is the result. What else is
+    # there is its manifest and the baked host images, and its layers stay in podman's store
+    # for the next build.
     # No double quotes: Windows PowerShell passes them to wsl.exe unescaped.
-    $moved = ("f=`$(find /root/raigolmi-build -type f -name '*.qcow2' -o -type f -name '*.raw' -o -type f -name '*.iso'); " +
+    $moved = ("f=`$(find /root/raigolmi-build -maxdepth 2 -type f \( -name '*.qcow2' -o -name '*.raw' -o -name '*.iso' -o -name '*.ociarchive' \)); " +
               "[ `$(printf '%s\n' `$f | grep -c .) = 1 ] || { echo 'the build did not write one image:' `$f >&2; exit 1; }; " +
               "mv `$f '$wslTarget' && rm -rf /root/raigolmi-build")
-    if ((Wsl-Root $moved) -ne 0) { Fail "The disk built but could not be moved to $target." }
+    if ((Wsl-Root $moved) -ne 0) { Fail "The $type build finished but could not be moved to $target." }
+}
+
+# A new disk in `$type` at `$target`. A disk already there is a machine's, and is upgraded
+# in place instead (Build-Upgrade): a fresh one is had by deleting it first.
+function Build-Disk([string]$type, [string]$target) {
+    Write-Host "Building the $type disk in WSL (about 11 minutes the first time)..."
+    Build-InWsl $type $target
+}
+
+# The host image alone, as one file beside the disk, which the machine on that disk switches
+# to: its home, its layers and the daemon's state are under /var and are kept, and the image
+# it ran before stays in the boot menu to go back to.
+function Build-Upgrade([string]$disk) {
+    Write-Host "A disk is already built at $disk, so it is upgraded in place, keeping everything on it."
+    Write-Host 'Building the new host image in WSL...'
+    Build-InWsl 'oci-archive' (Upgrade-Archive $disk)
+}
+
+# Where Build-Upgrade leaves the image for `$disk`: a path, not its return value, because a
+# function returns everything its commands print and the build prints a great deal.
+function Upgrade-Archive([string]$disk) {
+    return Join-Path (Split-Path $disk) 'raigolmi-upgrade.ociarchive'
+}
+
+# `$archive` installed on the machine the launcher boots, then that machine started on it:
+# the launcher is opened if it is not, the image copied in and switched to over the
+# launcher's ssh, and the guest powered off, which closes the window, and opened again. A
+# patched daemon's unit drop-in would outlive the upgrade and run the old tree, so it goes.
+function Apply-Upgrade([string]$archive) {
+    # ssh writes to stderr while the guest boots, and under 'Stop' Windows PowerShell turns a
+    # native command's stderr into a terminating error: each call's exit code is read instead.
+    $ErrorActionPreference = 'Continue'
+    $exe    = Join-Path $repo 'windows\RaiGolmi.exe'
+    $config = Join-Path $env:LOCALAPPDATA 'RaiGolmi\ssh_config'
+    $ssh    = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
+    $scp    = Join-Path $env:SystemRoot 'System32\OpenSSH\scp.exe'
+    if (-not (Test-Path $scp)) {
+        Fail ("Windows' OpenSSH client is not installed ($scp is missing), and the upgrade " +
+              "reaches the machine through it. The new image is at $archive.")
+    }
+    if (-not (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue)) {
+        Write-Host 'Opening RaiGolmi, which boots the disk being upgraded...'
+        Start-Process $exe -WorkingDirectory (Split-Path $exe)
+    }
+    Write-Host 'Waiting for the machine to answer...'
+    $deadline = (Get-Date).AddMinutes(10)
+    do {
+        Start-Sleep -Seconds 5
+        if (-not (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue)) {
+            Fail "RaiGolmi closed before the machine answered. The new image is at $archive; run this again."
+        }
+        $answer = & $ssh -F $config raigolmi true 2>&1
+    } while ($LASTEXITCODE -ne 0 -and (Get-Date) -lt $deadline)
+    if ($LASTEXITCODE -ne 0) {
+        Fail ("The machine did not answer over ssh within 10 minutes ($answer). The new image " +
+              "is at $archive; run this again.")
+    }
+    Write-Host 'Copying the new image in...'
+    & $scp -F $config $archive 'raigolmi:/var/tmp/raigolmi-upgrade.ociarchive'
+    if ($LASTEXITCODE -ne 0) { Fail "Copying the new image into the machine failed; scp's output is above." }
+    Write-Host 'Switching the machine to it...'
+    & $ssh -F $config raigolmi ('sudo bootc switch --transport oci-archive /var/tmp/raigolmi-upgrade.ociarchive && ' +
+                                'rm -f /var/tmp/raigolmi-upgrade.ociarchive ~/.config/systemd/user/raigolmid.service.d/patched.conf')
+    if ($LASTEXITCODE -ne 0) { Fail "The machine refused the new image; bootc's output is above. Nothing on it changed." }
+    Remove-Item $archive -ErrorAction Stop
+    Write-Host 'Restarting the machine on the new image...'
+    # The connection ends with the machine, so its exit code says nothing.
+    & $ssh -F $config raigolmi 'sudo systemctl poweroff' 2>&1 | Out-Null
+    Wait-Process -Name RaiGolmi -Timeout 300 -ErrorAction SilentlyContinue
+    if (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
+        Fail 'The machine was upgraded but did not power off within 5 minutes. Close RaiGolmi and open it again to start on the new image.'
+    }
+    Start-Process $exe -WorkingDirectory (Split-Path $exe)
 }
 
 # --- the window: the launcher and what it runs on --------------------------------------------
