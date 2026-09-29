@@ -106,13 +106,16 @@ class _Released:
         self.clicked_now = True
         self.activate()
 
-    def _event(self, _watch, event: Gdk.Event) -> bool:
-        kind = event.get_event_type()
-        if kind == Gdk.EventType.BUTTON_PRESS and event.get_button() == Gdk.BUTTON_PRIMARY:
+    def _event(self, watch: Gtk.EventControllerLegacy, _event) -> bool:
+        # PyGObject hands this signal's GdkEvent over as None; the controller says what it is.
+        kind = watch.get_current_event_type()
+        if kind == Gdk.EventType.BUTTON_PRESS:
             self.pending = True
         elif kind == Gdk.EventType.BUTTON_RELEASE and self.pending:
             self.pending = False
-            if self._over(event):
+            # A release's state still holds the button being released.
+            primary = watch.get_current_event_state() & Gdk.ModifierType.BUTTON1_MASK
+            if primary and self._over():
                 self.clicked_now = False
                 # After the release has gone through the widget's own gestures, which may
                 # click it themselves.
@@ -125,18 +128,18 @@ class _Released:
         self.clicked_now = False
         return GLib.SOURCE_REMOVE
 
-    def _over(self, event: Gdk.Event) -> bool:
+    def _over(self) -> bool:
         native = self.widget.get_native()
-        found, x, y = event.get_position()
-        if not found:
-            raise RuntimeError(f"a release on {self.widget} carries no position")
+        pointer = self.widget.get_display().get_default_seat().get_pointer()
+        inside, x, y, _mask = native.get_surface().get_device_position(pointer)
+        if not inside:
+            return False
         offset_x, offset_y = native.get_surface_transform()
         found, point = native.compute_point(
             self.widget, Graphene.Point().init(x - offset_x, y - offset_y))
         if not found:
             raise RuntimeError(f"{self.widget} is not inside its own native")
         return self.widget.contains(point.x, point.y)
-
 
 def check(text: str, toggled: Callable[[bool], None],
           **props) -> tuple[Gtk.CheckButton, int]:
