@@ -284,6 +284,20 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
                                 if ($LASTEXITCODE -ne 0) { Fail 'The virglrenderer build failed; its output is above.' } } }
     }
 
+    # The stock QEMU has no discard on Windows, so the disk image never gives back what the
+    # guest frees (windows/qemu/build.sh). pacman's stderr stays inside bash: a native
+    # command's stderr is a terminating error here.
+    $qemuPatched = (Test-Path "$msys2\usr\bin\bash.exe") -and
+                   ((& "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 /usr/bin/bash -lc "pacman -Q mingw-w64-ucrt-x86_64-qemu 2>/dev/null") -match '11\.1\.1-\d+\.1$')
+    if (-not $qemuPatched) {
+        $missing += @{ What = 'the patched QEMU, compiled in MSYS2 (without it the disk image never shrinks)'
+                       How  = 'In the MSYS2 MSYS window, in windows\qemu: bash build.sh'
+                       Do   = { Push-Location (Join-Path $repo 'windows\qemu')
+                                try { & "$msys2\usr\bin\env.exe" MSYSTEM=MSYS CHERE_INVOKING=1 /usr/bin/bash -l ./build.sh }
+                                finally { Pop-Location }
+                                if ($LASTEXITCODE -ne 0) { Fail 'The QEMU build failed; its output is above.' } } }
+    }
+
     return $missing
 }
 
