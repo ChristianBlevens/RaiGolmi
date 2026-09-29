@@ -12,13 +12,13 @@ The label is not focusable: a selectable label otherwise takes focus on the firs
 with it the keys a surface reads from its window (the selector's arrows). A drag selects
 without focus.
 
-**Clickable text is copyable too.** A selectable label inside a `Gtk.Button` still lets the
-button's click through, and a drag over it both selects and clicks. The label selects from the
-first motion with no threshold (a pixel's wobble across a glyph selects it) and a double press
-selects a word, so what separates a drag from a click is GTK's own drag threshold on the
-pointer's travel since the press (`_Press`), never whether a selection appeared: `button` runs
-its action and `check` keeps its toggle unless the pointer travelled past it, and a click clears
-what it selected. A `Gtk.Expander` whose title
+**Clickable text is copyable too.** A press on a selectable label is the label's: it claims
+the press (gtklabel.c, 4.22), so a `Gtk.Button` or `Gtk.CheckButton` around it never clicks
+when the press lands on its text. So `_Released` watches the widget in the capture phase, where
+the label cannot take the press away, and a press released over the widget is its click
+whatever the label did with it; GTK's own click, from a press beside the text, is the same
+click and is not run twice. A drag that ends off the widget only selects. A click clears what
+it selected. A `Gtk.Expander` whose title
 is a selectable label never opens at all, so a heading that opens a section is a `button`
 over a `Gtk.Revealer` (`section`).
 """
@@ -77,51 +77,65 @@ def button(text: str | Gtk.Label, clicked: Callable[[], None], child: Gtk.Widget
     if not made.get_selectable():
         copyable(made)
     widget = Gtk.Button(child=child or made, **props)
-    press = _Press(widget)
 
-    def on_clicked(_button) -> None:
-        if press.dragged():
-            return
+    def activate() -> None:
         made.select_region(0, 0)
         clicked()
-    widget.connect("clicked", on_clicked)
+    released = _Released(widget, activate)
+    widget.connect("clicked", lambda _button: released.clicked())
     return widget
 
 
-class _Press:
-    """Where the last press on `widget` landed, taken in the capture phase before the label
-    inside claims the press, and whether the pointer has since travelled past GTK's drag
-    threshold. The pointer is read where it is now rather than followed: the label's claim
-    denies every other gesture its motion would reach."""
+class _Released:
+    """A primary press on `widget` released over it runs `activate` once, whether GTK's own
+    click came (a press beside the label, a key) or the label took the press (one on its
+    text). Read in the capture phase and never consumed, so the label still selects."""
 
-    def __init__(self, widget: Gtk.Widget) -> None:
+    def __init__(self, widget: Gtk.Widget, activate: Callable[[], None]) -> None:
         self.widget = widget
-        self.at: tuple[float, float] | None = None
-        gesture = Gtk.GestureClick()
-        gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        gesture.connect("pressed", self._pressed)
-        widget.add_controller(gesture)
+        self.activate = activate
+        self.pending = False
+        self.clicked_now = False
+        watch = Gtk.EventControllerLegacy()
+        watch.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        watch.connect("event", self._event)
+        widget.add_controller(watch)
 
-    def _pressed(self, _gesture, _n: int, x: float, y: float) -> None:
-        self.at = (x, y)
+    def clicked(self) -> None:
+        """GTK's own click: run now, and the release that brought it runs nothing more."""
+        self.clicked_now = True
+        self.activate()
 
-    def dragged(self) -> bool:
-        """Once per press; an activation with no press (a key) is not a drag."""
-        at, self.at = self.at, None
-        if at is None:
-            return False
+    def _event(self, _watch, event: Gdk.Event) -> bool:
+        kind = event.get_event_type()
+        if kind == Gdk.EventType.BUTTON_PRESS and event.get_button() == Gdk.BUTTON_PRIMARY:
+            self.pending = True
+        elif kind == Gdk.EventType.BUTTON_RELEASE and self.pending:
+            self.pending = False
+            if self._over(event):
+                self.clicked_now = False
+                # After the release has gone through the widget's own gestures, which may
+                # click it themselves.
+                GLib.idle_add(self._settle)
+        return Gdk.EVENT_PROPAGATE
+
+    def _settle(self) -> bool:
+        if not self.clicked_now:
+            self.activate()
+        self.clicked_now = False
+        return GLib.SOURCE_REMOVE
+
+    def _over(self, event: Gdk.Event) -> bool:
         native = self.widget.get_native()
-        found, point = self.widget.compute_point(native, Graphene.Point().init(*at))
+        found, x, y = event.get_position()
+        if not found:
+            raise RuntimeError(f"a release on {self.widget} carries no position")
+        offset_x, offset_y = native.get_surface_transform()
+        found, point = native.compute_point(
+            self.widget, Graphene.Point().init(x - offset_x, y - offset_y))
         if not found:
             raise RuntimeError(f"{self.widget} is not inside its own native")
-        offset_x, offset_y = native.get_surface_transform()
-        pointer = self.widget.get_display().get_default_seat().get_pointer()
-        inside, x, y, _mask = native.get_surface().get_device_position(pointer)
-        if not inside:
-            return True
-        threshold = self.widget.get_settings().props.gtk_dnd_drag_threshold
-        return (abs(x - (point.x + offset_x)) > threshold
-                or abs(y - (point.y + offset_y)) > threshold)
+        return self.widget.contains(point.x, point.y)
 
 
 def check(text: str, toggled: Callable[[bool], None],
@@ -129,16 +143,18 @@ def check(text: str, toggled: Callable[[bool], None],
     """The box and its handler, which a caller blocks when it sets the box from elsewhere."""
     made = label(text)
     widget = Gtk.CheckButton(child=made, **props)
-    press = _Press(widget)
 
-    def on_toggled(box: Gtk.CheckButton) -> None:
-        if press.dragged():
-            with box.handler_block(handler):
-                box.set_active(not box.get_active())
-            return
+    def activate() -> None:
         made.select_region(0, 0)
-        toggled(box.get_active())
-    handler = widget.connect("toggled", on_toggled)
+        toggled(widget.get_active())
+
+    def flip() -> None:
+        with widget.handler_block(handler):
+            widget.set_active(not widget.get_active())
+        activate()
+    released = _Released(widget, flip)
+    handler = widget.connect("toggled", lambda _box: (
+        setattr(released, "clicked_now", True), activate()))
     return widget, handler
 
 
