@@ -86,6 +86,7 @@ COPY host/systemd/set-timezone             /usr/libexec/raigolmi/set-timezone
 COPY host/firewall/raigolmi.nft           /usr/lib/raigolmi/firewall.nft
 COPY host/systemd/raigolmi-firewall.service \
      /usr/lib/systemd/system/raigolmi-firewall.service
+COPY host/systemd/raigolmi-trim.service   /usr/lib/systemd/system/raigolmi-trim.service
 #  The base image's update timer is masked: the OS updates only when the user asks, and its
 #  `--apply` reboots without a word.
 RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh && \
@@ -96,7 +97,7 @@ RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh &&
           /usr/lib/systemd/user/sway-session.target.wants/raigolmi-follow-display.service && \
     chmod 0755 /usr/libexec/raigolmi/set-timezone && \
     systemctl enable docker.service sshd.service raigolmi-timezone.service \
-        raigolmi-firewall.service && \
+        raigolmi-firewall.service raigolmi-trim.service && \
     systemctl mask bootc-fetch-apply-updates.timer
 
 #  bootc's own check that the image is a valid bootable container: a base that lost its

@@ -1,0 +1,16 @@
+[Unit]
+Description=RaiGolmi: what the guest freed handed back to its disk image at shutdown
+# Stopped before the filesystems are unmounted, since it is started after them. The launcher
+# passes the discards to the qcow2 (discard=unmap), which then frees those clusters, and
+# rewrites the file smaller when enough of it is free.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/true
+ExecStop=/usr/sbin/fstrim --all --verbose
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target
