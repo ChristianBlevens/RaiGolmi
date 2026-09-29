@@ -32,7 +32,7 @@ gi.require_version("Graphene", "1.0")
 
 from typing import Callable  # noqa: E402
 
-from gi.repository import Gdk, GLib, Graphene, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, GObject, Graphene, Gtk  # noqa: E402
 
 SETTLE_MS = 250
 _ARROW = {True: "pan-down-symbolic", False: "pan-end-symbolic"}
@@ -107,15 +107,14 @@ class _Released:
         self.activate()
 
     def _event(self, watch: Gtk.EventControllerLegacy, _event) -> bool:
-        # PyGObject hands this signal's GdkEvent over as None; the controller says what it is.
-        kind = watch.get_current_event_type()
+        # PyGObject hands this signal's GdkEvent over as None; the controller's own is whole.
+        event = watch.get_current_event()
+        kind = event.get_event_type()
         if kind == Gdk.EventType.BUTTON_PRESS:
-            self.pending = True
+            self.pending = event.get_button() == Gdk.BUTTON_PRIMARY
         elif kind == Gdk.EventType.BUTTON_RELEASE and self.pending:
             self.pending = False
-            # A release's state still holds the button being released.
-            primary = watch.get_current_event_state() & Gdk.ModifierType.BUTTON1_MASK
-            if primary and self._over():
+            if self._over(event):
                 self.clicked_now = False
                 # After the release has gone through the widget's own gestures, which may
                 # click it themselves.
@@ -128,12 +127,12 @@ class _Released:
         self.clicked_now = False
         return GLib.SOURCE_REMOVE
 
-    def _over(self) -> bool:
+    def _over(self, event: Gdk.Event) -> bool:
+        """Whether the release is over the widget, from its position on the surface."""
         native = self.widget.get_native()
-        pointer = self.widget.get_display().get_default_seat().get_pointer()
-        inside, x, y, _mask = native.get_surface().get_device_position(pointer)
-        if not inside:
-            return False
+        found, x, y = event.get_position()
+        if not found:
+            raise RuntimeError(f"a release on {self.widget} carries no position")
         offset_x, offset_y = native.get_surface_transform()
         found, point = native.compute_point(
             self.widget, Graphene.Point().init(x - offset_x, y - offset_y))
@@ -201,7 +200,9 @@ def _watch(display: Gdk.Display) -> None:
 
     def settled() -> bool:
         pending.clear()
-        if primary.is_local():
+        # A selection ended before it settled (a click clears what it selected) leaves the
+        # primary holding no text, and there is nothing to copy.
+        if primary.is_local() and primary.get_formats().contain_gtype(GObject.TYPE_STRING):
             primary.read_text_async(None, copied)
         return GLib.SOURCE_REMOVE
 
