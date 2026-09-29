@@ -5,7 +5,7 @@ FROM docker.io/library/fedora:44
 # ⚠ Byte-identical to the selector's and the control's, so the three share one cached layer
 # and a fresh machine runs this `dnf` once, not three times.
 RUN dnf install -y --setopt=install_weak_deps=False \
-        gtk4 gtk4-layer-shell python3-gobject \
+        gtk4 gtk4-layer-shell python3-gobject gobject-introspection \
         mesa-dri-drivers mesa-libEGL libglvnd-gles \
         google-noto-color-emoji-fonts \
     && dnf clean all

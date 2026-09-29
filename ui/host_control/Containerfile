@@ -15,7 +15,7 @@ FROM docker.io/library/fedora:44
 # between power-on and a usable screen. The emoji font is not needed here and is installed
 # anyway, because a few megabytes is the price of the line matching.
 RUN dnf install -y --setopt=install_weak_deps=False \
-        gtk4 gtk4-layer-shell python3-gobject \
+        gtk4 gtk4-layer-shell python3-gobject gobject-introspection \
         mesa-dri-drivers mesa-libEGL libglvnd-gles \
         google-noto-color-emoji-fonts \
     && dnf clean all
