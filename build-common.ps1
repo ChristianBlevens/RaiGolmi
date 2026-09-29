@@ -184,6 +184,19 @@ function Apply-Upgrade([string]$archive) {
     & $ssh -F $config raigolmi ('sudo bootc switch --transport oci-archive /var/tmp/raigolmi-upgrade.ociarchive && ' +
                                 'rm -f /var/tmp/raigolmi-upgrade.ociarchive ~/.config/systemd/user/raigolmid.service.d/patched.conf')
     if ($LASTEXITCODE -ne 0) { Fail "The machine refused the new image; bootc's output is above. Nothing on it changed." }
+    # A staged image is written into the boot entries only by a clean shutdown, and a guest
+    # that dies on the way down loses it. Stopping the finalize unit runs that step now, the
+    # way ostree's own tests do; the new image is then the next boot's whatever the shutdown.
+    Write-Host 'Writing it into the boot entries...'
+    & $ssh -F $config raigolmi ('sudo systemctl stop ostree-finalize-staged.service && ' +
+                                '! systemctl is-failed --quiet ostree-finalize-staged.service && ' +
+                                'test ! -e /run/ostree/staged-deployment && ' +
+                                'sudo bootc status | grep -A6 ''^  rollback:'' | grep -q oci-archive')
+    if ($LASTEXITCODE -ne 0) {
+        & $ssh -F $config raigolmi 'sudo bootc status; journalctl -b -u ostree-finalize-staged --no-pager | tail -20'
+        Fail ("The new image was staged but not written into the boot entries; bootc's status " +
+              "and the finalize log are above. The machine still boots the image it had.")
+    }
     Remove-Item $archive -ErrorAction Stop
     Write-Host 'Restarting the machine on the new image...'
     # The connection ends with the machine, so its exit code says nothing.
