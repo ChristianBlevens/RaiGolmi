@@ -72,9 +72,9 @@ def style(look: theme.Look) -> dict[str, str]:
         "mouse": "on",
     }
 
-# Selecting copies and right-click pastes. tmux selects even over an
-# agent that reads the mouse — Claude Code keeps clicks and the wheel, never a drag — and every
-# copy it makes goes to the clipboard and to the primary, which a bare terminal's right-click
+# Selecting copies and right-click pastes. The agent takes no mouse (`agents.py`), so the
+# wheel scrolls tmux's scrollback a fixed step at a time, and every
+# copy tmux makes goes to the clipboard and to the primary, which a bare terminal's right-click
 # pastes (`host/foot/foot.ini`); `set-clipboard off` keeps it the one writer. Right-click pastes
 # the clipboard, bracketed, and tmux's own menus go with it.
 COPY_COMMAND = ("sh -c 'f=$(mktemp) && cat >\"$f\" && wl-copy <\"$f\" && "
@@ -163,6 +163,9 @@ def ensure_session() -> None:
     commands: list[str] = []
     for option, value in style(theme.load()).items():
         commands += [";", "set-option", "-t", SESSION, option, value]
+    # A tab's conversation is written into its pane's scrollback (`agents.py`), not redrawn
+    # by the agent, so the scrollback holds a long one; tmux's default keeps 2000 lines.
+    commands += [";", "set-option", "-t", SESSION, "history-limit", "100000"]
     # A closed tab leaves the terminal ready again: closing the last agent opens the next.
     # Its account goes to the journal, since a hook has no terminal to print on.
     commands += [";", "set-hook", "-t", SESSION, "window-unlinked",

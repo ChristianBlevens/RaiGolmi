@@ -363,6 +363,11 @@ class Agents:
             # A tab is one foreground session. Sent to the background (← or /bg), its
             # session record outlives the container and blocks `--continue`.
             "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
+            # The conversation goes into the terminal's scrollback and the wheel and the
+            # selection are the terminal's: Claude Code's own full-screen view scrolls with
+            # acceleration and keeps no scrollback behind it.
+            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
+            "CLAUDE_CODE_DISABLE_MOUSE": "1",
             # The user's settings' model; the entrypoint writes it into the tab's settings.json.
             "RAIGOLMI_MODEL": settings.load(self.paths.settings).model,
         }
