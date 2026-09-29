@@ -48,6 +48,7 @@ import hashlib
 import hmac
 import http.client
 import os
+import re
 import secrets
 import selectors
 import socket
@@ -145,11 +146,7 @@ class Authority:
             self._make()
         self._key = serialization.load_pem_private_key(self._key_path.read_bytes(), None)
         self._ca = x509.load_pem_x509_certificate(self.cert.read_bytes())
-        roots = ssl.get_default_verify_paths().cafile
-        if roots is None:
-            raise ProxyError("this machine's OpenSSL names no trusted-roots file to extend")
-        self.bundle.write_bytes(Path(roots).read_bytes().rstrip(b"\n") + b"\n"
-                                + self.cert.read_bytes())
+        self.bundle.write_bytes(_roots().rstrip(b"\n") + b"\n" + self.cert.read_bytes())
 
     def _make(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -197,6 +194,24 @@ class Authority:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(chain)
         return context
+
+
+def _roots() -> bytes:
+    """The host's trusted roots as one PEM bundle: OpenSSL's CA file where the host has one,
+    else every certificate its hashed CA directory names (Fedora 44 ships only that), each
+    once however many hash names point at it."""
+    paths = ssl.get_default_verify_paths()
+    if paths.cafile is not None:
+        return Path(paths.cafile).read_bytes()
+    if paths.capath is None or not Path(paths.capath).is_dir():
+        raise ProxyError("this machine's OpenSSL names no trusted-roots file or directory to "
+                         f"extend ({paths})")
+    hashed = re.compile(r"[0-9a-f]{8}\.[0-9]+")
+    certs = sorted({entry.resolve() for entry in Path(paths.capath).iterdir()
+                    if hashed.fullmatch(entry.name)})
+    if not certs:
+        raise ProxyError(f"{paths.capath}, this machine's OpenSSL CA directory, names no certificate")
+    return b"\n".join(cert.read_bytes().rstrip(b"\n") for cert in certs)
 
 
 def _identified(cert: Path) -> bool:

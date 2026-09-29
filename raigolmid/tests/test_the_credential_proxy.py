@@ -244,3 +244,26 @@ def test_the_github_sign_in_is_swapped_in_on_githubs_hosts_and_only_there(machin
         conn.request("POST", "/", body=b"{}", headers={"Authorization": f"Bearer {token}"})
         assert conn.getresponse().status == 401, host
     assert len(Upstream.seen) == 1
+
+
+def test_a_host_with_only_a_hashed_ca_directory_is_extended_all_the_same(tmp_path, monkeypatch):
+    """Fedora 44's OpenSSL names no CA file, only a directory of hash-named links."""
+    from raigolmid import credproxy
+    store, hashed = tmp_path / "store", tmp_path / "certs"
+    store.mkdir()
+    hashed.mkdir()
+    roots = []
+    for name in ("one", "two"):
+        root = credproxy.Authority(tmp_path / name).cert
+        (store / f"{name}.pem").write_bytes(root.read_bytes())
+        roots.append(root.read_bytes())
+    (hashed / "0000aaaa.0").symlink_to(store / "one.pem")
+    (hashed / "0000aaaa.1").symlink_to(store / "one.pem")
+    (hashed / "1111bbbb.0").symlink_to(store / "two.pem")
+    (hashed / "README").write_text("not a certificate")
+    monkeypatch.setattr(credproxy.ssl, "get_default_verify_paths", lambda: ssl.DefaultVerifyPaths(
+        None, str(hashed), "SSL_CERT_FILE", "/nowhere/cert.pem", "SSL_CERT_DIR", str(hashed)))
+    authority = credproxy.Authority(tmp_path / "proxy")
+    bundle = authority.bundle.read_bytes()
+    assert all(bundle.count(root.strip()) == 1 for root in roots), "each root once"
+    assert bundle.rstrip().endswith(authority.cert.read_bytes().strip())
