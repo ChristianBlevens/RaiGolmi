@@ -97,7 +97,7 @@ def test_an_image_changes_with_what_it_copies_and_nothing_else(tmp_path):
 
 
 def test_a_new_tag_removes_the_old_ones_nothing_was_created_from(tmp_path, monkeypatch):
-    from raigolmid import hostimages
+    from raigolmid import hostimages, superseded
     from raigolmid.runtime.base import ContainerSpec
     from tests.fakeruntime import FakeRuntime
     monkeypatch.setenv(hostimages.ARCHIVE_ENV, str(tmp_path / "none.tar"))
@@ -115,7 +115,7 @@ def test_a_new_tag_removes_the_old_ones_nothing_was_created_from(tmp_path, monke
     assert "raigolmi/notify:ccc" in tags, "another image's tags are not this one's"
 
     runtime.remove("tab-1", force=True)
-    hostimages.release(runtime)
+    superseded.release(runtime)
     assert "raigolmi/claude:bbb" not in {t for i in runtime.list_images() for t in i.tags}, \
         "held only while the tab's container was there"
     assert runtime.cache_prunes == 2

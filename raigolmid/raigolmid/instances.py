@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from . import compose, flakes, naming
+from . import compose, flakes, naming, superseded
 from .git import ProtectionWatch
 from .anchors import Anchors
 from .definitions import Body, Toolbelt
@@ -93,6 +93,7 @@ class Instances:
         self.epoch = epoch
         # Written on the instances' queues, read by `status` from any thread.
         self._lock = threading.Lock()
+        self._pulls_lock = threading.Lock()
         self._state: dict[str, Instance] = {}
         # A running instance's protected git files, gone with the instance. The
         # baseline is what its agent started with, so it outlives a daemon restart: a sandbox
@@ -198,6 +199,23 @@ class Instances:
         self.events.emit("body.base_local", body=body.id, image=ref, reason=str(unreachable))
         return pulled[0] if pulled else info.id
 
+    def _record_pull(self, reference: str, body_id: str) -> None:
+        with self._pulls_lock:
+            pulls = self.body_pulls()
+            if pulls.get(reference) != body_id:
+                save_json(self.paths.body_pulls, {**pulls, reference: body_id})
+
+    def body_pulls(self) -> dict[str, str]:
+        """Each image pulled as a body's, and the body it was pulled for."""
+        return load_json(self.paths.body_pulls, "the images pulled for bodies") or {}
+
+    def forget_pulls(self, references: set[str]) -> None:
+        with self._pulls_lock:
+            pulls = self.body_pulls()
+            if references & pulls.keys():
+                save_json(self.paths.body_pulls,
+                          {r: b for r, b in pulls.items() if r not in references})
+
     def build_image(self, body: Body, digest: str, fresh: bool) -> BuildOutcome:
         """The work a `BuildLock` coalesces. It builds; it never swaps. `fresh`: the registry
         answered for the base images (`body_digest`), so the build fetches their new
@@ -210,10 +228,12 @@ class Instances:
                 raise InstanceError(f"body '{body.id}' has neither an image nor a Dockerfile")
             if fresh or self.runtime.image(body.image) is None:
                 self.runtime.pull(body.image)
+            self._record_pull(body.image, body.id)
             return BuildOutcome(digest=digest, succeeded=True, image=body.image,
                                 log="", duration=time.monotonic() - started)
 
         if self.runtime.image(tag) is not None:
+            superseded.drop_older(self.runtime, tag)
             return BuildOutcome(digest=digest, succeeded=True, image=tag, log="",
                                 duration=time.monotonic() - started)
 
@@ -235,6 +255,7 @@ class Instances:
                                 log=result.log, duration=duration)
         self.events.emit("build.complete", body=body.id, digest=digest, tag=tag,
                          seconds=round(duration, 2))
+        superseded.drop_older(self.runtime, tag)
         return BuildOutcome(digest=digest, succeeded=True, image=tag, log=result.log,
                             duration=duration)
 

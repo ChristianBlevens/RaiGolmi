@@ -153,6 +153,10 @@ class Session:
         names: no container, no toolbelt (its lock, its package list now, or its flake build)
         and no face's apps. Each edit to a package list makes a new image and closure, and
         nothing else would ever remove the old ones; the build cache only they held goes too.
+        A body's images go once no body names them — built for a body with no definition any
+        more, or pulled as the image of one that names another now — for an image nothing
+        claims is abandoned; a newer build of a body still defined replaces its older ones as
+        it is built (`superseded.py`).
 
         ⚠ Only at the daemon's start, before anything can fetch: a fetch holds an image nothing
         names yet until its view exists (`toolbelt_swap` fetches before it records).
@@ -175,7 +179,7 @@ class Session:
             image = self.runtime.image(reference)
             if image is not None:
                 keep.add(image.id)
-        images = 0
+        images = self._collect_body_images(keep)
         for image in self.runtime.list_images():
             names = image.tags or image.repo_digests
             if (image.id in keep or not names
@@ -193,6 +197,37 @@ class Session:
         closures, store_paths = self.closures.collect(keep)
         self.events.emit("garbage.collected", images=images, closures=closures,
                          store_paths=store_paths)
+
+    def _collect_body_images(self, keep: set[str]) -> int:
+        """`collect_garbage`'s bodies: how many images went. One a container outside the
+        daemon's labels still runs is left for the next start."""
+        bodies = self.catalogue.bodies.values()
+        defined = {naming.body_repository(body.id) for body in bodies}
+        named = {body.image for body in bodies if not body.builds_from_source and body.image}
+        abandoned = [tag for image in self.runtime.list_images() if image.id not in keep
+                     for tag in image.tags
+                     if tag.startswith(naming.BODY_REPOSITORIES)
+                     and tag.rsplit(":", 1)[0] not in defined]
+        pulls = self.instances.body_pulls()
+        gone: set[str] = set()
+        for reference in pulls:
+            if reference in named:
+                continue
+            image = self.runtime.image(reference)
+            if image is None:
+                gone.add(reference)
+            elif image.id not in keep:
+                abandoned.append(reference)
+        images = 0
+        for reference in abandoned:
+            try:
+                self.runtime.remove_image(reference)
+            except ImageInUse:
+                continue
+            gone.add(reference)
+            images += 1
+        self.instances.forget_pulls(gone & pulls.keys())
+        return images
 
     def rediscover(self) -> Catalogue:
         with self._lock:

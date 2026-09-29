@@ -70,6 +70,11 @@ def test_only_what_no_definition_or_container_names_is_collected(h):
     tb_id, toolbelt = next(iter(h.session.catalogue.toolbelts.items()))
     flake = h.runtime.add_image(f"{flakes.IMAGE_PREFIX}{tb_id}:sha256-current")
     flake_old = h.runtime.add_image(f"{flakes.IMAGE_PREFIX}{tb_id}:sha256-edited-away")
+    undefined = h.runtime.add_image(naming.build_tag("deleted-by-hand", "sha256:aaa"))
+    defined = h.runtime.add_image(naming.build_tag("myapi", "sha256:bbb"))
+    first_image = h.runtime.add_image("docker.io/library/rust:1-slim-bookworm")
+    h.session.instances._record_pull("docker.io/library/rust:1-slim-bookworm", "myapi")
+    h.session.instances._record_pull("docker.io/library/removed-by-hand:1", "webui")
     record = h.session.resolver.flakes / tb_id / "built.json"
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps(flakes.Built(
@@ -81,8 +86,12 @@ def test_only_what_no_definition_or_container_names_is_collected(h):
 
     present = {image.id for image in h.runtime.list_images()}
     assert old.id not in present and flake_old.id not in present
-    assert {view_image, elsewhere.id, flake.id, *named.values(), *apps.values()} <= present
+    assert undefined.id not in present, "built for a body no definition names"
+    assert first_image.id not in present, "pulled for a body that builds from source now"
+    assert h.session.instances.body_pulls() == {}, "a pull nothing names is forgotten"
+    assert {view_image, elsewhere.id, flake.id, defined.id, *named.values(),
+            *apps.values()} <= present
     assert not old_closure.exists() and kept_closure.is_dir()
     [said] = [e.data for e in h.events.tail(1000) if e.type == "garbage.collected"]
-    assert said["images"] == 2 and said["closures"] == 1
+    assert said["images"] == 4 and said["closures"] == 1
     assert h.runtime.cache_prunes == 1

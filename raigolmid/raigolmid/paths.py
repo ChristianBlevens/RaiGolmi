@@ -59,6 +59,12 @@ class Paths:
         return self.state / "questions.json"
 
     @property
+    def body_pulls(self) -> Path:
+        """Each image pulled as a body's, and the body it was pulled for (`Instances`), so one
+        no body names any more is collected (`Session.collect_garbage`)."""
+        return self.state / "body-pulls.json"
+
+    @property
     def messages(self) -> Path:
         """What agent tabs asked each other and how each was settled (`messages.py`)."""
         return self.state / "messages.json"

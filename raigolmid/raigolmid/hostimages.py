@@ -22,13 +22,12 @@ import os
 import sys
 import threading
 import time
-import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from . import layerfiles, naming
+from . import layerfiles, naming, superseded
 from .queues import BuildLock, BuildOutcome
-from .runtime.base import ContainerRuntime, ImageInUse
+from .runtime.base import ContainerRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +36,6 @@ logger = logging.getLogger(__name__)
 _BUILDS = BuildLock()
 
 
-@dataclass
-class _Superseded:
-    """Per engine: the current tags whose older ones were dropped (`_drop_older`, once each,
-    whether the tag was built, loaded or already here), and the older ones Docker refused
-    while a container held them, which wait for that container to go (`release`)."""
-    swept: set[str] = field(default_factory=set)
-    held: set[str] = field(default_factory=set)
-
-
-_SUPERSEDED: weakref.WeakKeyDictionary[ContainerRuntime, _Superseded] = \
-    weakref.WeakKeyDictionary()
-_DROP = threading.Lock()
 
 # The host image copies `ui/` and `raigolmid/raigolmid/` here in the repository's own layout,
 # so one Containerfile builds identically from a checkout and from the disk.
@@ -196,11 +183,11 @@ def ensure(runtime: ContainerRuntime, image: HostImage) -> str:
     """The image's tag, built first if it is not present."""
     tag = image.tag()
     if runtime.image(tag) is not None:
-        _drop_older(runtime, tag)
+        superseded.drop_older(runtime, tag)
         return tag
     if _load_archive(runtime):
         if runtime.image(tag) is not None:
-            _drop_older(runtime, tag)
+            superseded.drop_older(runtime, tag)
             return tag
         if image.context.is_relative_to(DEFAULT_SOURCE):
             # Its sources are the disk's own, so the archive was built from them: this is a
@@ -227,66 +214,8 @@ def ensure(runtime: ContainerRuntime, image: HostImage) -> str:
             f"building {tag} from {image.context} failed:\n{outcome.log[-4000:]}")
     logger.info("%s %s, a %.0fs build", "waited on" if outcome.coalesced else "built",
                 tag, outcome.duration)
-    _drop_older(runtime, tag)
+    superseded.drop_older(runtime, tag)
     return tag
-
-
-def _drop_older(runtime: ContainerRuntime, tag: str) -> None:
-    """Every other tag of this image's repository, once this one is here: each change to the
-    sources makes a new one, and nothing else ever removes the last (gigabytes within an
-    hour of edits). One a container was created from is refused by Docker — a surface or
-    tab still runs it while its successor is built — and is held for `release`."""
-    with _DROP:
-        superseded = _SUPERSEDED.setdefault(runtime, _Superseded())
-        if tag in superseded.swept:
-            return
-        superseded.swept.add(tag)
-        repository = tag.rsplit(":", 1)[0]
-        removed = False
-        for info in runtime.list_images():
-            for old in info.tags:
-                if old.rsplit(":", 1)[0] != repository or old == tag:
-                    continue
-                try:
-                    runtime.remove_image(old)
-                except ImageInUse:
-                    superseded.held.add(old)
-                    logger.info("holding %s until its container goes", old)
-                    continue
-                superseded.held.discard(old)
-                removed = True
-                logger.info("removed %s, replaced by %s", old, tag)
-        if removed:
-            _prune_build_cache(runtime)
-
-
-def release(runtime: ContainerRuntime) -> None:
-    """A container went: each superseded image Docker refused is asked for again, and one no
-    container holds any more goes."""
-    with _DROP:
-        superseded = _SUPERSEDED.setdefault(runtime, _Superseded())
-        removed = False
-        for old in sorted(superseded.held):
-            try:
-                runtime.remove_image(old)
-            except ImageInUse:
-                continue
-            superseded.held.discard(old)
-            removed = True
-            logger.info("removed %s, which its last container held", old)
-        if removed:
-            _prune_build_cache(runtime)
-
-
-def held(runtime: ContainerRuntime) -> bool:
-    """Whether any superseded image waits on a container (`release`)."""
-    superseded = _SUPERSEDED.get(runtime)
-    return superseded is not None and bool(superseded.held)
-
-
-def _prune_build_cache(runtime: ContainerRuntime) -> None:
-    reclaimed = runtime.prune_build_cache()
-    logger.info("pruned %d bytes of build cache no image holds", reclaimed)
 
 
 def main() -> int:

@@ -37,7 +37,7 @@ from .permissions import Permissions
 from .judge import Judge
 from .questions import Questions
 from .viewing import Viewing
-from . import hostimages
+from . import hostimages, superseded
 from .hostimages import HostImageError
 from .hostsurfaces import HostSurfaceError, selector_current, start_at_rest
 from ui.hostipc import HostIpcError
@@ -415,9 +415,9 @@ class Daemon:
         — a sandbox's with that sandbox's other container work, never a machine-wide
         reconcile, which takes the session lock every queue caller is already waiting behind.
         Only `die` says a container ended; its `destroy` follows a removal, and is what frees
-        a superseded image the container was created from (`hostimages.release`), off this
+        a superseded image the container was created from (`superseded.release`), off this
         thread because removing an image can take seconds."""
-        if event.get("Action") == "destroy" and hostimages.held(self.session.runtime):
+        if event.get("Action") == "destroy" and superseded.held(self.session.runtime):
             threading.Thread(target=self._release_images, name="release-images",
                              daemon=True).start()
             return
@@ -434,7 +434,7 @@ class Daemon:
     def _release_images(self) -> None:
         """Nobody waits on the thread, so its failure is said here or not at all."""
         try:
-            hostimages.release(self.session.runtime)
+            superseded.release(self.session.runtime)
         except Exception as exc:
             self.events.emit("images.release_failed", reason=f"{type(exc).__name__}: {exc}")
             raise

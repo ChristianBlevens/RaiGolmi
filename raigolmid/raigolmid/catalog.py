@@ -109,7 +109,7 @@ class Catalog:
     def _body_images(self, body: Body) -> list[str]:
         if not body.builds_from_source:
             return [body.image] if body.image and self.session.runtime.image(body.image) else []
-        repo = naming.build_tag(body.id, "sha256:0").rsplit(":", 1)[0]
+        repo = naming.body_repository(body.id)
         return sorted(tag for info in self.session.runtime.list_images()
                       for tag in info.tags if tag.rsplit(":", 1)[0] == repo)
 

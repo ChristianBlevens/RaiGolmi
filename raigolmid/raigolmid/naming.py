@@ -159,11 +159,18 @@ def agent(tab_id: str) -> str:
     return f"{PREFIX}-agent-{_safe(tab_id)}"
 
 
+BODY_REPOSITORIES = f"{PREFIX}/body-"
+
+
+def body_repository(body_id: str) -> str:
+    return f"{BODY_REPOSITORIES}{_safe(body_id).lower()}"
+
+
 def build_tag(body_id: str, digest: str) -> str:
     """Images are tagged by definition digest, so an image that is already current is
     recognised without a build."""
     short = digest.split(":")[-1][:12]
-    return f"{PREFIX}/body-{_safe(body_id).lower()}:{short}"
+    return f"{body_repository(body_id)}:{short}"
 
 
 def host_image_tag(name: str, digest: str) -> str:

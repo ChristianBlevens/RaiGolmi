@@ -259,6 +259,7 @@ class Harness:
 
         daemon = SimpleNamespace(session=self.session, events=self.events)
         daemon._exit = lambda unit, container: Daemon._exit(daemon, unit, container)
+        daemon._release_images = lambda: Daemon._release_images(daemon)
         queues = set()
         for event in self.runtime.events():
             Daemon._on_runtime_event(daemon, event)
