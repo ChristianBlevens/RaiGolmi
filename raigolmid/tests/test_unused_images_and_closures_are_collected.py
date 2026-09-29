@@ -5,9 +5,11 @@ daemon's containers, every toolbelt's lock and package list, and every face's ap
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from raigolmid import labels, naming
+from raigolmid import flakes, labels, naming
 from raigolmid.closures import Closures
 from raigolmid.events import EventLog
 from raigolmid.paths import Paths
@@ -65,14 +67,22 @@ def test_only_what_no_definition_or_container_names_is_collected(h):
             for face_id, face in h.session.catalogue.faces.items()}
     old = h.runtime.pull("nixery.dev/shell/python3/an-edited-away-package")
     elsewhere = h.runtime.add_image("docker.io/library/busybox:latest")
+    tb_id, toolbelt = next(iter(h.session.catalogue.toolbelts.items()))
+    flake = h.runtime.add_image(f"{flakes.IMAGE_PREFIX}{tb_id}:sha256-current")
+    flake_old = h.runtime.add_image(f"{flakes.IMAGE_PREFIX}{tb_id}:sha256-edited-away")
+    record = h.session.resolver.flakes / tb_id / "built.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps(flakes.Built(
+        image=flake.tags[0], nixpkgs="0" * 40, package_digest=toolbelt.package_digest).to_dict()))
     old_closure = h.session.closures.of_image_id(old.id)
     kept_closure = h.session.closures.of_image_id(view_image)
 
     h.session.collect_garbage()
 
     present = {image.id for image in h.runtime.list_images()}
-    assert old.id not in present
-    assert {view_image, elsewhere.id, *named.values(), *apps.values()} <= present
+    assert old.id not in present and flake_old.id not in present
+    assert {view_image, elsewhere.id, flake.id, *named.values(), *apps.values()} <= present
     assert not old_closure.exists() and kept_closure.is_dir()
     [said] = [e.data for e in h.events.tail(1000) if e.type == "garbage.collected"]
-    assert said["images"] == 1 and said["closures"] == 1
+    assert said["images"] == 2 and said["closures"] == 1
+    assert h.runtime.cache_prunes == 1

@@ -25,6 +25,8 @@ from .definitions import Toolbelt
 from .runtime.base import ContainerRuntime, ContainerSpec, Mount
 
 UNSTABLE = "github:NixOS/nixpkgs/nixpkgs-unstable"
+# Every flake build's repository begins so, one per toolbelt.
+IMAGE_PREFIX = "raigolmid/toolbelt-"
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_+-]*(\.[A-Za-z_][A-Za-z0-9_+-]*)*")
 _REV = re.compile(r"[0-9a-f]{40}")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -131,7 +133,7 @@ def build(runtime: ContainerRuntime, directory: Path, toolbelt: Toolbelt,
     # Named by what it is built from: the same list at the same commit is the same tag.
     tag = "sha256-" + hashlib.sha256(generate(toolbelt, nixpkgs).encode()).hexdigest()[:12]
     (work / "flake.nix").write_text(generate(toolbelt, nixpkgs, tag))
-    image = f"raigolmid/toolbelt-{toolbelt.id}:{tag}"
+    image = f"{IMAGE_PREFIX}{toolbelt.id}:{tag}"
     tar = work / "image.tar"
     tar.unlink(missing_ok=True)
     _run(runtime, work, f"{NIX} build --no-link --print-out-paths .#default > /src/out "

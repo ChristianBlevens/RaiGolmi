@@ -322,6 +322,14 @@ class DockerRuntime(ContainerRuntime):
                 raise ImageInUse(f"'{reference}' is in use: {exc.explanation}") from exc
             raise RuntimeError_(f"could not remove image '{reference}': {exc}") from exc
 
+    def prune_build_cache(self) -> int:
+        """Not `all`: that also removes the records a present image shares, which would make
+        its next build start from nothing."""
+        try:
+            return self._client.api.prune_builds()["SpaceReclaimed"]
+        except APIError as exc:
+            raise RuntimeError_(f"could not prune the build cache: {exc}") from exc
+
     def list_images(self, label_filter: dict[str, str] | None = None) -> list[ImageInfo]:
         filters: dict[str, Any] = {}
         if label_filter:

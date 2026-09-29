@@ -28,8 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import (activity, boot, compatibility, compose, credential, documents, git, hostsurfaces,
-               keep, labels, naming)
+from . import (activity, boot, compatibility, compose, credential, documents, flakes, git,
+               hostsurfaces, keep, labels, naming)
 from .agents import AgentError, Agents, AgentSpec, definition_protection
 from .anchors import DEFAULT_ANCHOR_IMAGE, Anchors
 from .catalog import Catalog
@@ -149,9 +149,10 @@ class Session:
 
     # --- catalogue -------------------------------------------------------------------
     def collect_garbage(self) -> None:
-        """Removes the Nixery images and closures nothing names: no container, no toolbelt
-        (its lock or its package list now) and no face's apps. Each edit to a package list
-        makes a new image and closure, and nothing else would ever remove the old ones.
+        """Removes the toolbelt images — Nixery's and flake builds' — and closures nothing
+        names: no container, no toolbelt (its lock, its package list now, or its flake build)
+        and no face's apps. Each edit to a package list makes a new image and closure, and
+        nothing else would ever remove the old ones; the build cache only they held goes too.
 
         ⚠ Only at the daemon's start, before anything can fetch: a fetch holds an image nothing
         names yet until its view exists (`toolbelt_swap` fetches before it records).
@@ -167,6 +168,9 @@ class Session:
             if lock is not None:
                 references.append(lock.image)
             references.append(nixery_reference(toolbelt.packages))
+            built = flakes.record_of(self.resolver.flakes, toolbelt)
+            if built is not None:
+                references.append(built.image)
         for reference in references:
             image = self.runtime.image(reference)
             if image is not None:
@@ -175,7 +179,8 @@ class Session:
         for image in self.runtime.list_images():
             names = image.tags or image.repo_digests
             if (image.id in keep or not names
-                    or not all(name.startswith(f"{NIXERY}/") for name in names)):
+                    or not all(name.startswith((f"{NIXERY}/", flakes.IMAGE_PREFIX))
+                               for name in names)):
                 continue
             try:
                 for name in names:
@@ -183,6 +188,8 @@ class Session:
             except ImageInUse:
                 continue  # a container outside the daemon's labels still runs it
             images += 1
+        if images:
+            self.runtime.prune_build_cache()
         closures, store_paths = self.closures.collect(keep)
         self.events.emit("garbage.collected", images=images, closures=closures,
                          store_paths=store_paths)

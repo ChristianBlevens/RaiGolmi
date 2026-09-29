@@ -400,7 +400,13 @@ class Daemon:
         """A supervised container's `die` is judged on its unit's own queue (`supervisor.py`)
         — a sandbox's with that sandbox's other container work, never a machine-wide
         reconcile, which takes the session lock every queue caller is already waiting behind.
-        Only `die` says a container ended; its `destroy` follows a removal."""
+        Only `die` says a container ended; its `destroy` follows a removal, and is what frees
+        a superseded image the container was created from (`hostimages.release`), off this
+        thread because removing an image can take seconds."""
+        if event.get("Action") == "destroy" and hostimages.held(self.session.runtime):
+            threading.Thread(target=self._release_images, name="release-images",
+                             daemon=True).start()
+            return
         if event.get("Action") != "die":
             return
         actor = event.get("Actor") or {}
@@ -410,6 +416,14 @@ class Daemon:
             return
         self.session.queues.submit(unit.queue,
                                    lambda c=actor.get("ID"): self._exit(unit, c), "exit")
+
+    def _release_images(self) -> None:
+        """Nobody waits on the thread, so its failure is said here or not at all."""
+        try:
+            hostimages.release(self.session.runtime)
+        except Exception as exc:
+            self.events.emit("images.release_failed", reason=f"{type(exc).__name__}: {exc}")
+            raise
 
     def _exit(self, unit: Unit, container_id: str) -> None:
         """Nobody waits on the queued job, so its failure is said here or not at all."""

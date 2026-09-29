@@ -114,6 +114,28 @@ def test_a_new_tag_removes_the_old_ones_nothing_was_created_from(tmp_path, monke
     assert "raigolmi/claude:bbb" in tags, "a tab's container was created from it"
     assert "raigolmi/notify:ccc" in tags, "another image's tags are not this one's"
 
+    runtime.remove("tab-1", force=True)
+    hostimages.release(runtime)
+    assert "raigolmi/claude:bbb" not in {t for i in runtime.list_images() for t in i.tags}, \
+        "held only while the tab's container was there"
+    assert runtime.cache_prunes == 2
+
+
+def test_an_image_already_here_still_drops_the_ones_it_replaced(tmp_path, monkeypatch):
+    """A daemon restarted after the build finds its tag present, and the tags a container
+    held when it was built are still there to go."""
+    from raigolmid import hostimages
+    from tests.fakeruntime import FakeRuntime
+    monkeypatch.setenv(hostimages.ARCHIVE_ENV, str(tmp_path / "none.tar"))
+    runtime = FakeRuntime()
+    (tmp_path / "Containerfile").write_text("FROM fedora:44\n")
+    image = hostimages.HostImage("claude", tmp_path, tmp_path / "Containerfile")
+    runtime.add_image(image.tag())
+    runtime.add_image("raigolmi/claude:aaa")
+    assert hostimages.ensure(runtime, image) == image.tag()
+    assert "raigolmi/claude:aaa" not in {t for i in runtime.list_images() for t in i.tags}
+    assert runtime.build_count == 0
+
 
 def test_nothing_updates_the_os_on_a_timer():
     """The base image's timer runs `bootc upgrade --apply`, which reboots unannounced; the OS

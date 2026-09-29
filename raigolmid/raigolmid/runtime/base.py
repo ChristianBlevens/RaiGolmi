@@ -212,6 +212,12 @@ class ContainerRuntime(abc.ABC):
         """Untag `reference`, deleting the image when that was its last tag. Raises
         `ImageInUse` while any container was created from it; an absent one is gone already."""
 
+    @abc.abstractmethod
+    def prune_build_cache(self) -> int:
+        """Removes the build cache no image holds — what a removed image's builds leave —
+        and keeps what a present image was built from, which is what makes its next build a
+        cache hit. The bytes reclaimed."""
+
     # --- network ---------------------------------------------------------------------
     @abc.abstractmethod
     def bridge_gateway(self) -> str:

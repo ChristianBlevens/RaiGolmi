@@ -76,6 +76,7 @@ class FakeRuntime(ContainerRuntime):
         self.build_failures: set[str] = set()
         self.build_should_fail = False
         self.build_count = 0
+        self.cache_prunes = 0
         self.exec_log: list[tuple[str, list[str]]] = []
         self.spawn_log: list[tuple[str, list[str], dict[str, str]]] = []
         # What a command run in a body answers, keyed on the joined argv. A command a
@@ -547,6 +548,10 @@ class FakeRuntime(ContainerRuntime):
         if users and not [t for t, i in self._images.items() if i.id == info.id and t != reference]:
             raise ImageInUse(f"'{reference}' is in use by {', '.join(users)}")
         del self._images[reference]
+
+    def prune_build_cache(self) -> int:
+        self.cache_prunes += 1
+        return 0
 
     def list_images(self, label_filter: dict[str, str] | None = None) -> list[ImageInfo]:
         out = []
