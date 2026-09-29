@@ -13,9 +13,12 @@ with it the keys a surface reads from its window (the selector's arrows). A drag
 without focus.
 
 **Clickable text is copyable too.** A selectable label inside a `Gtk.Button` still lets the
-button's click through, and a drag over it both selects and clicks; a plain click leaves the
-label's selection as it was. So `button` runs its action unless the press made a new selection
-(read at the press by a capture gesture on the button), and `check` undoes a toggle that came with a selection. A `Gtk.Expander` whose title
+button's click through, and a drag over it both selects and clicks. The label selects from the
+first motion with no threshold (a pixel's wobble across a glyph selects it) and a double press
+selects a word, so what separates a drag from a click is GTK's own drag threshold on the
+pointer's travel since the press (`_Press`), never whether a selection appeared: `button` runs
+its action and `check` keeps its toggle unless the pointer travelled past it, and a click clears
+what it selected. A `Gtk.Expander` whose title
 is a selectable label never opens at all, so a heading that opens a section is a `button`
 over a `Gtk.Revealer` (`section`).
 """
@@ -25,10 +28,11 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
+gi.require_version("Graphene", "1.0")
 
 from typing import Callable  # noqa: E402
 
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Graphene, Gtk  # noqa: E402
 
 SETTLE_MS = 250
 _ARROW = {True: "pan-down-symbolic", False: "pan-end-symbolic"}
@@ -65,11 +69,6 @@ def set_text(made: Gtk.Label, text: str) -> None:
         made.set_text(text)
 
 
-def selected(made: Gtk.Label) -> bool:
-    found, start, end = made.get_selection_bounds()
-    return found and end > start
-
-
 def button(text: str | Gtk.Label, clicked: Callable[[], None], child: Gtk.Widget | None = None,
            **props) -> Gtk.Button:
     """`child` when the button holds more than its label; the label is still what a drag over
@@ -78,29 +77,51 @@ def button(text: str | Gtk.Label, clicked: Callable[[], None], child: Gtk.Widget
     if not made.get_selectable():
         copyable(made)
     widget = Gtk.Button(child=child or made, **props)
-    at_press: list[tuple] = []
-
-    def pressed(*_args) -> None:
-        at_press[:] = [_bounds(made)]
+    press = _Press(widget)
 
     def on_clicked(_button) -> None:
-        # A drag made a selection; a click inside an older one leaves it as it was, and is
-        # still a click.
-        if selected(made) and at_press and _bounds(made) != at_press[0]:
+        if press.dragged():
             return
         made.select_region(0, 0)
         clicked()
-    press = Gtk.GestureClick()
-    press.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-    press.connect("pressed", pressed)
-    widget.add_controller(press)
     widget.connect("clicked", on_clicked)
     return widget
 
 
-def _bounds(made: Gtk.Label) -> tuple:
-    found, start, end = made.get_selection_bounds()
-    return (start, end) if found and end > start else ()
+class _Press:
+    """Where the last press on `widget` landed, taken in the capture phase before the label
+    inside claims the press, and whether the pointer has since travelled past GTK's drag
+    threshold. The pointer is read where it is now rather than followed: the label's claim
+    denies every other gesture its motion would reach."""
+
+    def __init__(self, widget: Gtk.Widget) -> None:
+        self.widget = widget
+        self.at: tuple[float, float] | None = None
+        gesture = Gtk.GestureClick()
+        gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        gesture.connect("pressed", self._pressed)
+        widget.add_controller(gesture)
+
+    def _pressed(self, _gesture, _n: int, x: float, y: float) -> None:
+        self.at = (x, y)
+
+    def dragged(self) -> bool:
+        """Once per press; an activation with no press (a key) is not a drag."""
+        at, self.at = self.at, None
+        if at is None:
+            return False
+        native = self.widget.get_native()
+        found, point = self.widget.compute_point(native, Graphene.Point().init(*at))
+        if not found:
+            raise RuntimeError(f"{self.widget} is not inside its own native")
+        offset_x, offset_y = native.get_surface_transform()
+        pointer = self.widget.get_display().get_default_seat().get_pointer()
+        inside, x, y, _mask = native.get_surface().get_device_position(pointer)
+        if not inside:
+            return True
+        threshold = self.widget.get_settings().props.gtk_dnd_drag_threshold
+        return (abs(x - (point.x + offset_x)) > threshold
+                or abs(y - (point.y + offset_y)) > threshold)
 
 
 def check(text: str, toggled: Callable[[bool], None],
@@ -108,12 +129,14 @@ def check(text: str, toggled: Callable[[bool], None],
     """The box and its handler, which a caller blocks when it sets the box from elsewhere."""
     made = label(text)
     widget = Gtk.CheckButton(child=made, **props)
+    press = _Press(widget)
 
     def on_toggled(box: Gtk.CheckButton) -> None:
-        if selected(made):
+        if press.dragged():
             with box.handler_block(handler):
                 box.set_active(not box.get_active())
             return
+        made.select_region(0, 0)
         toggled(box.get_active())
     handler = widget.connect("toggled", on_toggled)
     return widget, handler
