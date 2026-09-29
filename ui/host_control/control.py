@@ -167,14 +167,18 @@ class Control:
 
         self.window = window
         theme.apply(CSS)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.END)
+        # No spacing: between the band and the tab it would lift the line off the terminal's
+        # top. The labels above keep their own gap.
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0, valign=Gtk.Align.END)
 
         self.status = copyable.label(wrap=True, halign=Gtk.Align.CENTER)
+        self.status.set_margin_bottom(4)
         self.status.add_css_class("status")
         self.status.set_visible(False)
         box.append(self.status)
 
         self.driven_note = copyable.label(halign=Gtk.Align.CENTER)
+        self.driven_note.set_margin_bottom(4)
         self.driven_note.add_css_class("driven-note")
         self.driven_note.set_visible(False)
         box.append(self.driven_note)
