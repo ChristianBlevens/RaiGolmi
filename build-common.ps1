@@ -181,7 +181,10 @@ function Apply-Upgrade([string]$archive) {
     & $scp -F $config $archive 'raigolmi:/var/tmp/raigolmi-upgrade.ociarchive'
     if ($LASTEXITCODE -ne 0) { Fail "Copying the new image into the machine failed; scp's output is above." }
     Write-Host 'Switching the machine to it...'
+    # Once the machine runs an image from this path, `switch` finds the specification unchanged
+    # and stages nothing; `upgrade` then reads the same path again and stages what is new.
     & $ssh -F $config raigolmi ('sudo bootc switch --transport oci-archive /var/tmp/raigolmi-upgrade.ociarchive && ' +
+                                'sudo bootc upgrade && ' +
                                 'rm -f /var/tmp/raigolmi-upgrade.ociarchive ~/.config/systemd/user/raigolmid.service.d/patched.conf')
     if ($LASTEXITCODE -ne 0) { Fail "The machine refused the new image; bootc's output is above. Nothing on it changed." }
     # A staged image is written into the boot entries only by a clean shutdown, and a guest
