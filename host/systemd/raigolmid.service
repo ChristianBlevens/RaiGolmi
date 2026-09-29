@@ -5,7 +5,11 @@ Description=RaiGolmi control plane
 PartOf=sway-session.target
 
 [Service]
-Type=exec
+# Ready once reconciled (sd_notify), which is what raigolmi-drop-rollback waits on. A first
+# boot builds for minutes before that, so no start timeout.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=infinity
 # The definitions are the user's, made empty by the daemon and theirs to fill.
 Environment=RAIGOLMID_FACE_PATH=%h/raigolmi/faces
 Environment=RAIGOLMID_TOOLBELT_PATH=%h/raigolmi/toolbelts

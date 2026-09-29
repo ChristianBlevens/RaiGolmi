@@ -78,6 +78,9 @@ COPY host/systemd/profile-sway.sh          /usr/share/raigolmi/profile-sway.sh
 COPY host/systemd/raigolmi-follow-display.service \
      /usr/lib/systemd/user/raigolmi-follow-display.service
 COPY host/systemd/follow-display.sh        /usr/libexec/raigolmi/follow-display
+COPY host/systemd/raigolmi-drop-rollback.service \
+     /usr/lib/systemd/user/raigolmi-drop-rollback.service
+COPY host/systemd/drop-rollback.sh         /usr/libexec/raigolmi/drop-rollback
 #  The machine's timezone is Windows': the launcher hands it in as a credential.
 COPY host/systemd/raigolmi-timezone.service /usr/lib/systemd/system/raigolmi-timezone.service
 COPY host/systemd/set-timezone             /usr/libexec/raigolmi/set-timezone
@@ -95,7 +98,10 @@ RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh &&
           /usr/lib/systemd/user/sway-session.target.wants/raigolmid.service && \
     ln -s ../raigolmi-follow-display.service \
           /usr/lib/systemd/user/sway-session.target.wants/raigolmi-follow-display.service && \
-    chmod 0755 /usr/libexec/raigolmi/set-timezone /usr/libexec/raigolmi/follow-display && \
+    ln -s ../raigolmi-drop-rollback.service \
+          /usr/lib/systemd/user/sway-session.target.wants/raigolmi-drop-rollback.service && \
+    chmod 0755 /usr/libexec/raigolmi/set-timezone /usr/libexec/raigolmi/follow-display \
+          /usr/libexec/raigolmi/drop-rollback && \
     systemctl enable docker.service sshd.service raigolmi-timezone.service \
         raigolmi-firewall.service raigolmi-trim.service && \
     systemctl mask bootc-fetch-apply-updates.timer

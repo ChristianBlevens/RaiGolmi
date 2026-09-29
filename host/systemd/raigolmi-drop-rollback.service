@@ -1,0 +1,14 @@
+# A rollback is kept until the image booted after an upgrade proves itself, and that is its
+# raigolmid answering: raigolmid.service is ready only once it has reconciled
+# (host/systemd/drop-rollback.sh).
+[Unit]
+Description=Drop the previous OS image once this one's raigolmid has answered
+Requires=raigolmid.service
+After=raigolmid.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sudo -n /usr/libexec/raigolmi/drop-rollback
+
+[Install]
+WantedBy=sway-session.target

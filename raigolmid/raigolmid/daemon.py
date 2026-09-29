@@ -14,6 +14,7 @@ import fcntl
 import json
 import logging
 import os
+import socket
 import signal
 import threading
 import time
@@ -98,6 +99,18 @@ class Lock:
             self._fh = None
 
 
+def _notify_ready() -> None:
+    """systemd's readiness message (sd_notify(3)) to the unit that started this process; one
+    started outside a unit has no NOTIFY_SOCKET and nobody to tell."""
+    path = os.environ.get("NOTIFY_SOCKET")
+    if not path:
+        return
+    address = "\0" + path[1:] if path.startswith("@") else path
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        notify.connect(address)
+        notify.sendall(b"READY=1")
+
+
 class Daemon:
     def __init__(self, runtime: ContainerRuntime, paths: Paths,
                  search: SearchPaths) -> None:
@@ -176,6 +189,7 @@ class Daemon:
         self.questions.offer_to_judge()
         self.coordinator.announce()
         self._reconciled.set()
+        _notify_ready()
         self._bring_up_host_surfaces()
 
         for target, name in ((lambda: self.manager.run(self._stop), "manager"),
