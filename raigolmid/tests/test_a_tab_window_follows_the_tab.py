@@ -356,10 +356,56 @@ def test_a_tab_has_one_window_and_a_second_is_closed(monkeypatch):
     class Client:
         def call(self, method):
             return {"agents": [{"tab": "tab-4", "scope": {"body": "requests"}},
-                               {"tab": "tab-5", "scope": "machine"}]}
+                               {"tab": "tab-5", "scope": "machine"}],
+                    "session": {"body": "requests"}}
     terminal.sync_windows(Client())
     assert killed == [("kill-window", "-t", "@5")]
     assert opened == ["tab-5"]
+
+
+class _Windows:
+    """tmux's windows in index order: `list-windows` read from them, `swap-window` exchanging
+    two in place, `select-window` moving the current one. Any other command is refused."""
+
+    def __init__(self, monkeypatch, names: list[str], current: str) -> None:
+        self.windows = [(f"@{i}", name) for i, name in enumerate(names)]
+        self.current = next(i for i, (_, n) in enumerate(self.windows) if n == current)
+        self.selected: list[str] = []
+        monkeypatch.setattr(terminal, "session_exists", lambda: True)
+        monkeypatch.setattr(terminal, "_tmux", self)
+
+    def __call__(self, *args, **_kwargs):
+        ids = [i for i, _ in self.windows]
+        out = ""
+        if args[0] == "list-windows":
+            out = "".join(f"{i}\t{n}\t{int(k == self.current)}\n"
+                          for k, (i, n) in enumerate(self.windows))
+        elif args[0] == "swap-window" and args[1] == "-s" and args[3] == "-t":
+            a, b = ids.index(args[2]), ids.index(args[4])
+            self.windows[a], self.windows[b] = self.windows[b], self.windows[a]
+        elif args[:2] == ("select-window", "-t"):
+            self.current = ids.index(args[2])
+            self.selected.append(args[2])
+        else:
+            raise AssertionError(f"tmux {args} is not what arranging the windows asks")
+        return terminal.subprocess.CompletedProcess(args, 0, out, "")
+
+    def names(self) -> list[str]:
+        return [n for _, n in self.windows]
+
+
+def test_the_tabs_are_in_order_manager_machine_selected_body_then_the_rest(monkeypatch):
+    tmux = _Windows(monkeypatch, ["raigolmi", "tab-12 notes", "tab-3 api", "tab-11 machine",
+                                  "manager ⚙", "tab-7 web"], current="tab-3 api")
+    terminal.arrange_windows({
+        "agents": [{"tab": "manager", "scope": "manager"}, {"tab": "tab-11", "scope": "machine"},
+                   {"tab": "tab-3", "scope": {"body": "api"}},
+                   {"tab": "tab-7", "scope": {"body": "web"}},
+                   {"tab": "tab-12", "scope": {"body": "notes"}}],
+        "session": {"body": "notes"}})
+    assert tmux.names() == ["raigolmi", "manager ⚙", "tab-11 machine", "tab-12 notes",
+                            "tab-3 api", "tab-7 web"]
+    assert tmux.names()[tmux.current] == "tab-3 api", "the window in view stays in view"
 
 
 class _Restarting(_Daemon):

@@ -828,6 +828,45 @@ def sync_windows(client) -> None:
         same = sorted((w for w in windows if w.tab == tab), key=lambda w: not w.active)
         for extra in same[1:]:
             _tmux("kill-window", "-t", extra.id, check=False)
-    for agent in client.call("status")["agents"]:
+    status = client.call("status")
+    for agent in status["agents"]:
         if agent["tab"] not in present:
             open_window(agent["tab"], agent["scope"], agent_command(agent["tab"]))
+    arrange_windows(status)
+
+
+def _rank(window: Window, scopes: dict[str, Any], body: str | None) -> tuple:
+    """The tab bar's order (the owner, 2026-09-29): the base window, then the manager, the
+    machine tab, the selected body's tab, and the other bodies' tabs as they were opened.
+    A window that is no tab goes last."""
+    if window.name == BASE or window.tab == NO_AGENT:
+        return (0,)
+    scope = scopes.get(window.tab)
+    if scope == "manager":
+        return (1,)
+    if scope == "machine":
+        return (2,)
+    if isinstance(scope, dict):
+        number = window.tab.removeprefix("tab-")
+        return (3 if scope["body"] == body else 4, int(number) if number.isdigit() else 0)
+    return (5,)
+
+
+def arrange_windows(status: dict) -> None:
+    """The windows put in `_rank`'s order by swapping them among the indices they hold. A swap
+    without `-d` fires no hook and leaves the current index where it was, with another window
+    in it (tmux 3.7c; with `-d` it selects the destination), so the window in view is selected
+    again once, if a swap moved it."""
+    windows = list_windows()
+    scopes = {a["tab"]: a["scope"] for a in status["agents"]}
+    body = status["session"]["body"]
+    placed = [w.id for w in windows]
+    wanted = [w.id for w in sorted(windows, key=lambda w: _rank(w, scopes, body))]
+    current = next((i for i, w in enumerate(windows) if w.active), None)
+    for i, window_id in enumerate(wanted):
+        if placed[i] != window_id:
+            j = placed.index(window_id)
+            _tmux("swap-window", "-s", window_id, "-t", placed[i])
+            placed[i], placed[j] = placed[j], placed[i]
+    if current is not None and placed[current] != windows[current].id:
+        _tmux("select-window", "-t", windows[current].id)
