@@ -508,3 +508,27 @@ def test_a_base_window_running_a_command_is_left_to_the_user(monkeypatch):
     base = _BaseWindow(monkeypatch, running="vim")
     terminal.offer_claude_login("100.5")
     assert base.respawned == [] and base.options == {}
+
+
+def test_the_tab_menu_lists_every_tab_in_the_bars_order_and_selects_it(monkeypatch):
+    """The bar is cut at the terminal's right edge; the `≡` menu reaches every tab."""
+    rows = ["@0\traigolmi\t0\t\t", "@4\tmanager ⚙\t0\t\t", "@2\ttab-11 machine\t1\t\t",
+            "@7\ttab-10 letthemrise\t0\t1\t1"]
+
+    def tmux(*args, **_kwargs):
+        if args[0] == "list-windows":
+            out = "\n".join(rows) + "\n"
+        elif args[:2] == ("display-message", "-p"):
+            out = "30\n"
+        else:
+            raise AssertionError(f"tmux {args} is not what the tab menu asks")
+        return terminal.subprocess.CompletedProcess(args, 0, out, "")
+    monkeypatch.setattr(terminal, "_tmux", tmux)
+    command = terminal.tab_menu("/dev/pts/3")
+    assert command[:7] == ["tmux", "display-menu", "-M", "-c", "/dev/pts/3", "-T", " Tabs "]
+    items = command[command.index("--") + 1:]
+    assert [tuple(items[i:i + 3]) for i in range(0, len(items), 3)] == [
+        ("  raigolmi", "1", "select-window -t @0"),
+        ("  manager ⚙", "2", "select-window -t @4"),
+        ("▸ tab-11 machine", "3", "select-window -t @2"),
+        ("  ● ◇ tab-10 letthemrise", "4", "select-window -t @7")]

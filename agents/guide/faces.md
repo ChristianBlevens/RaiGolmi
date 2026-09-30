@@ -123,11 +123,11 @@ screen blank; after that a switch is under a second.
 ## The host's edges and keys
 
 Three edges are the host's, each a 120×24 px tab that opens on hover: the **left** edge's
-middle (the drawer: faces, bodies, the catalog), the **bottom** centre (the AI terminal, which
+middle (the selector: the active face and body, the catalog), the **bottom** centre (the AI terminal, which
 slides up over the lower part of the screen), and the **top** centre (the history menu). A face
 is not told where they are, so put nothing the user needs under those three strips.
 
-The host keeps a bare **Super** tap (the drawer) and **Super+`** (the AI terminal); every other
+The host keeps a bare **Super** tap (the selector) and **Super+`** (the AI terminal); every other
 `Super+<key>` is the face's. Do not bind those two.
 
 ## Copy and paste
@@ -161,7 +161,7 @@ An app that takes the mouse itself (an editor's `mouse=a`) takes this away from 
   - `rai ask [--tab <tab>] <words>` — the user's words as an agent tab's next message, headed
     *From the user's face*: the tab named, else the one they view, else the machine tab.
     Follow it with `rai ai --show` so they see the answer.
-  - `rai select face|body <id>`, `rai deselect face|body` — the user's selection, as the drawer.
+  - `rai select face|body <id>`, `rai deselect face|body` — the user's selection, as the selector makes it.
   - `rai exec <sandbox> <cmd…>` — one command in a sandbox, for a face that shows its result.
   A face tried off the user's screen is refused all three.
 - **The AI terminal**: `python3 -m rai ai --show` brings it out (for a button or a key in the
@@ -184,4 +184,4 @@ Any tab: `show_file(path, line)` opens a `/work` file in the user's editor when 
 the one their face shows; `show_url(url)` opens it in the face's `browser`; `screenshot()` is
 what they see; `face_input` drives it, waiting until they have left the keyboard and pointer
 alone for 2.5 s, and refused outright when they have turned on "don't drive my current face" in
-the drawer.
+the selector.

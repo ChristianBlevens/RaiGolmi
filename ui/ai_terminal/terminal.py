@@ -52,14 +52,19 @@ PERMISSION_KEY = "a"
 # it for that cell; the name's range ending on its own trailing space covered the `×`.
 CLOSE_RANGE = "x"
 CLOSED_SECONDS = 0.25
+# The `≡` at the bar's left, a user range answered by the status click: every tab as a menu,
+# since the bar is cut at the terminal's right edge and a tab past it cannot be clicked.
+MENU_RANGE = "m"
 _CLOSE = ("#{?#{||:#{==:#{window_name},raigolmi},#{m:*⚙,#{window_name}}},,"
           "#[range=user|%s#{s/ .*//:window_name}%%s]×#[norange] }" % CLOSE_RANGE)
 _TAB = ("#[range=window|#{window_index}%s] #{?@marked,● ,}#{?@managed,◇ ,}#W#[norange] "
         + _CLOSE + "#[default fg=$border]│#[default]")
 STATUS_CLICK = (
-    f"if-shell -F '#{{m:{CLOSE_RANGE}*,#{{mouse_status_range}}}}' "
+    f"if-shell -F '#{{==:#{{mouse_status_range}},{MENU_RANGE}}}' "
+    "{ run-shell -b \"rai ai menu '#{client_name}' 2>&1 | systemd-cat -t rai-ai\" } "
+    f"{{ if-shell -F '#{{m:{CLOSE_RANGE}*,#{{mouse_status_range}}}}' "
     f"{{ run-shell -b \"rai ai kill '#{{s/^{CLOSE_RANGE}//:mouse_status_range}}' "
-    "2>&1 | systemd-cat -t rai-ai\" } { select-window -t = }")
+    "2>&1 | systemd-cat -t rai-ai\" } { select-window -t = } }")
 _CURRENT = " bold fg=$bg bg=$accent"
 
 
@@ -69,7 +74,7 @@ def style(look: theme.Look) -> dict[str, str]:
         return Template(text).substitute(look.palette)
     return {
         "status-style": paint("bg=$surface,fg=$muted"),
-        "status-left": paint("#[bold,fg=$accent] RaiGolmi "),
+        "status-left": paint("#[range=user|%s]#[bold,fg=$accent] ≡ #[norange]" % MENU_RANGE),
         "status-format[0]": paint("#[align=left]#{T:status-left}#{W:%s,%s}" % (
             _TAB % ("", ""), _TAB % ((_CURRENT,) * 2))),
         "message-style": paint("bg=$accent_bg,fg=$text"),
@@ -586,6 +591,29 @@ def _permission_menu(item: dict, tab: str) -> list[str] | None:
             "-T", title, "-x", "C", "-y", "C", "--", *items]
 
 
+def tab_menu(client_name: str) -> list[str]:
+    """The `display-menu` command listing every window in the bar's order, marked as the bar
+    marks them, the current one `▸`; choosing one selects it. Opened by a click on the `≡`,
+    from `run-shell`, so it carries no mouse event of its own: `-M` gives it the mouse."""
+    lines = _tmux("list-windows", "-t", SESSION, "-F",
+                  "#{window_id}\t#{window_name}\t#{window_active}\t#{@marked}\t#{@managed}"
+                  ).stdout.splitlines()
+    items: list[str] = []
+    for n, line in enumerate(lines, start=1):
+        window_id, name, active, marked, managed = line.split("\t")
+        label = (("▸ " if active == "1" else "  ") + ("● " if marked else "")
+                 + ("◇ " if managed else "") + name)
+        items += [label.replace("#", "##"), str(n) if n < 10 else "",
+                  f"select-window -t {window_id}"]
+    height = int(_tmux("display-message", "-p", "-c", client_name,
+                       "#{client_height}").stdout.strip())
+    if len(lines) + 2 > height:
+        raise TerminalError(f"the terminal is {height} lines high, too few for a menu of "
+                            f"{len(lines)} tabs")
+    return ["tmux", "display-menu", "-M", "-c", client_name, "-T", " Tabs ",
+            "-x", "0", "-y", "S", "--", *items]
+
+
 def _container_running(container: str) -> bool:
     proc = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", container],
                           capture_output=True, text=True)
@@ -611,7 +639,7 @@ def main(args) -> int:
             show_agent(client)
             return 0
 
-        if action in ("kill", "restart", "follow", "viewing") and not args.tab:
+        if action in ("kill", "restart", "follow", "viewing", "menu") and not args.tab:
             print(f"rai ai {action} needs a tab", file=sys.stderr)
             return 2
 
@@ -649,6 +677,19 @@ def main(args) -> int:
 
         if action == "permission":
             return _permission(client, args)
+
+        if action == "menu":
+            # The client the `≡` was clicked on, from the status click (`STATUS_CLICK`). Why
+            # a menu is not drawn is said on that client's status line, where it was asked.
+            try:
+                proc = subprocess.run(tab_menu(args.tab), capture_output=True, text=True)
+                if proc.returncode != 0:
+                    raise TerminalError(proc.stderr.strip())
+            except TerminalError as exc:
+                _tmux("display-message", "-c", args.tab,
+                      f"the tab menu could not be drawn: {exc}".replace("#", "##"))
+                raise
+            return 0
 
         if action == "viewing":
             # The current window, by name, from the window-change hook (`ensure_session`).

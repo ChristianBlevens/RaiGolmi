@@ -989,7 +989,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ai", help="the AI terminal")
     p.add_argument("action", nargs="?", default="attach",
                    choices=["attach", "list", "kill", "restart", "ready", "follow",
-                            "viewing", "permission"])
+                            "viewing", "permission", "menu"])
     p.add_argument("tab", nargs="?")
     p.add_argument("--toggle", action="store_true",
                    help="show the AI terminal over the face, or hide it (the reserved key)")
