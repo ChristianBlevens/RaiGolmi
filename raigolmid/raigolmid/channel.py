@@ -15,6 +15,7 @@ only on positive evidence: the turn it starts, whose prompt hook reports the pus
 push. One not heard within `REPUSH_SECONDS` is pushed again, same seq; after
 `PUSHES_BEFORE_DEAF` unheard pushes it is said as `channel.unheard`, and nothing more goes
 into that channel until the tab's session comes up again, which puts it back at the front.
+Nothing new is pushed while the account's usage limit holds (`account.limited`, `limits.py`).
 
 Its callers read it synchronously — a turn ending asks whether a message is on its way before
 the tab is closed as done — so every read first catches up on the events already emitted, and
@@ -163,6 +164,7 @@ class Channels:
             elif up:
                 self._tabs[tab_id] = Tab(session_up=True)
         self.messages = Messages(session, events, session.paths.messages)
+        self._hold_until = 0.0
 
     # --- routing ----------------------------------------------------------------------
     def run(self, stop: threading.Event) -> None:
@@ -181,6 +183,11 @@ class Channels:
                 self.on_event(event)
 
     def on_event(self, event: Event) -> None:
+        if event.type in ("account.limited", "account.resumed"):
+            # A push while the account's usage limit holds would only fail (`limits.py`).
+            with self._lock:
+                self._hold_until = event.data.get("hold_until") or 0.0
+            return
         if event.tab is None:
             return
         deliver = event.data.get("deliver")
@@ -307,7 +314,7 @@ class Channels:
                 self.events.emit("channel.repushed", tab=tab_id, seq=pushed.seq,
                                  cause=pushed.message.cause, pushes=pushed.pushes)
                 return self._item(pushed)
-            if not idle or not tab.session_up or not tab.queue:
+            if not idle or not tab.session_up or not tab.queue or time.time() < self._hold_until:
                 return None
             if tab.queue[0].cause == FAILURE and tab.took_failure and not tab.open_questions:
                 if not tab.fresh_asked:

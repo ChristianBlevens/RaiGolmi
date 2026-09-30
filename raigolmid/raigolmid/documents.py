@@ -28,6 +28,8 @@ from .events import Event
 LAYER_DOC = "LAYER.md"
 SESSION_START = "SESSION-START.md"
 THOUGHTS = "thoughts.md"
+# The thought doc of the conversation before a fresh restart that starts its own.
+PREVIOUS_THOUGHTS = "previous-thoughts.md"
 INCIDENTS = "incidents"
 FIXED = "fixed"
 PATTERNS = "patterns.md"

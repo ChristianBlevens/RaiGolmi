@@ -22,6 +22,9 @@ class Activity:
     # short container id. A running container that is not this one has a session still
     # coming up, which does not hear its channel yet (`channel.py`).
     session: str = ""
+    # The API error that ended its last turn (Claude Code's `StopFailure` `error`), or "" when
+    # the last report was not one; what the daemon resumes it from (`limits.py`).
+    failed: str = ""
 
 
 def read(home: Path) -> Activity:
@@ -29,16 +32,18 @@ def read(home: Path) -> Activity:
         raw = json.loads((home / FILE).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return Activity()
-    return Activity(busy=raw["busy"], session=raw.get("session", ""))
+    return Activity(busy=raw["busy"], session=raw.get("session", ""),
+                    failed=raw.get("failed", ""))
 
 
-def record(home: Path, *, busy: bool, session: str | None = None) -> None:
+def record(home: Path, *, busy: bool, session: str | None = None, failed: str = "") -> None:
     """By the agent's hook, in its container, before the daemon is told. `session` is said
-    by the SessionStart hook alone; every other report keeps the one before it."""
+    by the SessionStart hook alone; every other report keeps the one before it. `failed` is
+    said by the StopFailure hook alone, and every other report clears it."""
     path = home / FILE
     path.parent.mkdir(exist_ok=True)
     if session is None:
         session = read(home).session
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"busy": busy, "session": session}))
+    tmp.write_text(json.dumps({"busy": busy, "session": session, "failed": failed}))
     os.replace(tmp, path)

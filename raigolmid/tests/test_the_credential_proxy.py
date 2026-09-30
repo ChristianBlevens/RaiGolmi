@@ -25,11 +25,22 @@ class Upstream(BaseHTTPRequestHandler):
     """Anthropic's API as the proxy meets it: what it was sent, and a streamed answer."""
     protocol_version = "HTTP/1.1"
     seen: list[dict] = []
+    # The headers of the usage limit's 429, when the account is at it.
+    limited: dict[str, str] | None = None
 
     def do_POST(self) -> None:
         body = self.rfile.read(int(self.headers["Content-Length"]))
         Upstream.seen.append({"path": self.path, "headers": dict(self.headers.items()),
                               "body": body})
+        if Upstream.limited is not None:
+            said = b'{"type":"error","error":{"type":"rate_limit_error"}}'
+            self.send_response(429)
+            for name, value in Upstream.limited.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(said)))
+            self.end_headers()
+            self.wfile.write(said)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Transfer-Encoding", "chunked")
@@ -44,7 +55,7 @@ class Upstream(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def machine(tmp_path):
-    Upstream.seen = []
+    Upstream.seen, Upstream.limited = [], None
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
     credentials = tmp_path / "agent-credentials"
@@ -95,6 +106,17 @@ def test_the_credential_is_swapped_in_and_the_rest_passes_verbatim(machine):
     assert sent["headers"]["Authorization"] == "Bearer sk-ant-oat01-the-real-one"
     assert sent["headers"]["anthropic-beta"] == "oauth-2025-04-20,x"
     assert sent["path"] == "/v1/messages?beta=true" and sent["body"] == b'{"model":"x"}'
+
+
+@pytest.mark.parametrize("said, resets_at", [("1790000000", 1790000000.0), (None, None)])
+def test_the_usage_limits_reset_is_read_from_its_429(machine, said, resets_at):
+    broker, proxy, events, _ = machine
+    Upstream.limited = {} if said is None else {"anthropic-ratelimit-unified-reset": said}
+    placeholder = broker.environment("tab-1")["CLAUDE_CODE_OAUTH_TOKEN"]
+    status, _ = _post(proxy, {"Authorization": f"Bearer {placeholder}"})
+    assert status == 429, "the agent is answered as the API answered"
+    [limited] = [e for e in events.tail(50) if e.type == "credproxy.limited"]
+    assert (limited.data["owner"], limited.data["resets_at"]) == ("tab-1", resets_at)
 
 
 def test_an_api_key_goes_as_x_api_key(machine, tmp_path):

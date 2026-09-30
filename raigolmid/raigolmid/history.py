@@ -106,6 +106,12 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "clipboard.copy_failed": lambda e: (f"a copy did not reach the {e.data['to']} clipboard: "
                                         f"{e.data['reason']}"),
     "documents.maintenance": lambda e: e.data["message"],
+    "account.limited": lambda e: (
+        "the account's usage limit was reached; "
+        + ("its reset was not said, so a tab is tried again every few minutes"
+           if e.data["hold_until"] is None else "the tabs it cut off continue at "
+           + time.strftime("%H:%M", time.localtime(e.data["hold_until"])))),
+    "account.resumed": lambda e: "the account's usage limit is over",
     "documents.maintenance_failed": lambda e: (f"document maintenance could not run: "
                                                f"{e.data['error']}"),
 }
@@ -120,6 +126,7 @@ NOTICED: dict[str, Callable[[Event], str]] = {
     "manager.unfixable": lambda e: e.data["message"],
     "channel.unheard": lambda e: e.data["message"],
     "manager.open_failed": lambda e: f"The manager tab could not open: {e.data['error']}",
+    "agent.turn_failed": lambda e: e.data["message"],
     "judge.failed": lambda e: (
         f"The preferences judge failed on {e.data['id']}"
         + (", so it is put to you" if e.data["stage"] == "judge" else
@@ -132,7 +139,8 @@ NOTICED: dict[str, Callable[[Event], str]] = {
 OVER = {"manager.opened": frozenset({"manager.open_failed"}),
         "hostkeys.applied": frozenset({"hostkeys.failed"}),
         "keyboard.applied": frozenset({"keyboard.failed"}),
-        "look.applied": frozenset({"look.failed"})}
+        "look.applied": frozenset({"look.failed"}),
+        "credential.stored": frozenset({"agent.turn_failed"})}
 
 # The user's own actions, when the event names them.
 BY_THE_USER = frozenset({"tab.opened", "tab.closed"})

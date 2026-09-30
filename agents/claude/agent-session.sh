@@ -39,17 +39,20 @@ mkdir -p "$HOME/.claude"
 # hook reads its input, which says whether the prompt is a channel push or the user's. An
 # interrupt fires no Stop, so an interrupted agent stays busy — kept rather than closed with
 # its work. A turn ending with background commands running is decided by `agent-activity stop` (raigolmid/agent_stop.py).
+# A turn an API error ended fires StopFailure instead of Stop, and is idle with its error.
 report='RAIGOLMID_SOCKET=/run/raigolmid/raigolmid.sock rai agent-activity'
 # The model is the user's settings' (raigolmid/settings.py), set on every start so a change there
 # reaches every tab.
 : "${RAIGOLMI_MODEL:?raigolmid hands every tab its model}"
 jq --arg session "$report session" --arg busy "$report busy" --arg stop "$report stop" \
+   --arg failed "$report failed" \
    --arg model "$RAIGOLMI_MODEL" \
    '.skipDangerousModePermissionPrompt = true
     | .model = $model
     | .hooks.SessionStart = [{hooks: [{type: "command", command: $session}]}]
     | .hooks.UserPromptSubmit = [{hooks: [{type: "command", command: $busy}]}]
-    | .hooks.Stop = [{hooks: [{type: "command", command: $stop}]}]' \
+    | .hooks.Stop = [{hooks: [{type: "command", command: $stop}]}]
+    | .hooks.StopFailure = [{hooks: [{type: "command", command: $failed}]}]' \
    "$settings" > "$settings.new"
 mv "$settings.new" "$settings"
 

@@ -698,7 +698,7 @@ def cmd_agent_activity(args) -> int:
     channel push's `seq` when the prompt is one, read from the `UserPromptSubmit` hook's
     input on stdin — and a turn ending is decided by `agent_stop` from the `Stop` hook's
     input on stdin — refused on stdout while the agent has background commands to answer
-    for, idle or busy once it has. The tab is the socket's: only an agent container's
+    for, idle or busy once it has — or by an API error, from the `StopFailure` hook's. The tab is the socket's: only an agent container's
     answers these."""
     from raigolmid import activity
     if args.state == "busy":
@@ -715,6 +715,14 @@ def cmd_agent_activity(args) -> int:
         import socket
         activity.record(Path.home(), busy=False, session=socket.gethostname())
         _client().call("agent_session_started")
+        return 0
+
+    if args.state == "failed":
+        # StopFailure fires instead of Stop when an API error ended the turn, and ignores
+        # what it prints; the turn is over, and the daemon resumes it (`limits.py`).
+        error = json.load(sys.stdin)["error"]
+        activity.record(Path.home(), busy=False, failed=error)
+        _client().call("agent_activity", busy=False, error=error)
         return 0
 
     from raigolmid.agent_stop import Memory, decide
@@ -894,8 +902,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_registry_token)
 
     p = sub.add_parser("agent-activity",
-                       help="an agent's hooks report its session up, busy or idle")
-    p.add_argument("state", choices=["session", "busy", "stop"])
+                       help="an agent's hooks report its session up, busy, idle or failed")
+    p.add_argument("state", choices=["session", "busy", "stop", "failed"])
     p.set_defaults(fn=cmd_agent_activity)
 
     p = sub.add_parser("mcp", help="stdio MCP server inside an agent container")

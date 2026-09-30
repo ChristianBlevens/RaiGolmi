@@ -146,12 +146,12 @@ def with_marks(status: dict[str, Any], viewing: Viewing) -> dict[str, Any]:
     """A tab is marked while it needs the user — an idle one until they have viewed it, a
     question or permission until it is settled — and the terminal's collapsed tab is lit
     while any is marked, the manager only while it asks: its idle ends each job and is
-    shown in the history. A tab the machine tab manages needs the user only for a permission.
-    Asked of `with_tab_states`' answer."""
+    shown in the history. A tab the machine tab manages never needs the user
+    (`Intent.hands_off`). Asked of `with_tab_states`' answer."""
     for agent in status["agents"]:
         state = agent["state"]
-        agent["marked"] = state == "permission" or not agent["managed"] and (
-            state == "asking" or state == "idle" and viewing.unseen(agent["tab"]))
+        agent["marked"] = not agent["managed"] and (
+            state in ("asking", "permission") or state == "idle" and viewing.unseen(agent["tab"]))
     status["terminal"] = {"viewing": viewing.viewed(),
                           "lit": any(a["marked"] and (a["tab"] != MANAGER or
                                                       a["state"] in ("asking", "permission"))

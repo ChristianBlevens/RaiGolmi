@@ -167,7 +167,16 @@ def test_a_directive_is_the_managed_tabs_next_message(h):
     assert directed["content"].startswith("From the machine tab")
 
 
-def test_a_fresh_restart_archives_the_conversation_and_continues_from_the_thought_doc(h):
+def _hear(m, tab: str) -> str:
+    """The tab's next push taken and its turn run, as its session would; what it said."""
+    item = m.channels.take(tab)
+    m.tab(tab)["agent_activity"](busy=True, channel_seq=item["seq"])
+    m.tab(tab)["agent_activity"](busy=False)
+    m.pump()
+    return item["content"]
+
+
+def test_a_fresh_restart_first_has_the_tab_ready_its_documents_then_starts_it_on_them(h):
     m = Machine(h)
     m.tab(MACHINE)["manage"](tab=BODY)
     home = h.session.agents.home(BODY)
@@ -183,13 +192,62 @@ def test_a_fresh_restart_archives_the_conversation_and_continues_from_the_though
     m.tab(MACHINE)["answer_question"](id=id, answer="9090")
     m.pump()
     m.channels._tabs[BODY].queue.clear()        # heard, as the tab's turn would
+    m.channels._tabs[MACHINE].queue.clear()
+
+    assert m.tab(MACHINE)["restart_fresh"](tab=BODY)["status"] == "wrapping_up"
+    # Asked again before that turn has run, it is still on its way, and nothing restarts.
+    assert m.tab(MACHINE)["restart_fresh"](tab=BODY)["status"] == "wrapping_up"
+    assert "SESSION-START.md" in _hear(m, BODY)
+    assert not any(r for r in h.paths.agent_archive.glob("*.json"))
+    [told] = m.queued(MACHINE)
+    assert "made its documents ready" in told["content"]
 
     restarted = m.tab(MACHINE)["restart_fresh"](tab=BODY, brief="the tests are next")
     assert restarted["resumed"] is False
+    assert h.session.intent.tabs[BODY].handover is None
     assert not h.session.agents.has_conversation(BODY), \
         "a crash before the new session's first turn must not --continue the old one"
     [archived] = [r for r in h.paths.agent_archive.glob("*.json")
                   if json.loads(r.read_text()).get("fresh_restart")]
     assert (archived.with_suffix("") / "s1.jsonl").is_file()
     [brief] = m.queued(BODY)
-    assert "~/thoughts.md" in brief["content"] and "the tests are next" in brief["content"]
+    assert "/work/SESSION-START.md" in brief["content"] and "~/thoughts.md" in brief["content"]
+    assert "the tests are next" in brief["content"]
+
+
+def test_the_machine_tab_at_its_budget_while_managing_confirms_then_restarts_on_its_thoughts(h):
+    m = Machine(h)
+    settingsdoc.write(h.session.paths.settings, agents={"context_budget_tokens": 100000})
+    home = h.session.agents.home(MACHINE)
+    _usage(home, 105_000)
+    (home / "thoughts.md").write_text("tab-2 is porting the parser\n")
+
+    # Not managing, the user is there: theirs to close.
+    m.tab(MACHINE)["agent_activity"](busy=True)
+    m.tab(MACHINE)["agent_activity"](busy=False)
+    assert m.queued(MACHINE) == []
+    with pytest.raises(SessionError, match="nothing asked you"):
+        m.tab(MACHINE)["ready_to_restart"]()
+
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(MACHINE)["agent_activity"](busy=True)
+    m.tab(MACHINE)["agent_activity"](busy=False)
+    m.pump()
+    assert "`ready_to_restart`" in m.queued(MACHINE)[-1]["content"]
+
+    # A turn that heard the ask and did not say ready is asked again.
+    _hear(m, MACHINE)
+    assert "`ready_to_restart`" in m.queued(MACHINE)[-1]["content"]
+    item = m.channels.take(MACHINE)
+    m.tab(MACHINE)["agent_activity"](busy=True, channel_seq=item["seq"])
+    m.tab(MACHINE)["ready_to_restart"]()
+    m.tab(MACHINE)["agent_activity"](busy=False)
+    m.pump()
+
+    assert h.session.intent.tabs[MACHINE].handover is None
+    assert not (home / "thoughts.md").exists()
+    assert (home / "previous-thoughts.md").read_text() == "tab-2 is porting the parser\n"
+    [archived] = [r for r in h.paths.agent_archive.glob("*.json")
+                  if json.loads(r.read_text()).get("fresh_restart")]
+    assert (archived.with_suffix("") / "thoughts.md").is_file(), "archived with its conversation"
+    assert "~/previous-thoughts.md" in m.queued(MACHINE)[-1]["content"]

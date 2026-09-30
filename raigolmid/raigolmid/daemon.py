@@ -32,6 +32,7 @@ from .manager import Manager
 from .channel import Channels
 from .clipboard import ClipboardBridge
 from .coordinator import Coordinator
+from .limits import Limits
 from .credproxy import CredentialProxy
 from .permissions import Permissions
 from .judge import Judge
@@ -134,6 +135,7 @@ class Daemon:
                            self.epoch)
         self.channels = Channels(self.session, self.events)
         self.coordinator = Coordinator(self.session, self.events, self.questions)
+        self.limits = Limits(self.session, self.events)
         # The credential stays here; every agent container is given a placeholder.
         self.credproxy = CredentialProxy(
             self.session.agents.broker, self.events,
@@ -202,6 +204,7 @@ class Daemon:
                              (lambda: self.channels.run(self._stop), "channels"),
                              (lambda: self.channels.messages.run(self._stop), "messages"),
                              (lambda: self.coordinator.run(self._stop), "coordinator"),
+                             (lambda: self.limits.run(self._stop), "limits"),
                              (self.credproxy.serve, "credproxy"),
                              (lambda: self.permissions.run(self._stop), "permissions"),
                              (lambda: self.agent_sockets.run(self._stop), "agent-sockets"),

@@ -882,17 +882,31 @@ class Session:
         return tuple(sorted(p for p in candidates
                             if (p == definitions or definitions in p.parents) and git.is_repo(p)))
 
-    def restart_agent(self, tab_id: str, resume: bool = True) -> dict[str, Any]:
-        """A crashed tab's reopen, and the user's Restart."""
+    def restart_agent(self, tab_id: str, resume: bool = True,
+                      new_thoughts: bool = False) -> dict[str, Any]:
+        """A crashed tab's reopen, and the user's Restart; a fresh one ends its handover.
+        `new_thoughts`: the fresh conversation starts its own thought doc (`Agents.restart`)."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
                 raise SessionError(f"no tab {tab_id}")
             try:
-                container, resumed = self.agents.restart(self._agent_spec(tab), resume=resume)
+                container, resumed = self.agents.restart(self._agent_spec(tab), resume=resume,
+                                                         new_thoughts=new_thoughts)
+                if not resume:
+                    tab.handover = None
             finally:
                 self.store.save(self.intent)
             return {"tab": tab_id, "container": container, "resumed": resumed}
+
+    def hand_over(self, tab_id: str, state: str | None) -> None:
+        """Where a tab's handover to a fresh conversation stands (`TabIntent.handover`)."""
+        with self._lock:
+            tab = self.intent.tabs.get(tab_id)
+            if tab is None:
+                raise SessionError(f"no tab {tab_id}")
+            tab.handover = state
+            self.store.save(self.intent)
 
     # --- containers that exit on their own (`supervisor.py`) --------------------------
     def on_exit(self, unit: Unit, container_id: str) -> str:
@@ -1002,10 +1016,11 @@ class Session:
             return {"tab": tab_id}
 
     def agent_activity(self, tab_id: str, busy: bool, channel_seq: int | None = None,
-                       done: bool = False) -> dict[str, Any]:
+                       done: bool = False, error: str | None = None) -> dict[str, Any]:
         """The agent's hooks report a prompt taken and an answer finished. A prompt
         its channel pushed carries the push's `channel_seq`; `done` is a turn that ended with
-        nothing asked of the user and nothing on its way to it. No tab closes itself."""
+        nothing asked of the user and nothing on its way to it; `error` is the API error that
+        ended one (`limits.py`). No tab closes itself."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
@@ -1017,7 +1032,7 @@ class Session:
             if busy:
                 self.events.emit("agent.busy", tab=tab_id, channel_seq=channel_seq)
             else:
-                self.events.emit("agent.idle", tab=tab_id, done=done)
+                self.events.emit("agent.idle", tab=tab_id, done=done, error=error)
                 self._reprotect()
             return self.status()
 
@@ -1404,6 +1419,8 @@ class Session:
                 raise SessionError(f"{tab_id} is not a body tab; only body tabs are managed")
             changed = tab.managed != bool(on)
             tab.managed = bool(on)
+            if not on:
+                tab.handover = None     # a handover is the machine tab's, ended with its hold
             self.store.save(self.intent)
         if changed:
             self.events.emit("tab.managed", tab=tab_id, body=tab.body, on=bool(on))

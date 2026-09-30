@@ -262,6 +262,19 @@ class Broker:
                 Mount(source=str(self.authority.bundle), target=BUNDLE_TARGET, read_only=True))
 
 
+
+# The usage limit's reset, as the account's own 429 says it: unix epoch seconds.
+LIMIT_RESET = "anthropic-ratelimit-unified-reset"
+
+
+def _limit_reset(answer: http.client.HTTPResponse) -> dict[str, object]:
+    """When a 429's limit resets, or None with what the header said instead (`limits.py`)."""
+    said = answer.getheader(LIMIT_RESET)
+    try:
+        return {"resets_at": float(said), "said": said}
+    except (TypeError, ValueError):
+        return {"resets_at": None, "said": said}
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server: "_Server"
@@ -333,6 +346,9 @@ class _Handler(BaseHTTPRequestHandler):
                                   error=str(exc))
                 self._refuse(502, f"{host} could not be reached: {exc}", "api_error")
                 return
+            if answer.status == 429:
+                proxy.events.emit("credproxy.limited", owner=owner, path=self.path,
+                                  **_limit_reset(answer))
             try:
                 self._relay(answer)
             except OSError as exc:

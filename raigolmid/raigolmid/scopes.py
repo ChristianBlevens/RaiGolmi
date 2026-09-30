@@ -112,8 +112,17 @@ def _talking(session: Session, questions: Questions, channels: Channels,
     A prompt taken that carries no channel `seq` is one the user typed, and it answers
     whatever the tab asked. A turn ending with nothing asked, nothing on its way and no
     message to another tab open is done."""
+    def ask(message: str, choices: list[str] | None = None) -> str:
+        tab = session.intent.tabs.get(tab_id)
+        if tab is not None and tab.machine and session.intent.hands_off(tab_id):
+            raise SessionError("the user handed you tabs to manage and is away: nothing is put "
+                               "to them until they take the tabs back, so decide it yourself")
+        return questions.ask(tab_id, message, choices)
+
     def swap(toolbelt: str) -> dict:
-        if session.intent.focused_instance != session.intent.sandbox_of(tab_id):
+        # A tab the user handed over has their yes to everything it does.
+        if (session.intent.focused_instance != session.intent.sandbox_of(tab_id)
+                or session.intent.hands_off(tab_id)):
             return session.toolbelt_swap(tab_id, toolbelt)
         # The active sandbox is the one the user works in: refused now if it could not
         # be done at all, and otherwise done on their yes.
@@ -130,15 +139,17 @@ def _talking(session: Session, questions: Questions, channels: Channels,
                         "your next message."}
 
     def activity(busy: bool, channel_seq: int | None = None,
-                 prompt: str | None = None) -> dict:
+                 prompt: str | None = None, error: str | None = None) -> dict:
         # Only a prompt taken carries one; a stop that stays busy does not, and is not the user's.
         if busy and channel_seq is None and prompt is not None:
             questions.answered_in_terminal(tab_id, prompt)
-        done = not busy and channels.turn_done(tab_id, questions.tab_state(tab_id) is None)
-        return session.agent_activity(tab_id, busy, channel_seq, done)
+        # A turn an API error cut off is not done: it is resumed (`limits.py`).
+        done = not busy and error is None and channels.turn_done(
+            tab_id, questions.tab_state(tab_id) is None)
+        return session.agent_activity(tab_id, busy, channel_seq, done, error)
 
     return {
-        "ask": lambda message, choices=None: questions.ask(tab_id, message, choices),
+        "ask": ask,
         "sandbox_open": lambda toolbelt: session.sandbox_open(tab_id, toolbelt),
         "toolbelt_swap": swap,
         "channel_take": lambda: channels.take(tab_id),

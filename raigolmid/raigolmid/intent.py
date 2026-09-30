@@ -43,6 +43,10 @@ class TabIntent:
     awaiting_session: bool = False
     # A body tab the user handed the machine tab to coordinate.
     managed: bool = False
+    # Its handover to a fresh conversation (`coordinator.py`): None, or "asked" (the push
+    # asking it to make its documents ready is on its way), "heard" (that turn started),
+    # "ready" (the documents are ready for the next conversation).
+    handover: str | None = None
 
     @property
     def manager(self) -> bool:
@@ -117,6 +121,13 @@ class Intent:
 
     def machine_tab(self) -> TabIntent | None:
         return next((t for t in self.tabs.values() if t.machine), None)
+
+    def hands_off(self, tab_id: str) -> bool:
+        """Whether the user has handed this tab's work over, so nothing it does waits on them:
+        a tab the machine tab manages, or the machine tab while it manages any."""
+        tab = self.tabs.get(tab_id)
+        return tab is not None and (tab.managed or tab.machine and any(
+            t.managed for t in self.tabs.values()))
 
     def body_tab(self, body: str) -> TabIntent | None:
         return next((t for t in self.tabs.values() if t.body == body), None)

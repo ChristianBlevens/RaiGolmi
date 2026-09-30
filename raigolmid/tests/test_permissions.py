@@ -17,6 +17,7 @@ from raigolmid.permissions import Permissions
 from raigolmid import settings
 from raigolmid.questions import NO_ANSWER, QuestionError, Questions
 from raigolmid.scopes import build_tab_methods
+from raigolmid.session import SessionError
 
 from tests.harness import Harness
 
@@ -117,6 +118,21 @@ def test_a_tab_whose_sandbox_the_face_is_not_on_swaps_without_asking(world):
     webui = build_tab_methods(h.session, questions, channels, h.tab("webui"))
     assert webui["toolbelt_swap"](toolbelt="no-lsp")["status"] == "asked"
     assert h.session.intent.instances[other].toolbelt == "python-dev"
+
+
+def test_a_tab_handed_to_the_machine_tab_swaps_without_asking_and_it_asks_nothing(world):
+    """Handing tabs over is going hands off: nothing either does waits on the user."""
+    h, questions, channels, tab = world
+    h.session.manage(h.tab("myapi"), True)
+    tab["toolbelt_swap"](toolbelt="no-lsp")
+    assert questions.pending() == []
+    assert toolbelt(h) == "no-lsp"
+
+    machine = build_tab_methods(h.session, questions, channels, h.tab(None))
+    with pytest.raises(SessionError, match="decide it yourself"):
+        machine["ask"](message="which port?")
+    h.session.manage(h.tab("myapi"), False)
+    assert machine["ask"](message="which port?")
 
 
 def test_an_always_yes_swaps_the_next_time_without_asking_the_user(world):

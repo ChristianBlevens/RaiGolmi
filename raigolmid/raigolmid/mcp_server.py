@@ -268,13 +268,20 @@ def build_server(client: ApiClient):
     def answer_question(id: str, answer: str) -> dict[str, Any]:
         return call("answer_question", id=id, answer=answer)
 
-    @tool(server, description="Machine tab only: restart a tab you manage in a fresh "
-                             "conversation, told to continue from its thought doc (and "
-                             "`brief`, if given); its old conversation is archived. Have it "
-                             "bring its thought doc up to date first (`direct`), and restart "
-                             "it once it is idle with nothing asked.")
+    @tool(server, description="Machine tab only: hand a tab you manage over to a fresh "
+                             "conversation, in two calls. The first has it make its documents "
+                             "ready; once told that turn ended, read them (`managed_tab`), and "
+                             "the second restarts it on SESSION-START.md and its thought doc "
+                             "(and `brief`, if given), its old conversation archived. Only "
+                             "while it is idle with nothing asked.")
     def restart_fresh(tab: str, brief: str | None = None) -> dict[str, Any]:
         return call("restart_fresh", tab=tab, brief=brief)
+
+    @tool(server, description="Machine tab only: say your thought doc is ready for your next "
+                             "conversation, once the daemon has asked at your context budget. "
+                             "You are restarted fresh when this turn ends.")
+    def ready_to_restart() -> dict[str, Any]:
+        return call("ready_to_restart")
 
     @tool(server, description="Your hands on the face on the user's screen: `type` text, "
                              "press a `key` (`ctrl+s`, `Return`), `move` the pointer or "
