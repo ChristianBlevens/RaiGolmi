@@ -21,6 +21,12 @@ tabs, since nobody else is there to close it: at its own budget the daemon asks 
 thought doc ready, it says so with `ready_to_restart`, and when that turn ends it is restarted
 fresh, its thought doc passed on as `documents.PREVIOUS_THOUGHTS` for a new one of its own.
 
+**A managed tab stops where the user said** (`TabIntent.stop_when`, given as they hand it
+over, and in every message about it): at that goal or decision the machine tab `hold`s it on
+the situation, and the tab is resumed on Remote Control to put it to them on their phone
+(`Session.hold`). Nothing of the machine tab's reaches a held tab; the user's own words in it
+release it (`Session.release`), and the machine tab is told.
+
 Context use is the input the tab's latest main-conversation answer took — input, cache-read
 and cache-created tokens, as Claude Code's own status line counts it — read from its newest
 transcript. The daemon reads every tab's home; no tab can read another's.
@@ -32,7 +38,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import api, documents, limits, settings
+from . import api, claude_login, documents, limits, settings
 from .channel import Channels
 from .events import Event, EventLog
 from .questions import Questions
@@ -123,11 +129,31 @@ def _context_line(tokens: int | None, budget: int) -> str:
     return said
 
 
-def question_message(item: dict[str, Any], body: str | None) -> str:
+def stop_line(stop_when: str | None) -> str:
+    if stop_when is None:
+        return ""
+    return (f" The user stops it at: {stop_when!r}. When that is reached, `hold` it for them; "
+            "when you are unsure whether it is, go on, and have it note the doubt in its "
+            "thought doc and commit, so they can return to that point.")
+
+
+def question_message(item: dict[str, Any], body: str | None,
+                     stop_when: str | None = None) -> str:
     choices = f" Its choices: {', '.join(item['choices'])}." if item["choices"] else ""
     return (f"Tab {item['tab']} ({body}), which you manage, asked the user {item['id']}: "
             f"{item['message']!r}.{choices} Their preferences did not answer it, so it is "
-            f"yours: answer it with `answer_question`. Never put it to them.")
+            f"yours: answer it with `answer_question`. Never put it to them."
+            f"{stop_line(stop_when)}")
+
+
+def hold_message(stop_when: str | None, situation: str) -> str:
+    stop = f" at {stop_when!r}" if stop_when else ""
+    return (f"From the machine tab: you are held for the user{stop}. The situation, as the "
+            f"machine tab puts it:\n\n{situation}\n\nPut it to them now, in this "
+            "conversation — they reach it from their phone through Remote Control, or at the "
+            "screen: where the work stands, the choice or the next step that is theirs, the "
+            "options and what you recommend. Then end your turn; their answer is your next "
+            "message. Do nothing more of the work until it comes.")
 
 
 def restart_message(tab: str, brief: str | None) -> str:
@@ -210,6 +236,13 @@ class Coordinator:
             self._machine_idle(tab.tab_id, tab.handover, event.data.get("error"))
         elif not tab.managed:
             return
+        elif event.type == "tab.released":
+            self._to_machine(event.tab, "coordinator.released", (
+                f"The user answered tab {event.tab} ({tab.body}), which you held for them. It "
+                "goes on with their direction; it is yours again." + stop_line(tab.stop_when)),
+                why="released")
+        elif tab.held is not None:
+            return      # the user's until they answer in it
         elif event.type == "agent.idle":
             error = event.data.get("error")
             if error == limits.LIMIT or error in limits.TRANSIENT:
@@ -276,7 +309,8 @@ class Coordinator:
         if machine is not None:
             self._handed.add((machine.tab_id, id))
         self._to_machine(item["tab"], "coordinator.question",
-                         question_message(item, tab.body), why="question", question=id)
+                         question_message(item, tab.body, tab.stop_when), why="question",
+                         question=id)
 
     def _idle_message(self, tab_id: str, body: str | None, done: bool,
                       error: str | None = None) -> str:
@@ -291,7 +325,8 @@ class Coordinator:
         budget = settings.load(self.session.paths.settings).budget_tokens
         return (f"Tab {tab_id} ({body}), which you manage, {ended}. "
                 f"{_context_line(context_tokens(self.session.agents.home(tab_id)), budget)} "
-                "`managed_tab` shows its thought doc and latest turns.")
+                "`managed_tab` shows its thought doc and latest turns."
+                f"{stop_line(self.session.intent.tabs[tab_id].stop_when)}")
 
     def _to_machine(self, about: str, event: str, content: str, **meta: str) -> None:
         machine = self.session.intent.machine_tab()
@@ -327,7 +362,7 @@ def methods(session: "Session", questions: Questions, channels: Channels,
 
     return {name: only_machine(verb) for name, verb in (
         *((n, getattr(verbs, n)) for n in ("manage", "managed", "managed_tab", "direct",
-                                           "answer_question", "restart_fresh")),
+                                           "answer_question", "restart_fresh", "hold")),
         ("ready_to_restart", ready_to_restart))}
 
 
@@ -340,8 +375,9 @@ class Verbs:
         self.questions = questions
         self.channels = channels
 
-    def manage(self, tab: str, on: bool = True) -> dict[str, Any]:
-        return self.session.manage(tab, on)
+    def manage(self, tab: str, on: bool = True,
+               stop_when: str | None = None) -> dict[str, Any]:
+        return self.session.manage(tab, on, stop_when)
 
     def managed(self) -> list[dict[str, Any]]:
         """Each managed tab: its state, its questions waiting on the machine tab, and its
@@ -354,9 +390,12 @@ class Verbs:
             if not agent["managed"]:
                 continue
             tab = agent["tab"]
+            intent = self.session.intent.tabs[tab]
             out.append({
                 **agent,
                 "body": agent["scope"]["body"],
+                "stop_when": intent.stop_when,
+                "held": intent.held,
                 "context_tokens": context_tokens(self.session.agents.home(tab)),
                 "budget_tokens": budget,
                 "questions": [{"id": i["id"], "message": i["message"],
@@ -377,7 +416,7 @@ class Verbs:
 
     def direct(self, tab: str, content: str) -> dict[str, Any]:
         """One way: it is the tab's next message once its turn ends; nothing comes back."""
-        self._managed(tab)
+        self._unheld(tab)
         if not content.strip():
             raise SessionError("a directive needs words")
         self.events.emit("coordinator.directed", tab=tab, deliver={
@@ -400,7 +439,7 @@ class Verbs:
         tab in a new conversation that continues from its documents, its old one archived.
         Refused while it works, since that would cut its turn off, and while anything is
         asked of the user or the machine tab, since a restart withdraws it."""
-        agent = self._managed(tab)
+        agent = self._unheld(tab)
         if agent.busy:
             raise SessionError(f"{tab} is working; restart it once it is idle")
         if (waiting := self.questions.tab_state(tab)) is not None:
@@ -419,6 +458,33 @@ class Verbs:
         self.events.emit("coordinator.restarted", tab=tab, deliver={
             "content": restart_message(tab, brief), "meta": {"from": "machine"}})
         return restarted
+
+    def hold(self, tab: str, situation: str) -> dict[str, Any]:
+        """The tab stopped for the user where they said, resumed on Remote Control and told to
+        put `situation` to them. Refused while it works, since the restart would cut its turn
+        off, and without the claude.ai sign-in Remote Control needs."""
+        agent = self._unheld(tab)
+        if not situation.strip():
+            raise SessionError("a hold needs the situation: where the work stands and what is "
+                               "the user's to decide")
+        if agent.busy:
+            raise SessionError(f"{tab} is working; hold it once its turn ends")
+        if not claude_login.is_set(self.session.paths.claude_login):
+            raise SessionError(
+                "the user has not signed in to claude.ai (`rai claude-login --login`), so a held "
+                "tab cannot reach their phone: `direct` the tab to stop and write the situation "
+                "at the top of its SESSION-START.md, where they will see it when they return")
+        held = self.session.hold(tab, situation)
+        self.events.emit("coordinator.held", tab=tab, deliver={
+            "content": hold_message(agent.stop_when, situation), "meta": {"from": "machine"}})
+        return {**held, "next": "It is the user's until they answer in it; you are told then."}
+
+    def _unheld(self, tab: str):
+        agent = self._managed(tab)
+        if agent.held is not None:
+            raise SessionError(f"{tab} is held for the user; nothing reaches it until they "
+                               "answer in it, and you are told then")
+        return agent
 
     def _managed(self, tab: str):
         agent = self.session.intent.tabs.get(tab)

@@ -47,6 +47,11 @@ class TabIntent:
     # asking it to make its documents ready is on its way), "heard" (that turn started),
     # "ready" (the documents are ready for the next conversation).
     handover: str | None = None
+    # The user's words for where a managed tab stops for them — a goal, or a decision that is
+    # theirs — given when they hand it over; and, once the machine tab finds it reached, the
+    # situation it is held on until they answer in it.
+    stop_when: str | None = None
+    held: str | None = None
 
     @property
     def manager(self) -> bool:

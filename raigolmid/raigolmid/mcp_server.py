@@ -240,9 +240,20 @@ def build_server(client: ApiClient):
     @tool(server, description="Machine tab only: mark a body tab (`tab`) as one you manage "
                              "(`on` true) or give it back (`on` false). Only when the user "
                              "hands you the tab: a managed tab's questions come to you rather "
-                             "than to them, and you are told each time its turn ends.")
-    def manage(tab: str, on: bool = True) -> dict[str, Any]:
-        return call("manage", tab=tab, on=on)
+                             "than to them, and you are told each time its turn ends. "
+                             "`stop_when` is where they said it stops for them, in their "
+                             "words — a goal, or a decision that is theirs — and you `hold` it "
+                             "there.")
+    def manage(tab: str, on: bool = True, stop_when: str | None = None) -> dict[str, Any]:
+        return call("manage", tab=tab, on=on, stop_when=stop_when)
+
+    @tool(server, description="Machine tab only: hold a tab you manage for the user, at the "
+                             "stop they gave. It is resumed on Remote Control, which reaches "
+                             "their phone, and told to put `situation` to them — where the "
+                             "work stands, what is theirs to decide, the options. Nothing of "
+                             "yours reaches it until they answer in it; you are told then.")
+    def hold(tab: str, situation: str) -> dict[str, Any]:
+        return call("hold", tab=tab, situation=situation)
 
     @tool(server, description="Machine tab only: every tab you manage — its state, the "
                              "questions it waits on you for, and its context use against the "

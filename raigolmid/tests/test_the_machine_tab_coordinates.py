@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from raigolmid import claude_login, naming
 from raigolmid.api import with_marks, with_tab_states
 from raigolmid.channel import Channels
 from raigolmid.coordinator import Coordinator
@@ -251,3 +252,46 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_restarts_on_
                   if json.loads(r.read_text()).get("fresh_restart")]
     assert (archived.with_suffix("") / "thoughts.md").is_file(), "archived with its conversation"
     assert "~/previous-thoughts.md" in m.queued(MACHINE)[-1]["content"]
+
+
+def test_a_tab_stops_where_the_user_said_and_is_held_on_remote_control_until_they_answer(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY, stop_when="the parser passes its suite")
+    converse(h.session.agents.home(BODY))
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)
+    assert "the parser passes its suite" in m.queued(MACHINE)[-1]["content"]
+
+    with pytest.raises(SessionError, match="rai claude-login"):
+        m.tab(MACHINE)["hold"](tab=BODY, situation="green; next is the grammar or the CLI")
+    claude_login.write(h.session.paths.claude_login, {
+        "claudeAiOauth": {"accessToken": "sk-ant-oat01-the-real-login", "refreshToken": "r",
+                          "expiresAt": 1, "scopes": [claude_login.SESSIONS_SCOPE]},
+        "oauthAccount": {"organizationUuid": "org-1"}})
+    held = m.tab(MACHINE)["hold"](tab=BODY, situation="green; next is the grammar or the CLI")
+    assert held["resumed"] is True
+
+    spec = h.runtime._containers[naming.agent(BODY)]["spec"]
+    assert spec.command[-2:] == ("--remote-control", "myapi: held")
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in spec.environment
+    home = h.session.agents.home(BODY)
+    signed_in = (home / ".claude" / ".credentials.json").read_text()
+    assert "the-real-login" not in signed_in and "sk-ant-oat01-rail-" in signed_in
+    assert json.loads((home / ".claude.json").read_text())["oauthAccount"] == {
+        "organizationUuid": "org-1"}
+    assert "the grammar or the CLI" in m.queued(BODY)[-1]["content"]
+
+    # The user's until they answer: the machine tab neither hears its turns nor reaches it.
+    m.channels._tabs[MACHINE].queue.clear()
+    h.session.agent_session_started(BODY)
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)
+    assert m.queued(MACHINE) == []
+    with pytest.raises(SessionError, match="held"):
+        m.tab(MACHINE)["direct"](tab=BODY, content="do the CLI")
+
+    m.tab(BODY)["agent_activity"](busy=True, prompt="the grammar first")
+    m.pump()
+    assert h.session.intent.tabs[BODY].held is None
+    assert "The user answered" in m.queued(MACHINE)[-1]["content"]
+    m.tab(MACHINE)["direct"](tab=BODY, content="carry on")

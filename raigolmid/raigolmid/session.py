@@ -899,6 +899,29 @@ class Session:
                 self.store.save(self.intent)
             return {"tab": tab_id, "container": container, "resumed": resumed}
 
+    def hold(self, tab_id: str, situation: str) -> dict[str, Any]:
+        """A managed tab stopped for the user: resumed on Remote Control, which reaches their
+        phone (`Agents.start`), until their own words in it release it (`release`)."""
+        with self._lock:
+            tab = self.intent.tabs.get(tab_id)
+            if tab is None:
+                raise SessionError(f"no tab {tab_id}")
+            tab.held = situation
+            self.store.save(self.intent)
+        self.events.emit("tab.held", tab=tab_id, body=tab.body, situation=situation)
+        return self.restart_agent(tab_id, resume=True)
+
+    def release(self, tab_id: str) -> None:
+        """The user answered in a held tab. It keeps Remote Control until its next restart,
+        so they can go on talking to it."""
+        with self._lock:
+            tab = self.intent.tabs.get(tab_id)
+            if tab is None or tab.held is None:
+                return
+            tab.held = None
+            self.store.save(self.intent)
+        self.events.emit("tab.released", tab=tab_id, body=tab.body)
+
     def hand_over(self, tab_id: str, state: str | None) -> None:
         """Where a tab's handover to a fresh conversation stands (`TabIntent.handover`)."""
         with self._lock:
@@ -1409,8 +1432,9 @@ class Session:
         self.events.emit("face.driving", allowed=bool(allowed))
         return {"face_driving": bool(allowed)}
 
-    def manage(self, tab_id: str, on: bool) -> dict[str, Any]:
-        """A body tab handed to the machine tab to coordinate, or taken back."""
+    def manage(self, tab_id: str, on: bool, stop_when: str | None = None) -> dict[str, Any]:
+        """A body tab handed to the machine tab to coordinate, with where it stops for the
+        user, or taken back."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
@@ -1419,8 +1443,11 @@ class Session:
                 raise SessionError(f"{tab_id} is not a body tab; only body tabs are managed")
             changed = tab.managed != bool(on)
             tab.managed = bool(on)
-            if not on:
-                tab.handover = None     # a handover is the machine tab's, ended with its hold
+            if on:
+                tab.stop_when = stop_when or tab.stop_when
+            else:
+                # A handover and a hold are the machine tab's, ended with its hold on the tab.
+                tab.handover = tab.stop_when = tab.held = None
             self.store.save(self.intent)
         if changed:
             self.events.emit("tab.managed", tab=tab_id, body=tab.body, on=bool(on))

@@ -143,6 +143,7 @@ def _talking(session: Session, questions: Questions, channels: Channels,
         # Only a prompt taken carries one; a stop that stays busy does not, and is not the user's.
         if busy and channel_seq is None and prompt is not None:
             questions.answered_in_terminal(tab_id, prompt)
+            session.release(tab_id)
         # A turn an API error cut off is not done: it is resumed (`limits.py`).
         done = not busy and error is None and channels.turn_done(
             tab_id, questions.tab_state(tab_id) is None)

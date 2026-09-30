@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import credential, credproxy, documents, git, hostimages, labels, localtime, naming, settings
+from . import (claude_login, credential, credproxy, documents, git, hostimages, labels, localtime,
+               naming, settings)
 from .events import EventLog
 from .intent import TabIntent
 from .paths import Paths
@@ -211,8 +212,11 @@ session takes, with nothing stale in it; `~/thoughts.md` holds the goal, what wa
 decided, and the state now; what outlives this work is in the permanent doc it belongs to; and
 what should be committed is.
 
-**The machine tab** marks a tab the user hands it with `manage`, and is told when each turn it
-manages ends. It sees those tabs with `managed` and `managed_tab`, steers them with `direct`, and
+**The machine tab** marks a tab the user hands it with `manage` — with `stop_when`, their words
+for where it stops for them, when they give one — and is told when each turn it manages ends.
+At that stop it `hold`s the tab, which then puts the situation to the user on their phone
+through Remote Control; unsure whether the stop is reached, it goes on, and has the tab note the
+doubt in its thought doc and commit, so the user can return to that point. It sees those tabs with `managed` and `managed_tab`, steers them with `direct`, and
 answers their questions with `answer_question` — never putting one to the user. At the budget,
 `restart_fresh` first has the tab make its documents ready for its next conversation; once told
 that turn has ended, it reads them with `managed_tab` and either `direct`s the tab to fix what is
@@ -337,7 +341,8 @@ class Agents:
                 f"an agent container for {spec.tab.tab_id} already exists. Close the tab "
                 "or restart the agent through it."
             )
-        credentials = self.credentials(spec.tab.tab_id)
+        held = spec.tab.held is not None
+        credentials = self.credentials(spec.tab.tab_id, login=held)
         image = hostimages.ensure(self.runtime, hostimages.agent())
         home = self.home(spec.tab.tab_id)
         if fresh_home and home.exists():
@@ -345,6 +350,7 @@ class Agents:
                 f"{home} is left from an earlier {spec.tab.tab_id} whose close could not "
                 f"archive it; it holds {git.remaining(home)}. Move it, then open the tab.")
         home.mkdir(parents=True, exist_ok=not fresh_home)
+        self._sign_in(spec.tab.tab_id, home, held)
         context = self.write_context(spec, home)
 
         # The directories the agent works in. The MCP server is handed the same pairs,
@@ -441,14 +447,37 @@ class Agents:
         spec.tab.busy = False
         return info.id
 
-    def credentials(self, tab_id: str) -> dict[str, str]:
+    def credentials(self, tab_id: str, login: bool = False) -> dict[str, str]:
         """The placeholder for the credential kept out of the tab (`credproxy.py`). Its
         absence is refused here rather than handed to the agent, which would open on a login
         screen nobody can complete from a tab."""
         try:
-            return self.broker.environment(tab_id)
+            return self.broker.environment(tab_id, login=login)
         except credential.CredentialError as exc:
             raise AgentError(str(exc)) from exc
+
+    def _sign_in(self, tab_id: str, home: Path, held: bool) -> None:
+        """A held tab signs in with the claude.ai sign-in's placeholders, which Remote Control
+        takes where it refuses the agent credential; every other tab has none of it."""
+        credentials = home / ".claude" / ".credentials.json"
+        config = home / ".claude.json"
+        saved = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+        if held:
+            try:
+                files, account = self.broker.login_files(tab_id)
+            except claude_login.LoginError as exc:
+                raise AgentError(f"{tab_id} is held for the user, and Remote Control needs "
+                                 f"their claude.ai sign-in: {exc}") from exc
+            credentials.parent.mkdir(exist_ok=True)
+            fd = os.open(credentials, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                json.dump(files, out)
+            saved["oauthAccount"] = account
+        else:
+            credentials.unlink(missing_ok=True)
+            saved.pop("oauthAccount", None)
+        if saved or config.is_file():
+            config.write_text(json.dumps(saved), encoding="utf-8")
 
     def stop(self, tab_id: str) -> None:
         name = naming.agent(tab_id)
@@ -570,4 +599,7 @@ class Agents:
 
     @staticmethod
     def command(tab: TabIntent, resume: bool) -> list[str]:
-        return [*CLAUDE, *CHANNEL, "--plugin-dir", PLUGINS, *(("--continue",) if resume else ())]
+        # A held tab is its own Remote Control session, named for the user's phone.
+        return [*CLAUDE, *CHANNEL, "--plugin-dir", PLUGINS,
+                *(("--continue",) if resume else ()),
+                *(("--remote-control", f"{tab.body}: held") if tab.held is not None else ())]
