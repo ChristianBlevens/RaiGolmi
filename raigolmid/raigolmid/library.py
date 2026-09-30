@@ -108,6 +108,11 @@ class Library:
             add(Document(f"manager/fixed/{path.name}", "Manager", f"Fixed: {path.stem}",
                          path, True))
 
+        # A run's report and record are what happened while the user was away, kept as written.
+        if p.runs.is_dir():
+            for path in sorted(p.runs.glob("*.md"), reverse=True):
+                add(Document(f"run/{path.name}", "Runs", path.stem, path, False))
+
         # A thought is what an AI was thinking; editing one would make history unreliable.
         for tab_id in sorted(self.session.intent.tabs):
             path = p.agent_homes / tab_id / documents.THOUGHTS

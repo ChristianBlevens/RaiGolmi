@@ -30,6 +30,8 @@ SESSION_START = "SESSION-START.md"
 THOUGHTS = "thoughts.md"
 # The thought doc of the conversation before a fresh restart that starts its own.
 PREVIOUS_THOUGHTS = "previous-thoughts.md"
+# The machine tab's record of a run, kept across its conversations until it reports the run.
+RUN_RECORD = "run.md"
 INCIDENTS = "incidents"
 FIXED = "fixed"
 PATTERNS = "patterns.md"

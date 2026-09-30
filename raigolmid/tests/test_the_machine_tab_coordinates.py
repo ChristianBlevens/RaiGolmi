@@ -87,7 +87,9 @@ def test_only_the_machine_tab_manages_and_only_body_tabs_are_managed(h):
         m.tab(BODY)["managed"]()
     with pytest.raises(SessionError, match="not a body tab"):
         m.tab(MACHINE)["manage"](tab=MACHINE)
-    assert m.tab(MACHINE)["manage"](tab=BODY) == {"tab": BODY, "managed": True}
+    managed = m.tab(MACHINE)["manage"](tab=BODY)
+    assert (managed["managed"], managed["until"]) == (True, None)
+    assert "~/run.md" in managed["next"]
     assert h.session.intent.tabs[BODY].managed
     assert [e.data["on"] for e in h.events_of("tab.managed")] == [True]
 
@@ -239,6 +241,7 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_restarts_on_
     home = h.session.agents.home(MACHINE)
     _usage(home, 105_000)
     (home / "thoughts.md").write_text("tab-2 is porting the parser\n")
+    (home / "run.md").write_text("23:00 handed tab-2\n")
 
     # Not managing, the user is there: theirs to close.
     m.tab(MACHINE)["agent_activity"](busy=True)
@@ -278,6 +281,8 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_restarts_on_
                   if json.loads(r.read_text()).get("fresh_restart")]
     assert (archived.with_suffix("") / "thoughts.md").is_file(), "archived with its conversation"
     assert "~/previous-thoughts.md" in m.queued(MACHINE)[-1]["content"]
+    assert (home / "run.md").read_text() == "23:00 handed tab-2\n", \
+        "the run's record outlives the conversations it spans"
 
 
 def test_a_tab_stops_where_the_user_said_and_is_held_on_remote_control_until_they_answer(h):
@@ -321,3 +326,67 @@ def test_a_tab_stops_where_the_user_said_and_is_held_on_remote_control_until_the
     assert h.session.intent.tabs[BODY].held is None
     assert "The user answered" in m.queued(MACHINE)[-1]["content"]
     m.tab(MACHINE)["direct"](tab=BODY, content="carry on")
+
+
+def test_a_tab_whose_time_runs_out_makes_its_documents_ready_and_is_given_back(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY, hours=4)
+    until = h.session.intent.tabs[BODY].until
+    converse(h.session.agents.home(BODY))
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)
+    assert "runs out at" in m.queued(MACHINE)[-1]["content"]
+
+    m.coordinator.tick(until - 1)
+    assert m.queued(BODY) == []
+    m.coordinator.tick(until)
+    m.coordinator.tick(until + 1)
+    [wrap_up] = m.queued(BODY)
+    assert wrap_up["meta"] == {"from": "daemon"} and "SESSION-START.md" in wrap_up["content"]
+    h.session.intent.tabs[BODY].until = 1.0    # the daemon's clock past it, for the verbs
+    with pytest.raises(SessionError, match="ran out"):
+        m.tab(MACHINE)["direct"](tab=BODY, content="one more thing")
+
+    _hear(m, BODY)
+    assert not h.session.intent.tabs[BODY].managed
+    [given_back] = [e for e in h.events_of("tab.managed") if not e.data["on"]]
+    assert given_back.data["why"] == "time"
+    assert "is given back to them" in m.queued(MACHINE)[-2]["content"]
+    [ended] = h.events_of("run.ended")
+    assert ended.data["ended"] >= ended.data["started"]
+
+
+def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY, stop_when="the parser passes")
+    home, body_home = h.session.agents.home(MACHINE), h.session.agents.home(BODY)
+    (home / "run.md").write_text("directed tab-2 to the parser\n")
+    converse(body_home)
+    (body_home / "thoughts.md").write_text("the parser is green\n")
+    id = m.referred(BODY)
+    m.tab(MACHINE)["answer_question"](id=id, answer="9090")
+    with pytest.raises(SessionError, match="not over"):
+        m.tab(MACHINE)["report_run"](report="done")
+
+    m.tab(MACHINE)["manage"](tab=BODY, on=False)        # the user said stop
+    m.pump()
+    [asked] = [q for q in m.queued(MACHINE) if "report_run" in q["content"]]
+    assert asked["meta"] == {"from": "daemon"}
+    assert "handed to the machine tab to manage" in asked["content"]
+    assert f"you answered {id} 'which port?': '9090'" in asked["content"]
+    assert "the parser is green" in asked["content"], "a tab given back is out of its reach"
+    # A machine tab opening, or the daemon starting, asks again only what it has not heard.
+    m.coordinator.announce()
+    assert len([q for q in m.queued(MACHINE) if "report_run" in q["content"]]) == 1
+
+    filed = m.tab(MACHINE)["report_run"](report="tab-2: the parser passes; next is the CLI")
+    assert h.session.intent.run is None
+    report = h.paths.runs / filed["report"].rsplit("/", 1)[-1]
+    assert report.read_text().endswith("tab-2: the parser passes; next is the CLI\n")
+    assert not (home / "run.md").exists()
+    assert (h.paths.runs / f"{report.stem}-record.md").read_text() == \
+        "directed tab-2 to the parser\n"
+    [reported] = h.events_of("run.reported")
+    assert reported.data["report"] == report.name
+    with pytest.raises(SessionError, match="no run"):
+        m.tab(MACHINE)["report_run"](report="again")

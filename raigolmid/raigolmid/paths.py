@@ -139,6 +139,11 @@ class Paths:
         """Closed tabs' homes, one directory each, kept for their conversations."""
         return self.data / "agent-archive"
 
+    @property
+    def runs(self) -> Path:
+        """The machine tab's report on each run it managed, with its record of the run."""
+        return self.data / "runs"
+
     # --- config ------------------------------------------------------------------
     @property
     def agent_templates(self) -> Path:

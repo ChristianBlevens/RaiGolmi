@@ -243,9 +243,11 @@ def build_server(client: ApiClient):
                              "than to them, and you are told each time its turn ends. "
                              "`stop_when` is where they said it stops for them, in their "
                              "words — a goal, or a decision that is theirs — and you `hold` it "
-                             "there.")
-    def manage(tab: str, on: bool = True, stop_when: str | None = None) -> dict[str, Any]:
-        return call("manage", tab=tab, on=on, stop_when=stop_when)
+                             "there. `hours` is how long they give it, when they say: the "
+                             "daemon then has it make its documents ready and gives it back.")
+    def manage(tab: str, on: bool = True, stop_when: str | None = None,
+               hours: float | None = None) -> dict[str, Any]:
+        return call("manage", tab=tab, on=on, stop_when=stop_when, hours=hours)
 
     @tool(server, description="Machine tab only: hold a tab you manage for the user, at the "
                              "stop they gave. It is resumed on Remote Control, which reaches "
@@ -293,6 +295,13 @@ def build_server(client: ApiClient):
                              "You are restarted fresh when this turn ends.")
     def ready_to_restart() -> dict[str, Any]:
         return call("ready_to_restart")
+
+    @tool(server, description="Machine tab only: the user's report on the run that is over, "
+                             "once the daemon asks for it — for each tab what it did, where it "
+                             "stands and what is theirs next; what you decided for them; what "
+                             "went wrong. Filed with ~/run.md in their catalog.")
+    def report_run(report: str) -> dict[str, Any]:
+        return call("report_run", report=report)
 
     @tool(server, description="Your hands on the face on the user's screen: `type` text, "
                              "press a `key` (`ctrl+s`, `Return`), `move` the pointer or "

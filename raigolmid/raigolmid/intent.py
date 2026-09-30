@@ -53,6 +53,9 @@ class TabIntent:
     # situation it is held on until they answer in it.
     stop_when: str | None = None
     held: str | None = None
+    # When the user's time for a managed tab runs out (epoch seconds): the daemon then has it
+    # make its documents ready and gives it back (`coordinator.py`).
+    until: float | None = None
 
     @property
     def manager(self) -> bool:
@@ -89,6 +92,14 @@ class StopRecord:
 
 
 @dataclass(slots=True)
+class Run:
+    """The machine tab managing tabs for the user, from the first tab handed to it until it
+    reports on the run; `ended` is when the last was given back, None while any is managed."""
+    started: float
+    ended: float | None = None
+
+
+@dataclass(slots=True)
 class Intent:
     epoch: int = 0
     selection: Selection = field(default_factory=Selection)
@@ -99,6 +110,7 @@ class Intent:
     next_tab: int = 1
     # The user's switch in the drawer: False is "don't drive my current face".
     face_driving: bool = True
+    run: Run | None = None
 
     # --- references -----------------------------------------------------------------
     def add_ref(self, instance_id: str, ref: str) -> None:
@@ -168,6 +180,7 @@ class Intent:
             "stopped": asdict(self.stopped) if self.stopped is not None else None,
             "next_tab": self.next_tab,
             "face_driving": self.face_driving,
+            "run": asdict(self.run) if self.run is not None else None,
         }
 
     @classmethod
@@ -180,6 +193,7 @@ class Intent:
             stopped=StopRecord(**d["stopped"]) if d.get("stopped") else None,
             next_tab=d.get("next_tab", 1),
             face_driving=d.get("face_driving", True),
+            run=Run(**d["run"]) if d.get("run") else None,
         )
 
 

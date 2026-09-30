@@ -37,13 +37,19 @@ def test_a_save_over_a_newer_write_is_refused_and_the_newer_text_kept(world):
     assert "meanwhile" in m["document"](id="preferences")["text"]
 
 
-def test_a_thought_is_shown_and_never_saved(world):
+@pytest.mark.parametrize("place, id, group", [
+    ("agent_archive/tab-1-20260927T120000/thoughts.md", "thought/archive/tab-1-20260927T120000",
+     "Thoughts"),
+    ("runs/20260930T230000.md", "run/20260930T230000.md", "Runs"),
+])
+def test_a_thought_or_a_runs_report_is_shown_and_never_saved(world, place, id, group):
     h, m = world
-    thoughts = h.paths.agent_archive / "tab-1-20260927T120000" / "thoughts.md"
+    root, rest = place.split("/", 1)
+    thoughts = getattr(h.paths, root) / rest
     thoughts.parent.mkdir(parents=True)
     thoughts.write_text("what it was thinking\n")
-    doc = next(d for d in m["documents"]() if d["id"] == "thought/archive/tab-1-20260927T120000")
-    assert (doc["group"], doc["editable"]) == ("Thoughts", False)
+    doc = next(d for d in m["documents"]() if d["id"] == id)
+    assert (doc["group"], doc["editable"]) == (group, False)
     with pytest.raises(DocumentError, match="never edited"):
         m["document_save"](id=doc["id"], text="rewritten", version=None)
     assert thoughts.read_text() == "what it was thinking\n"

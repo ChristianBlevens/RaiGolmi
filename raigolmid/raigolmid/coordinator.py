@@ -27,6 +27,16 @@ the situation, and the tab is resumed on Remote Control to put it to them on the
 (`Session.hold`). Nothing of the machine tab's reaches a held tab; the user's own words in it
 release it (`Session.release`), and the machine tab is told.
 
+**And stops when the user's time for it runs out** (`TabIntent.until`): the daemon, not the
+machine tab, pushes the wrap-up then (`time_up_message`, `tick`), and gives the tab back once
+that turn has ended — a held one as it stands.
+
+**A run ends with a report** (`Intent.run`): once the last tab is given back the machine tab
+is asked for the user's report (`report_message`), carrying what the daemon itself recorded of
+the run and read of each tab, since the machine tab's own conversations may have been several
+and a tab given back is out of its reach. It keeps `documents.RUN_RECORD` across those
+conversations, and `report_run` files the report with it (`Session.report_run`).
+
 Context use is the input the tab's latest main-conversation answer took — input, cache-read
 and cache-created tokens, as Claude Code's own status line counts it — read from its newest
 transcript. The daemon reads every tab's home; no tab can read another's.
@@ -35,12 +45,14 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import api, claude_login, documents, limits, settings
+from . import api, claude_login, documents, history, limits, settings
 from .channel import Channels
 from .events import Event, EventLog
+from .intent import Run, TabIntent
 from .questions import Questions
 from .session import SessionError
 
@@ -51,6 +63,8 @@ if TYPE_CHECKING:
 TAIL_TURNS = 20
 TAIL_LINES = 60
 TURN_CHARS = 2000
+# How much of the daemon's record of a run its report request carries.
+RECORD_LINES = 300
 
 
 def _latest_transcript(home: Path) -> Path | None:
@@ -129,21 +143,28 @@ def _context_line(tokens: int | None, budget: int) -> str:
     return said
 
 
-def stop_line(stop_when: str | None) -> str:
-    if stop_when is None:
-        return ""
-    return (f" The user stops it at: {stop_when!r}. When that is reached, `hold` it for them; "
-            "when you are unsure whether it is, go on, and have it note the doubt in its "
-            "thought doc and commit, so they can return to that point.")
+def clock(t: float) -> str:
+    return time.strftime("%H:%M", time.localtime(t))
 
 
-def question_message(item: dict[str, Any], body: str | None,
-                     stop_when: str | None = None) -> str:
+def stop_line(tab: TabIntent) -> str:
+    said = ""
+    if tab.stop_when is not None:
+        said += (f" The user stops it at: {tab.stop_when!r}. When that is reached, `hold` it "
+                 "for them; when you are unsure whether it is, go on, and have it note the "
+                 "doubt in its thought doc and commit, so they can return to that point.")
+    if tab.until is not None:
+        said += (f" Their time for it runs out at {clock(tab.until)}; the daemon then has it "
+                 "make its documents ready and gives it back to them.")
+    return said
+
+
+def question_message(item: dict[str, Any], tab: TabIntent) -> str:
     choices = f" Its choices: {', '.join(item['choices'])}." if item["choices"] else ""
-    return (f"Tab {item['tab']} ({body}), which you manage, asked the user {item['id']}: "
+    return (f"Tab {item['tab']} ({tab.body}), which you manage, asked the user {item['id']}: "
             f"{item['message']!r}.{choices} Their preferences did not answer it, so it is "
             f"yours: answer it with `answer_question`. Never put it to them."
-            f"{stop_line(stop_when)}")
+            f"{stop_line(tab)}")
 
 
 def hold_message(stop_when: str | None, situation: str) -> str:
@@ -165,31 +186,47 @@ def restart_message(tab: str, brief: str | None) -> str:
 
 
 WRAP_UP = "coordinator.wrap_up"
+TIME_UP = "coordinator.time_up"
 RESTART_ASKED = "coordinator.restart_asked"
+REPORT_ASKED = "coordinator.report_asked"
+
+
+def _documents_ready() -> str:
+    return (
+        f"1. /work/{documents.SESSION_START}: where the work stands, what the next session "
+        "takes and what it reads — with nothing stale in it: no history, nothing past-tense "
+        "that nothing turns on.\n"
+        f"2. ~/{documents.THOUGHTS}: the goal, what you found and decided, the state now.\n"
+        "3. What outlives this work, in the permanent doc it belongs to.\n"
+        "4. What should be committed, committed.\n")
 
 
 def wrap_up_message() -> str:
     return (
         "From the machine tab, which manages this tab for the user: this conversation is at "
         "its context budget, and once this turn ends you are restarted in a fresh one that has "
-        "only your documents. Make them ready for it now:\n"
-        f"1. /work/{documents.SESSION_START}: where the work stands, what the next session "
-        "takes and what it reads — with nothing stale in it: no history, nothing past-tense "
-        "that nothing turns on.\n"
-        f"2. ~/{documents.THOUGHTS}: the goal, what you found and decided, the state now.\n"
-        "3. What outlives this work, in the permanent doc it belongs to.\n"
-        "4. What should be committed, committed.\n"
-        "Then end your turn saying the next session can continue from them.")
+        "only your documents. Make them ready for it now:\n" + _documents_ready()
+        + "Then end your turn saying the next session can continue from them.")
+
+
+def time_up_message(until: float) -> str:
+    return (
+        f"From the daemon: the user's time for this work ran out at {clock(until)}. Once this "
+        "turn ends you are given back to them, and nothing more comes from the machine tab. "
+        "Make your documents ready for their return now:\n" + _documents_ready()
+        + "Then end your turn saying where the work stands.")
 
 
 def restart_asked_message(tokens: int, budget: int) -> str:
     return (
         f"From the daemon: your context is at {tokens // 1000}k of the {budget // 1000}k "
         "budget, and the user is away, so you are restarted in a fresh conversation that has "
-        f"only ~/{documents.THOUGHTS} to go on. Make it ready now: every tab you manage, what "
-        "each is working toward, what you told each and what is on its way to or from it, "
-        "whose handover stands where, and what you were in the middle of. Then call "
-        "`ready_to_restart` and end your turn; you are restarted once it ends.")
+        f"only your documents to go on. Make ~/{documents.THOUGHTS} ready now: every tab you "
+        "manage, what each is working toward, what you told each and what is on its way to or "
+        "from it, whose handover stands where, and what you were in the middle of; and "
+        f"~/{documents.RUN_RECORD}, the run's record across your conversations, current with "
+        "what this one did. Then call `ready_to_restart` and end your turn; you are restarted "
+        "once it ends.")
 
 
 def machine_restart_message() -> str:
@@ -198,7 +235,26 @@ def machine_restart_message() -> str:
         "context budget, while the user is away; your previous conversation is archived. "
         f"~/{documents.PREVIOUS_THOUGHTS} is its thought doc: read it, call `managed` for "
         "where each tab you manage stands now, and carry on managing them. Keep "
-        f"~/{documents.THOUGHTS} afresh for this conversation.")
+        f"~/{documents.THOUGHTS} afresh for this conversation, and go on adding to "
+        f"~/{documents.RUN_RECORD}, the run's record across all of them.")
+
+
+def report_message(run: Run, record: list[str], tabs: dict[str, dict[str, Any]]) -> str:
+    said = [
+        f"From the daemon: the run you managed from {clock(run.started)} to "
+        f"{clock(run.ended or run.started)} is over; every tab is given back to the user. "
+        "Write their report on it now and hand it over with `report_run`: it is what they read "
+        "when they return. For each tab: what it worked toward, what it got done, where it "
+        "stands and what is theirs to decide next. Then what you decided for them — the "
+        "questions you answered — and what went wrong or is unfinished. Draw on "
+        f"~/{documents.RUN_RECORD}, your record across your conversations, and on what the "
+        "daemon recorded and read below: a tab given back is out of your reach."]
+    said.append("\nThe daemon's record of the run:\n" + ("\n".join(record) or "(nothing)"))
+    for tab_id, seen in tabs.items():
+        said.append(f"\nTab {tab_id} ({seen['body']}), the tail of its thought doc:\n"
+                    f"{seen['thoughts'] or '(it has none)'}\n\nIts last words:\n"
+                    f"{seen['said'] or '(none)'}")
+    return "\n".join(said)
 
 
 class Coordinator:
@@ -217,6 +273,7 @@ class Coordinator:
         while not stop.is_set():
             for event in self._sub.drain(timeout=1.0):
                 self.on_event(event)
+            self.tick(time.time())
             if self._sub.dropped:
                 # A dropped referral is a question nobody answers: said, and offered again.
                 count, self._sub.dropped = self._sub.dropped, 0
@@ -224,11 +281,15 @@ class Coordinator:
                 self.announce()
 
     def on_event(self, event: Event) -> None:
+        if event.type == "run.ended":
+            self._ask_report()
+            return
         tab = self.session.intent.tabs.get(event.tab) if event.tab else None
         if tab is None:
             return
         if event.type == "channel.heard":
-            if event.data["cause"] in (WRAP_UP, RESTART_ASKED) and tab.handover == "asked":
+            if (event.data["cause"] in (WRAP_UP, TIME_UP, RESTART_ASKED)
+                    and tab.handover == "asked"):
                 self.session.hand_over(tab.tab_id, "heard")
         elif event.type == "tab.opened" and tab.machine:
             self.announce()
@@ -239,7 +300,7 @@ class Coordinator:
         elif event.type == "tab.released":
             self._to_machine(event.tab, "coordinator.released", (
                 f"The user answered tab {event.tab} ({tab.body}), which you held for them. It "
-                "goes on with their direction; it is yours again." + stop_line(tab.stop_when)),
+                "goes on with their direction; it is yours again." + stop_line(tab)),
                 why="released")
         elif tab.held is not None:
             return      # the user's until they answer in it
@@ -249,6 +310,9 @@ class Coordinator:
                 return      # resumed by the daemon, and heard of when that turn ends
             if error is None and tab.handover == "heard":
                 self.session.hand_over(tab.tab_id, "ready")
+            if error is None and tab.handover == "ready" and self._time_up(tab, time.time()):
+                self._give_back(tab)
+                return
             self._to_machine(event.tab, "coordinator.idle", self._idle_message(
                 event.tab, tab.body, event.data["done"], error), why="idle")
         elif event.type == "question.referred" and event.data["kind"] == "question":
@@ -258,10 +322,94 @@ class Coordinator:
                 self._question(item["id"])
 
     def announce(self) -> None:
-        """Every managed tab's pending question, to the machine tab that is open now: at the
-        daemon's start, whose channels hold nothing, and when a machine tab opens."""
+        """Every managed tab's pending question, and a run's report still to write, to the
+        machine tab that is open now: at the daemon's start, whose channels hold nothing, and
+        when a machine tab opens."""
         for item in self._pending_of(self.session.managed_tabs()):
             self._question(item["id"])
+        run = self.session.intent.run
+        if run is not None and run.ended is not None:
+            self._ask_report()
+
+    def tick(self, now: float) -> None:
+        """Each managed tab whose time has run out: its wrap-up pushed, unless a handover
+        already has it making its documents ready; given back once they are, or at once
+        while it is held for the user, who has it on Remote Control as it stands."""
+        for tab in list(self.session.intent.tabs.values()):
+            if not tab.managed or not self._time_up(tab, now):
+                continue
+            if tab.held is not None or (tab.handover == "ready" and not tab.busy):
+                self._give_back(tab)
+            elif tab.handover is None:
+                self.session.hand_over(tab.tab_id, "asked")
+                self.events.emit(TIME_UP, tab=tab.tab_id, deliver={
+                    "content": time_up_message(tab.until), "meta": {"from": "daemon"}})
+
+    @staticmethod
+    def _time_up(tab: TabIntent, now: float) -> bool:
+        return tab.until is not None and tab.until <= now
+
+    def _give_back(self, tab: TabIntent) -> None:
+        until, held = tab.until, tab.held
+        self.session.manage(tab.tab_id, False, why="time")
+        state = ("was held for them, and stays on Remote Control as it stands" if held
+                 else "made its documents ready")
+        self._to_machine(tab.tab_id, "coordinator.given_back", (
+            f"The user's time for tab {tab.tab_id} ({tab.body}) ran out at {clock(until)}; it "
+            f"{state}, and is given back to them."), why="time")
+
+    def _ask_report(self) -> None:
+        run = self.session.intent.run
+        machine = self.session.intent.machine_tab()
+        if run is None or run.ended is None:
+            return
+        if machine is None:
+            self.events.emit("coordinator.unheard", about="run", cause=REPORT_ASKED)
+            return
+        if (machine.tab_id, f"run@{run.started}") in self._handed:
+            return
+        self._handed.add((machine.tab_id, f"run@{run.started}"))
+        record, tabs = self.run_record(run)
+        self.events.emit(REPORT_ASKED, tab=machine.tab_id, deliver={
+            "content": report_message(run, record, tabs), "meta": {"from": "daemon"}})
+
+    def run_record(self, run: Run) -> tuple[list[str], dict[str, dict[str, Any]]]:
+        """What the daemon recorded of the run, in the history's words, for the tabs it
+        managed and the machine tab; and what it reads of each managed tab now."""
+        machine = self.session.intent.machine_tab()
+        items = self.questions.items()
+        managed: dict[str, str | None] = {}
+        lines = []
+        for event in self.events.read():
+            if event.ts < run.started or (run.ended is not None and event.ts > run.ended):
+                continue
+            if event.type == "tab.managed" and event.data["on"]:
+                managed.setdefault(event.tab, event.data["body"])
+            if not (event.tab is None or event.tab in managed
+                    or machine is not None and event.tab == machine.tab_id):
+                continue
+            if event.type == "question.answered" and event.data.get("by") == "machine":
+                item = items.get(event.data["id"])
+                asked = f" {item['message']!r}" if item else ""
+                said = f"you answered {event.data['id']}{asked}: {event.data['answer']!r}"
+            elif event.type in history.SAYS:
+                said = history.SAYS[event.type](event)
+            elif event.type in history.NOTICED:
+                said = history.NOTICED[event.type](event)
+            else:
+                continue
+            if said:
+                lines.append(f"{clock(event.ts)} {event.tab or 'the machine'}: {said}")
+        if len(lines) > RECORD_LINES:
+            lines = ([f"({len(lines) - RECORD_LINES} earlier lines are in the event log)"]
+                     + lines[-RECORD_LINES:])
+        tabs = {}
+        for tab_id, body in managed.items():
+            home = self.session.agents.home(tab_id)
+            last = transcript_tail(home, 1)
+            tabs[tab_id] = {"body": body, "thoughts": thoughts_tail(home, TAIL_LINES),
+                            "said": last[0]["said"] if last else None}
+        return lines, tabs
 
     def _machine_idle(self, tab_id: str, handover: str | None, error: str | None) -> None:
         """The machine tab's own handover, only while the user is away (`Intent.hands_off`):
@@ -321,8 +469,7 @@ class Coordinator:
         if machine is not None:
             self._handed.add((machine.tab_id, id))
         self._to_machine(item["tab"], "coordinator.question",
-                         question_message(item, tab.body, tab.stop_when), why="question",
-                         question=id)
+                         question_message(item, tab), why="question", question=id)
 
     def _idle_message(self, tab_id: str, body: str | None, done: bool,
                       error: str | None = None) -> str:
@@ -338,7 +485,7 @@ class Coordinator:
         return (f"Tab {tab_id} ({body}), which you manage, {ended}. "
                 f"{_context_line(context_tokens(self.session.agents.home(tab_id)), budget)} "
                 "`managed_tab` shows its thought doc and latest turns."
-                f"{stop_line(self.session.intent.tabs[tab_id].stop_when)}")
+                f"{stop_line(self.session.intent.tabs[tab_id])}")
 
     def _to_machine(self, about: str, event: str, content: str, **meta: str) -> None:
         machine = self.session.intent.machine_tab()
@@ -372,10 +519,13 @@ def methods(session: "Session", questions: Questions, channels: Channels,
         session.hand_over(caller, "ready")
         return {"status": "ready", "next": "End your turn; you are restarted once it ends."}
 
+    def report_run(report: str) -> dict[str, Any]:
+        return session.report_run(caller, report)
+
     return {name: only_machine(verb) for name, verb in (
         *((n, getattr(verbs, n)) for n in ("manage", "managed", "managed_tab", "direct",
                                            "answer_question", "restart_fresh", "hold")),
-        ("ready_to_restart", ready_to_restart))}
+        ("ready_to_restart", ready_to_restart), ("report_run", report_run))}
 
 
 class Verbs:
@@ -387,9 +537,18 @@ class Verbs:
         self.questions = questions
         self.channels = channels
 
-    def manage(self, tab: str, on: bool = True,
-               stop_when: str | None = None) -> dict[str, Any]:
-        return self.session.manage(tab, on, stop_when)
+    def manage(self, tab: str, on: bool = True, stop_when: str | None = None,
+               hours: float | None = None) -> dict[str, Any]:
+        if hours is not None and hours <= 0:
+            raise SessionError("`hours` is how long the user gives the tab, more than none")
+        until = time.time() + hours * 3600 if hours is not None else None
+        managed = self.session.manage(tab, on, stop_when, until)
+        if not on:
+            return managed
+        return {**managed, "until": self.session.intent.tabs[tab].until,
+                "next": f"Keep ~/{documents.RUN_RECORD}, the run's record across your "
+                        "conversations: what you directed, decided and saw, as it happens. "
+                        "When the last tab is given back you are asked for the user's report."}
 
     def managed(self) -> list[dict[str, Any]]:
         """Each managed tab: its state, its questions waiting on the machine tab, and its
@@ -407,6 +566,7 @@ class Verbs:
                 **agent,
                 "body": agent["scope"]["body"],
                 "stop_when": intent.stop_when,
+                "until": intent.until,
                 "held": intent.held,
                 "context_tokens": context_tokens(self.session.agents.home(tab)),
                 "budget_tokens": budget,
@@ -496,6 +656,10 @@ class Verbs:
         if agent.held is not None:
             raise SessionError(f"{tab} is held for the user; nothing reaches it until they "
                                "answer in it, and you are told then")
+        if agent.until is not None and agent.until <= time.time():
+            raise SessionError(f"the user's time for {tab} ran out at {clock(agent.until)}; "
+                               "it is making its documents ready and is given back to them "
+                               "once that turn ends")
         return agent
 
     def _managed(self, tab: str):

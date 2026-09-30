@@ -69,6 +69,10 @@ def _build_failed(e: Event) -> str:
 
 
 
+def _clock(t: float) -> str:
+    return time.strftime("%H:%M", time.localtime(t))
+
+
 # What each event this records says. None: this one is not recorded.
 SAYS: dict[str, Callable[[Event], str | None]] = {
     "tab.opened": lambda e: (f"opened for {e.data['body']}" if e.data.get("body")
@@ -77,9 +81,19 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "agent.idle": lambda e: "done" if e.data["done"] else None,
     "agent.crashed": lambda e: e.data["message"],
     "tab.managed": lambda e: ("handed to the machine tab to manage" if e.data["on"]
+                              else "given back by the daemon: your time for it ran out"
+                              if e.data.get("why") == "time"
                               else "taken back from the machine tab"),
+    "tab.held": lambda e: f"held for you: {e.data['situation']}",
     "coordinator.restarted": lambda e: ("restarted fresh by the machine tab, continuing from "
                                         "its thought doc"),
+    "coordinator.machine_restarted": lambda e: ("restarted fresh by the daemon at its context "
+                                                "budget, continuing from its thought doc"),
+    "run.ended": lambda e: (f"the machine tab's run from {_clock(e.data['started'])} ended: "
+                            "every tab is given back, and it is asked for its report"),
+    "run.reported": lambda e: (f"its report on the run from {_clock(e.data['started'])} to "
+                               f"{_clock(e.data['ended'])} is in the catalog, under Documents, "
+                               "Runs"),
     "agent.restarted": lambda e: ("restarted, resuming its conversation" if e.data["resumed"]
                                   else "restarted"),
     "agent.home_archive_failed": lambda e: (f"its conversation could not be archived: "

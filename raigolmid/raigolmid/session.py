@@ -40,7 +40,7 @@ from .events import EventLog
 from .faces import FaceError, Faces
 from .facemounts import FaceMounts, FaceMountError
 from .instances import Instance, Instances, RebuildResult
-from .intent import MANAGER, Intent, InstanceIntent, IntentStore, StopRecord, TabIntent
+from .intent import MANAGER, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent
 from .launcher import LauncherError, LauncherUnreachable
 from .paths import Paths
 from .presence import Presence, PresenceError
@@ -1118,9 +1118,11 @@ class Session:
                 # While the tab is still the face tab, so the face is seen to leave its sandbox.
                 released = self._release(held, tab_id)
             del self.intent.tabs[tab_id]
+            ended = self._end_run_if_over()
             self.store.save(self.intent)
             self.events.emit("tab.closed", tab=tab_id, body=tab.body, instance=held,
                              archive=archive, by="user")
+        self._say_run_ended(ended)
         self._stop_released(released)
         return self.ensure_tabs(by="user")
 
@@ -1432,9 +1434,11 @@ class Session:
         self.events.emit("face.driving", allowed=bool(allowed))
         return {"face_driving": bool(allowed)}
 
-    def manage(self, tab_id: str, on: bool, stop_when: str | None = None) -> dict[str, Any]:
+    def manage(self, tab_id: str, on: bool, stop_when: str | None = None,
+               until: float | None = None, why: str | None = None) -> dict[str, Any]:
         """A body tab handed to the machine tab to coordinate, with where it stops for the
-        user, or taken back."""
+        user and when their time for it runs out, or given back (`why` "time" when that is
+        the reason). The first tab handed over starts a run; the last given back ends it."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
@@ -1445,13 +1449,66 @@ class Session:
             tab.managed = bool(on)
             if on:
                 tab.stop_when = stop_when or tab.stop_when
+                tab.until = until or tab.until
+                if self.intent.run is None:
+                    self.intent.run = Run(started=time.time())
+                # A tab handed over before the machine tab reports joins the same run.
+                self.intent.run.ended = None
             else:
                 # A handover and a hold are the machine tab's, ended with its hold on the tab.
-                tab.handover = tab.stop_when = tab.held = None
+                tab.handover = tab.stop_when = tab.held = tab.until = None
+            ended = self._end_run_if_over()
             self.store.save(self.intent)
         if changed:
-            self.events.emit("tab.managed", tab=tab_id, body=tab.body, on=bool(on))
+            self.events.emit("tab.managed", tab=tab_id, body=tab.body, on=bool(on), why=why)
+        self._say_run_ended(ended)
         return {"tab": tab_id, "managed": bool(on)}
+
+    def _end_run_if_over(self) -> Run | None:
+        """Under the lock: the run, ended now, when no tab is managed any more."""
+        run = self.intent.run
+        if run is None or run.ended is not None or self.managed_tabs():
+            return None
+        run.ended = time.time()
+        return run
+
+    def _say_run_ended(self, run: Run | None) -> None:
+        if run is not None:
+            self.events.emit("run.ended", started=run.started, ended=run.ended)
+
+    def report_run(self, machine_tab: str, report: str) -> dict[str, Any]:
+        """The machine tab's report on the run that is over, kept under `Paths.runs` beside
+        its record of the run (`documents.RUN_RECORD`), which leaves its home so the next run
+        keeps its own. The run is over once reported."""
+        if not report.strip():
+            raise SessionError("a report needs words: what each tab did and where it stands")
+        with self._lock:
+            run = self.intent.run
+            if run is None:
+                raise SessionError("there is no run to report on: one starts when the user "
+                                   "hands you a tab")
+            if run.ended is None:
+                raise SessionError(
+                    f"the run is not over: you still manage {', '.join(sorted(self.managed_tabs()))}"
+                    "; give each back with `manage` (`on` false) first")
+            name = time.strftime("%Y%m%dT%H%M%S", time.localtime(run.started))
+            span = " to ".join(time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+                               for t in (run.started, run.ended))
+            self.paths.runs.mkdir(parents=True, exist_ok=True)
+            path = self.paths.runs / f"{name}.md"
+            path.write_text(f"# The run from {span}\n\n{report.strip()}\n", encoding="utf-8")
+            record = self.agents.home(machine_tab) / documents.RUN_RECORD
+            kept = None
+            if record.is_file():
+                kept = self.paths.runs / f"{name}-record.md"
+                os.replace(record, kept)
+            self.intent.run = None
+            self.store.save(self.intent)
+        self.events.emit("run.reported", tab=machine_tab, started=run.started, ended=run.ended,
+                         report=path.name)
+        return {"report": str(path), "record": str(kept) if kept else None,
+                "status": "reported",
+                "next": "The user reads it in the catalog, under Documents, Runs."}
 
     def managed_tabs(self) -> set[str]:
         return {t.tab_id for t in self.intent.tabs.values() if t.managed}
