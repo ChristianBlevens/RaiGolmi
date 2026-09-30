@@ -77,7 +77,8 @@ def machine(tmp_path):
     proxy = CredentialProxy(broker, events, open_tabs.__contains__, host="127.0.0.1", port=0,
                             upstream=f"http://127.0.0.1:{upstream.server_address[1]}",
                             intercepted="api.test",
-                            github={"git.test": f"http://127.0.0.1:{upstream.server_address[1]}"})
+                            github={"git.test": f"http://127.0.0.1:{upstream.server_address[1]}"},
+                            anthropic={"mcp.test": f"http://127.0.0.1:{upstream.server_address[1]}"})
     threading.Thread(target=proxy.serve, daemon=True).start()
     yield broker, proxy, events, open_tabs
     proxy.close()
@@ -141,6 +142,13 @@ def test_a_held_tab_signs_in_with_placeholders_and_the_sign_in_is_swapped_in(mac
     assert Upstream.seen[-1]["headers"]["Authorization"] == "Bearer sk-ant-oat01-the-real-login"
     status, _ = _post(proxy, {"Authorization": f"Bearer {oauth['refreshToken']}"})
     assert status == 401, "the refresh placeholder is never a credential"
+
+    # The account's connectors, whose 401 would have Claude Code sign the tab out.
+    conn = _inside(broker, proxy, "mcp.test")
+    conn.request("POST", "/v1/mcp/mcpsrv_1", body=b"{}",
+                 headers={"Authorization": f"Bearer {oauth['accessToken']}"})
+    assert conn.getresponse().status == 200
+    assert Upstream.seen[-1]["headers"]["Authorization"] == "Bearer sk-ant-oat01-the-real-login"
 
 
 def test_remote_controls_session_goes_with_its_own_credential_and_nothing_else_does(machine):

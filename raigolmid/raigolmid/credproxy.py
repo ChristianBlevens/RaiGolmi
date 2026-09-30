@@ -72,6 +72,10 @@ from .runtime.base import Mount
 
 UPSTREAM = "https://api.anthropic.com"
 INTERCEPTED = urlsplit(UPSTREAM).hostname
+# The account's claude.ai connectors, which a tab signed in with the claude.ai sign-in reaches
+# with its placeholder. Tunnelled, the 401 there sends Claude Code to refresh the sign-in with
+# its refresh placeholder, and the refused refresh signs the tab out.
+ANTHROPIC_HOSTS = {"mcp-proxy.anthropic.com": "https://mcp-proxy.anthropic.com"}
 # The hosts the user's GitHub sign-in is swapped in for: git over HTTPS, the API gh and a
 # REST call use, and release uploads. Each goes on to itself.
 GITHUB_HOSTS = ("github.com", "api.github.com", "uploads.github.com")
@@ -484,6 +488,7 @@ class CredentialProxy:
                  host: str, port: int = PORT, upstream: str = UPSTREAM,
                  intercepted: str = INTERCEPTED,
                  github: dict[str, str] | None = None,
+                 anthropic: dict[str, str] | None = None,
                  this_machine: Callable[[str], bool] = is_this_machine) -> None:
         self.broker = broker
         self.this_machine = this_machine
@@ -491,7 +496,8 @@ class CredentialProxy:
         self.open_owner = open_owner
         self.intercepted = intercepted
         self.github = github if github is not None else {h: f"https://{h}" for h in GITHUB_HOSTS}
-        self.upstreams = {intercepted: upstream, **self.github}
+        self.upstreams = {intercepted: upstream,
+                          **(ANTHROPIC_HOSTS if anthropic is None else anthropic), **self.github}
         self.tls = {h: broker.authority.context_for(h) for h in self.upstreams}
         self._server = _Server((host, port), _Handler)
         self._server.proxy = self
