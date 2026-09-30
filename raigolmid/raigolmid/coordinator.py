@@ -144,7 +144,8 @@ def _context_line(tokens: int | None, budget: int) -> str:
 
 
 def clock(t: float) -> str:
-    return time.strftime("%H:%M", time.localtime(t))
+    """The user's time, zone named: the agents read it beside their own clocks and logs."""
+    return time.strftime("%H:%M %Z", time.localtime(t))
 
 
 def stop_line(tab: TabIntent) -> str:
@@ -196,16 +197,16 @@ def _documents_ready() -> str:
         f"1. /work/{documents.SESSION_START}: where the work stands, what the next session "
         "takes and what it reads — with nothing stale in it: no history, nothing past-tense "
         "that nothing turns on.\n"
-        f"2. ~/{documents.THOUGHTS}: the goal, what you found and decided, the state now.\n"
+        f"2. /home/agent/{documents.THOUGHTS}: the goal, what you found and decided, the "
+        "state now.\n"
         "3. What outlives this work, in the permanent doc it belongs to.\n"
         "4. What should be committed, committed.\n")
 
 
 def wrap_up_message() -> str:
     return (
-        "From the machine tab, which manages this tab for the user: this conversation is at "
-        "its context budget, and once this turn ends you are restarted in a fresh one that has "
-        "only your documents. Make them ready for it now:\n" + _documents_ready()
+        "From the machine tab, which manages this tab for the user: once this turn ends you "
+        "are restarted in a fresh conversation that has only your documents. Make them ready for it now:\n" + _documents_ready()
         + "Then end your turn saying the next session can continue from them.")
 
 
@@ -284,6 +285,9 @@ class Coordinator:
         if event.type == "run.ended":
             self._ask_report()
             return
+        if event.type == "channel.heard" and event.data["cause"] == REPORT_ASKED:
+            self.session.report_asked()
+            return
         tab = self.session.intent.tabs.get(event.tab) if event.tab else None
         if tab is None:
             return
@@ -352,6 +356,9 @@ class Coordinator:
     def _give_back(self, tab: TabIntent) -> None:
         until, held = tab.until, tab.held
         self.session.manage(tab.tab_id, False, why="time")
+        run = self.session.intent.run
+        if run is not None and run.ended is not None:
+            return      # the last tab: the report request, which follows, says it
         state = ("was held for them, and stays on Remote Control as it stands" if held
                  else "made its documents ready")
         self._to_machine(tab.tab_id, "coordinator.given_back", (
@@ -544,6 +551,11 @@ class Verbs:
         until = time.time() + hours * 3600 if hours is not None else None
         managed = self.session.manage(tab, on, stop_when, until)
         if not on:
+            run = self.session.intent.run
+            if run is not None and run.ended is not None:
+                return {**managed, "next": "That was the last tab, so the run is over: the "
+                                           "daemon's request for the user's report reaches "
+                                           "you when this turn ends."}
             return managed
         return {**managed, "until": self.session.intent.tabs[tab].until,
                 "next": f"Keep ~/{documents.RUN_RECORD}, the run's record across your "
@@ -588,14 +600,19 @@ class Verbs:
 
     def direct(self, tab: str, content: str) -> dict[str, Any]:
         """One way: it is the tab's next message once its turn ends; nothing comes back."""
-        self._unheld(tab)
+        agent = self._unheld(tab)
         if not content.strip():
             raise SessionError("a directive needs words")
         self.events.emit("coordinator.directed", tab=tab, deliver={
             "content": f"From the machine tab, which manages this tab for the user:\n\n"
                        f"{content}", "meta": {"from": "machine"}})
-        return {"tab": tab, "status": "queued",
-                "next": "It is pushed when the tab's turn ends; you are told when it is idle."}
+        if agent.busy:
+            return {"tab": tab, "status": "queued",
+                    "next": "It is pushed when the tab's turn ends; you are told when it is "
+                            "idle."}
+        return {"tab": tab, "status": "pushed",
+                "next": "The tab is idle, so it starts on this now, after anything already on "
+                        "its way to it; you are told when that turn ends."}
 
     def answer_question(self, id: str, answer: str) -> dict[str, Any]:
         item = self.questions.items().get(id)

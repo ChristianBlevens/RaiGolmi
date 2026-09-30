@@ -6,6 +6,7 @@ transitions, and the build-lock and queue logic, as pure Python.
 from __future__ import annotations
 
 import json
+import os
 
 from pathlib import Path
 
@@ -409,8 +410,17 @@ def test_a_closed_tabs_home_is_archived_and_the_fresh_tab_starts_fresh(h):
     assert not home.exists()
     (closed,) = h.events_of("tab.closed")
     archived = h.paths.agent_archive / closed.data["archive"]
-    assert list((archived / ".claude" / "projects" / "-work").glob("*.jsonl"))
-    assert not h.session.agents.has_conversation(h.tab("myapi"))
+    [kept] = (archived / ".claude" / "projects" / "-work").glob("*.jsonl")
+    fresh = h.tab("myapi")
+    assert not h.session.agents.has_conversation(fresh)
+    # `/resume` lists it beside the new tab's own, and resumes it writing on in the archive.
+    projects = h.session.agents.home(fresh) / ".claude" / "projects"
+    [linked] = projects.glob(f"-archived-{archived.name}/*.jsonl")
+    assert os.path.samefile(linked, kept)
+    h.session.close_tab(fresh)
+    (_, again) = h.events_of("tab.closed")
+    assert not list((h.paths.agent_archive / again.data["archive"] / ".claude" / "projects")
+                    .glob("-archived-*")), "an archive holds its own conversation only"
 
 
 def test_a_new_tab_refuses_a_home_an_earlier_tab_left(h):

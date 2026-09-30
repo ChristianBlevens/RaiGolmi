@@ -94,9 +94,12 @@ class StopRecord:
 @dataclass(slots=True)
 class Run:
     """The machine tab managing tabs for the user, from the first tab handed to it until it
-    reports on the run; `ended` is when the last was given back, None while any is managed."""
+    reports on the run; `ended` is when the last was given back, None while any is managed.
+    `asked` is when the machine tab heard the daemon's request for the report, which carries
+    the daemon's own record of the run; a report is taken only after it."""
     started: float
     ended: float | None = None
+    asked: float | None = None
 
 
 @dataclass(slots=True)

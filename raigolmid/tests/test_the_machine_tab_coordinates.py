@@ -181,7 +181,8 @@ def test_a_directive_is_the_managed_tabs_next_message(h):
     with pytest.raises(SessionError, match="not a tab you manage"):
         m.tab(MACHINE)["direct"](tab=BODY, content="run the tests")
     m.tab(MACHINE)["manage"](tab=BODY)
-    m.tab(MACHINE)["direct"](tab=BODY, content="run the tests")
+    assert m.tab(MACHINE)["direct"](tab=BODY, content="run the tests")["status"] == "pushed", \
+        "an idle tab starts on it at once"
     [directed] = m.queued(BODY)
     assert directed["meta"] == {"from": "machine"}
     assert directed["content"].startswith("From the machine tab")
@@ -351,7 +352,9 @@ def test_a_tab_whose_time_runs_out_makes_its_documents_ready_and_is_given_back(h
     assert not h.session.intent.tabs[BODY].managed
     [given_back] = [e for e in h.events_of("tab.managed") if not e.data["on"]]
     assert given_back.data["why"] == "time"
-    assert "is given back to them" in m.queued(MACHINE)[-2]["content"]
+    told = [q["content"] for q in m.queued(MACHINE)]
+    assert "report_run" in told[-1] and not any("is given back to them" in t for t in told), \
+        "the last tab's give-back is said by the report request alone"
     [ended] = h.events_of("run.ended")
     assert ended.data["ended"] >= ended.data["started"]
 
@@ -368,7 +371,10 @@ def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
     with pytest.raises(SessionError, match="not over"):
         m.tab(MACHINE)["report_run"](report="done")
 
-    m.tab(MACHINE)["manage"](tab=BODY, on=False)        # the user said stop
+    stopped = m.tab(MACHINE)["manage"](tab=BODY, on=False)        # the user said stop
+    assert "reaches you when this turn ends" in stopped["next"]
+    with pytest.raises(SessionError, match="when this turn ends"):    # before its record
+        m.tab(MACHINE)["report_run"](report="done")
     m.pump()
     [asked] = [q for q in m.queued(MACHINE) if "report_run" in q["content"]]
     assert asked["meta"] == {"from": "daemon"}
@@ -380,6 +386,8 @@ def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
     m.coordinator.announce()
     assert len([q for q in m.queued(MACHINE) if "report_run" in q["content"]]) == 1
 
+    while h.session.intent.run.asked is None:
+        _hear(m, MACHINE)
     filed = m.tab(MACHINE)["report_run"](report="tab-2: the parser passes; next is the CLI")
     assert h.session.intent.run is None
     report = h.paths.runs / filed["report"].rsplit("/", 1)[-1]

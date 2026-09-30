@@ -1453,7 +1453,7 @@ class Session:
                 if self.intent.run is None:
                     self.intent.run = Run(started=time.time())
                 # A tab handed over before the machine tab reports joins the same run.
-                self.intent.run.ended = None
+                self.intent.run.ended = self.intent.run.asked = None
             else:
                 # A handover and a hold are the machine tab's, ended with its hold on the tab.
                 tab.handover = tab.stop_when = tab.held = tab.until = None
@@ -1472,6 +1472,15 @@ class Session:
             return None
         run.ended = time.time()
         return run
+
+    def report_asked(self) -> None:
+        """The machine tab has heard the request for the run's report."""
+        with self._lock:
+            run = self.intent.run
+            if run is None or run.ended is None or run.asked is not None:
+                return
+            run.asked = time.time()
+            self.store.save(self.intent)
 
     def _say_run_ended(self, run: Run | None) -> None:
         if run is not None:
@@ -1492,8 +1501,12 @@ class Session:
                 raise SessionError(
                     f"the run is not over: you still manage {', '.join(sorted(self.managed_tabs()))}"
                     "; give each back with `manage` (`on` false) first")
+            if run.asked is None:
+                raise SessionError(
+                    "the daemon's request for the report, with its own record of the run, "
+                    "reaches you when this turn ends: end your turn and write the report then")
             name = time.strftime("%Y%m%dT%H%M%S", time.localtime(run.started))
-            span = " to ".join(time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+            span = " to ".join(time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(t))
                                for t in (run.started, run.ended))
             self.paths.runs.mkdir(parents=True, exist_ok=True)
             path = self.paths.runs / f"{name}.md"

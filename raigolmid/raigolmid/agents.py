@@ -30,7 +30,7 @@ from typing import Any
 from . import (claude_login, credential, credproxy, documents, git, hostimages, labels, localtime,
                naming, settings)
 from .events import EventLog
-from .intent import TabIntent
+from .intent import MANAGER, TabIntent
 from .paths import Paths
 from .runtime import ContainerRuntime, ContainerSpec, Mount
 
@@ -45,6 +45,9 @@ CHANNEL = ("--channels", "plugin:raigolmi@raigolmi")
 PLUGINS = "/agent/plugins"
 # The layer-authoring guide, a product doc under the source (`agents/guide/`).
 GUIDE = "agents/guide"
+# The prefix of a project directory in a tab's home that links an archived conversation
+# (`Agents._link_archived`).
+ARCHIVED = "-archived-"
 
 MANAGER_TEMPLATE = """\
 # The manager tab
@@ -224,12 +227,14 @@ with `docker commit`.
 - Each face's apps keep their own settings; `seed_face_settings` starts one face's from
   another's.
 - `ask_user` puts to the user, in this tab, a choice that is theirs. End your turn: their answer
-  is your next message.
+  is your next message. A question written only in your reply reaches nobody.
 
 ## Working without the user
 
 Every agent keeps to a {budget}-token context budget, so keep `~/thoughts.md` good enough to
-continue from in a fresh conversation. The user can hand body tabs to the machine tab to manage,
+continue from in a fresh conversation. Your context use is the input your latest answer took —
+the last `usage` in the newest `~/.claude/projects/-work/*.jsonl` — which is what the daemon
+measures; read it there rather than estimating. The user can hand body tabs to the machine tab to manage,
 and is then away: nothing a managed tab or the machine tab does waits on them. A managed tab's
 questions that the user's preferences cannot answer go to the machine tab, whose answer arrives
 as the user's would, and a message *From the machine tab* is its direction to you. A turn an API
@@ -246,7 +251,9 @@ for where it stops for them, when they give one — and is told when each turn i
 At that stop it `hold`s the tab, which then puts the situation to the user on their phone
 through Remote Control; unsure whether the stop is reached, it goes on, and has the tab note the
 doubt in its thought doc and commit, so the user can return to that point. It sees those tabs with `managed` and `managed_tab`, steers them with `direct`, and
-answers their questions with `answer_question` — never putting one to the user. At the budget,
+answers their questions with `answer_question` — never putting one to the user. The rules a
+managed tab's own documents give it — its test budget, what it may ask — are the user's and bind
+the machine tab's directions too: one that stands in the way goes in the report, never reread. At the budget,
 `restart_fresh` first has the tab make its documents ready for its next conversation; once told
 that turn has ended, it reads them with `managed_tab` and either `direct`s the tab to fix what is
 stale or calls `restart_fresh` again, which starts it fresh on `SESSION-START.md`. At its own
@@ -386,6 +393,7 @@ class Agents:
                 f"{home} is left from an earlier {spec.tab.tab_id} whose close could not "
                 f"archive it; it holds {git.remaining(home)}. Move it, then open the tab.")
         home.mkdir(parents=True, exist_ok=not fresh_home)
+        self._link_archived(spec.tab)
         self._sign_in(spec.tab.tab_id, home, held)
         context = self.write_context(spec, home)
 
@@ -551,6 +559,7 @@ class Agents:
         home = self.home(tab_id)
         if not home.exists():
             return None
+        self._unlink_archived(tab_id)
         return self._archive(home, tab_id, record)
 
     def archive_conversation(self, tab_id: str, record: dict[str, Any]) -> str | None:
@@ -570,6 +579,38 @@ class Agents:
         if archived is not None:
             shutil.copy2(thoughts, self.paths.agent_archive / archived / documents.THOUGHTS)
         os.replace(thoughts, home / documents.PREVIOUS_THOUGHTS)
+
+    def _link_archived(self, tab: TabIntent) -> None:
+        """Every archived conversation of this tab's kind — its body's, the machine tab's or
+        the manager's — linked into its home beside its own, so Claude Code's `/resume`
+        lists them under *all projects* (Ctrl+A) and resumes one in place, writing on in the
+        archive. Beside `-work`, never in it: `--continue` reads only `-work`, so a reopen
+        still resumes the tab's own conversation and a new tab still starts fresh. Hard
+        links, on the archive's own filesystem; relinked at every start, so a pruned archive
+        is dropped here then. A conversation resumed from the archive is not the one a crash
+        reopens."""
+        self._unlink_archived(tab.tab_id)
+        projects = self.home(tab.tab_id) / ".claude" / "projects"
+        for record in sorted(self.paths.agent_archive.glob("*.json")):
+            kept = json.loads(record.read_text(encoding="utf-8"))
+            if (kept.get("body") != tab.body
+                    or (kept.get("tab") == MANAGER) != tab.manager):
+                continue
+            archived = record.with_suffix("")
+            source = (archived if kept.get("fresh_restart")
+                      else archived / ".claude" / "projects" / "-work")
+            if not source.is_dir():
+                continue
+            target = projects / f"{ARCHIVED}{archived.name}"
+            for root, _dirs, files in os.walk(source):
+                into = target / Path(root).relative_to(source)
+                into.mkdir(parents=True, exist_ok=True)
+                for name in files:
+                    os.link(Path(root) / name, into / name)
+
+    def _unlink_archived(self, tab_id: str) -> None:
+        for linked in (self.home(tab_id) / ".claude" / "projects").glob(f"{ARCHIVED}*"):
+            shutil.rmtree(linked)
 
     def _conversation(self, tab_id: str) -> Path:
         """The project directory Claude Code names for /work, which holds its transcripts."""
