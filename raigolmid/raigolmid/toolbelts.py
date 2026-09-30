@@ -245,8 +245,8 @@ def _nixery_answer(reference: str) -> tuple[str, bool]:
             return f"HTTP {exc.code}: {body[:500]}", False
     except urllib.error.URLError as exc:
         return f"nothing: it could not be reached ({exc.reason})", False
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return f"nothing: it could not be asked ({exc})"
+    except (TimeoutError, OSError) as exc:
+        return f"nothing: it could not be asked ({exc})", False
 
 
 class ToolbeltResolver:
