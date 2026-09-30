@@ -19,9 +19,10 @@ logger = logging.getLogger(__name__)
 RECONNECT_SECONDS = 2.0
 
 
-def follow(client: ApiClient, prefixes: tuple[str, ...], fetch: Callable[[], None]) -> None:
+def follow(client: ApiClient, prefixes: tuple[str, ...], fetch: Callable[[], None],
+           lost: Callable[[str], None] | None = None) -> None:
     """`fetch()` once each stream is acknowledged, and on every event whose type starts with
-    one of `prefixes`."""
+    one of `prefixes`; `lost(why)` each time a stream ends or cannot be opened."""
     while True:
         subscribed = threading.Event()
 
@@ -35,9 +36,13 @@ def follow(client: ApiClient, prefixes: tuple[str, ...], fetch: Callable[[], Non
                 if event["type"].startswith(prefixes):
                     fetch()
         except (ApiError, OSError) as exc:
+            why = str(exc)
             logger.warning("the daemon's event stream ended: %s; following it again in "
                            "%.0fs", exc, RECONNECT_SECONDS)
         else:
+            why = "the daemon closed the event stream"
             logger.warning("the daemon closed the event stream; following it again")
+        if lost is not None:
+            lost(why)
         subscribed.set()
         time.sleep(RECONNECT_SECONDS)

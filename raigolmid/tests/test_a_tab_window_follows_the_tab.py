@@ -415,8 +415,10 @@ def test_a_daemon_restart_is_outlived_by_the_window(monkeypatch):
 
 
 class _BaseWindow:
-    """The base window's pane as tmux keeps it: what runs in it, its window options, and
-    `respawn-pane -k` replacing what runs. Any other command is refused."""
+    """The base window as tmux keeps it: its status pane and its shell pane, what runs in the
+    shell, the window's options, and `respawn-pane -k` replacing what runs. Any other command
+    is refused, and so is the status pane as a target."""
+    SHELL, STATUS = "%1", "%0"
 
     def __init__(self, monkeypatch, running: str) -> None:
         self.running, self.options, self.respawned = running, {}, []
@@ -424,15 +426,17 @@ class _BaseWindow:
         monkeypatch.setattr(terminal, "_tmux", self)
 
     def __call__(self, *args, **_kwargs):
-        target = f"={terminal.SESSION}:={terminal.BASE}"
+        window = f"={terminal.SESSION}:={terminal.BASE}"
         out = ""
-        if args[:4] == ("show-options", "-wqv", "-t", target):
+        if args[:4] == ("show-options", "-wqv", "-t", window):
             out = self.options.get(args[4], "")
-        elif args == ("display-message", "-p", "-t", target, "#{pane_current_command}"):
+        elif args == ("list-panes", "-t", window, "-F", "#{pane_id} #{@status}"):
+            out = f"{self.STATUS} on\n{self.SHELL} \n"
+        elif args == ("display-message", "-p", "-t", self.SHELL, "#{pane_current_command}"):
             out = self.running
-        elif args[:4] == ("set-option", "-w", "-t", target):
+        elif args[:4] == ("set-option", "-w", "-t", window):
             self.options[args[4]] = args[5]
-        elif args[:4] == ("respawn-pane", "-k", "-t", target):
+        elif args[:4] == ("respawn-pane", "-k", "-t", self.SHELL):
             self.respawned.append(args[4:])
             self.running = "rai"
         else:
@@ -445,7 +449,8 @@ def test_a_claude_login_that_ended_is_asked_again_in_the_base_window_once(monkey
     terminal.offer_claude_login("100.5")
     [(shell, flag, command)] = base.respawned
     assert (shell, flag) == ("/bin/bash", "-c")
-    assert command == "trap : INT; rai claude-login --login; exec /bin/bash"
+    assert command == ("trap : INT; rai claude-login --login; /bin/bash; "
+                       'exec tmux kill-window -t "$TMUX_PANE"')
     base.running = "bash"               # signed in, back at the shell
     terminal.offer_claude_login("100.5")
     assert len(base.respawned) == 1, "every tab window hears the ending; it is asked once"

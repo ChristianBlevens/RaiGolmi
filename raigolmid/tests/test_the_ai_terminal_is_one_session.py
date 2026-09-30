@@ -59,12 +59,12 @@ def test_the_floor_binding_is_not_taken_by_that_rule():
 
 def test_the_base_window_command_cannot_exit():
     """A window whose command exits takes the window, and the last window takes the session.
-    The terminal must be reachable with raigolmid down, so the base window is a shell with
-    `rai status` run inside it rather than as the window's command."""
+    The terminal must be reachable with raigolmid down, so the base window's command is a
+    shell and the status is a pane beside it that stays when it fails."""
     import inspect
 
     from ui.ai_terminal import terminal
 
     source = inspect.getsource(terminal.ensure_session)
-    assert "exec" in source, source
-    assert '"rai", "status"' not in source, source
+    assert '"new-session", "-d", "-s", SESSION, "-n", BASE, *_base_command(' in source, source
+    assert '"rai", "status", "--follow"' in source and '"remain-on-exit", "on"' in source

@@ -40,36 +40,89 @@ def _print(value: Any, raw: bool = False) -> None:
 # --- commands ---------------------------------------------------------------------------
 
 def cmd_status(args) -> int:
+    if getattr(args, "follow", False):
+        return _follow_status()
     status = _client().call("status")
     if args.json:
         _print(status)
         return 0
+    text, warnings = _status_text(status)
+    print(text)
+    for warning in warnings:
+        print(f"\n{warning}", file=sys.stderr)
+    return 0
+
+
+def _status_text(status: dict) -> tuple[str, list[str]]:
+    """What `rai status` prints: the state, and the warnings that go to stderr."""
     session = status["session"]
-    print(f"face:     {session['face'] or '—'}")
-    print(f"toolbelt: {session['toolbelt'] or '—'}")
-    print(f"body:     {session['body'] or '—'}")
-    print(f"state:    {session['meaning']}")
+    lines = [f"face:     {session['face'] or '—'}",
+             f"toolbelt: {session['toolbelt'] or '—'}",
+             f"body:     {session['body'] or '—'}",
+             f"state:    {session['meaning']}"]
     if status["instances"]:
-        print("\nsandboxes:")
+        lines += ["", "sandboxes:"]
         for iid, inst in sorted(status["instances"].items()):
             health = inst["health"]
             reason = f" — {inst['reason']}" if inst.get("reason") else ""
             focus = " ←active" if iid == session["focused_instance"] else ""
-            print(f"  {iid:<35} {health}{reason}{focus}")
-            print(f"       gen {inst['view_generation']}  refs {', '.join(inst['refs'])}")
+            lines.append(f"  {iid:<35} {health}{reason}{focus}")
+            lines.append(f"       gen {inst['view_generation']}  refs {', '.join(inst['refs'])}")
     if status["agents"]:
-        print("\nagents:")
+        lines += ["", "agents:"]
         for agent in status["agents"]:
             scope = agent["scope"]
             where = scope if isinstance(scope, str) else scope["body"]
             mark = "●" if agent.get("marked") else " "
-            print(f"{mark} {agent['tab']:<10} {where:<24} [{agent['status']}, "
-                  f"{agent['state']}]")
-    for error in status.get("definition_errors", []):
-        print(f"\ndefinition error: {error}", file=sys.stderr)
-    for iid, changed in (status.get("protected_git_changes") or {}).items():
-        print(f"\nWARNING protected git files changed in {iid}: {', '.join(changed)}",
-              file=sys.stderr)
+            lines.append(f"{mark} {agent['tab']:<10} {where:<24} [{agent['status']}, "
+                         f"{agent['state']}]")
+    warnings = [f"definition error: {error}" for error in status.get("definition_errors", [])]
+    warnings += [f"WARNING protected git files changed in {iid}: {', '.join(changed)}"
+                 for iid, changed in (status.get("protected_git_changes") or {}).items()]
+    return "\n".join(lines), warnings
+
+
+def _follow_status() -> int:
+    """`rai status`, redrawn from the daemon on each of its events for as long as it runs —
+    the AI terminal's base window shows it above its shell. The events say only when to
+    look (`ui.hostevents`); a daemon that is not answering is said, never left showing the
+    last state it gave. In tmux the pane is fitted to what is drawn."""
+    import threading
+
+    from ui.hostevents import follow
+
+    client = _client()
+    lock = threading.Lock()
+
+    def draw(text: str) -> None:
+        columns = shutil.get_terminal_size().columns
+        lines = [line[:columns] for line in text.splitlines()]
+        with lock:
+            sys.stdout.write("\033[?25l\033[H\033[2J" + "\n".join(lines))
+            sys.stdout.flush()
+            pane = os.environ.get("TMUX_PANE")
+            if pane is not None:
+                # Never more than half the window: the shell under it is the one to type in.
+                height = int(subprocess.run(
+                    ["tmux", "display-message", "-p", "-t", pane, "#{window_height}"],
+                    check=True, capture_output=True, text=True).stdout)
+                subprocess.run(["tmux", "resize-pane", "-t", pane,
+                                "-y", str(max(1, min(len(lines), height // 2)))], check=True)
+
+    def fetch() -> None:
+        try:
+            status = client.call("status")
+        except ApiError as exc:
+            lost(str(exc))
+            return
+        text, warnings = _status_text(status)
+        draw("\n".join([text, *warnings]))
+
+    def lost(why: str) -> None:
+        draw(f"raigolmid is not answering: {why}\n"
+             "`systemctl --user status raigolmid` says why; this redraws once it is back.")
+
+    follow(client, ("",), fetch, lost)
     return 0
 
 
@@ -859,7 +912,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("status", help="full state").set_defaults(fn=cmd_status)
+    p = sub.add_parser("status", help="full state")
+    p.add_argument("--follow", action="store_true",
+                   help="redraw on every change until interrupted")
+    p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("list", help="faces, toolbelts and bodies with availability")
     p.add_argument("kind", nargs="?", choices=["face", "toolbelt", "body"])

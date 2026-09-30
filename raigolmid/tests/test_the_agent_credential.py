@@ -42,12 +42,12 @@ def test_the_ai_terminal_opens_on_the_question_only_when_it_is_open(tmp_path, mo
     from raigolmid.paths import Paths
     paths = Paths.from_env()
     credential.write(paths.agent_credentials, "CLAUDE_CODE_OAUTH_TOKEN", "token")
-    assert _first_command() == f"{github}{claude}rai status", "asked until signed in"
+    assert _first_command() == f"{github}{claude}".removesuffix("; "), "asked until signed in"
 
     credential.write(paths.registry_token, "GITHUB_TOKEN", "gho_x", credential.REGISTRY_KEYS)
-    assert _first_command() == f"{claude}rai status"
+    assert _first_command() == claude.removesuffix("; ")
     claude_login.write(paths.claude_login, {
         "claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": 1,
                           "scopes": [claude_login.SESSIONS_SCOPE]},
         "oauthAccount": {"organizationUuid": "org-1"}})
-    assert _first_command() == "rai status"
+    assert _first_command() == ""

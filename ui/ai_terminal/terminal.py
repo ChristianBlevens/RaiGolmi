@@ -32,7 +32,8 @@ from ui import theme
 from ui.theme import SPINNER
 
 SESSION = "raigolmi-ai"
-# The window that is no tab's: the first start's sign-ins, then a shell.
+# The window that is no tab's: the first start's sign-ins, then a shell, under the machine's
+# state kept current (`rai status --follow`) in the pane above it, which carries `@status`.
 BASE = "raigolmi"
 # prefix, then this: the current tab's permission put back after an Escape.
 PERMISSION_KEY = "a"
@@ -127,7 +128,7 @@ def _first_command() -> str:
     A machine with no credential can start no agent, and the user who has to supply one
     is whoever opened this window — on a fresh machine there is nobody else, and no browser to
     be redirected to. So the terminal opens on the question instead of on a status that would
-    only say the same thing in smaller print."""
+    only say the same thing in smaller print. Nothing asked is the empty command."""
     from raigolmid import claude_login, credential
     from raigolmid.paths import Paths
 
@@ -141,7 +142,7 @@ def _first_command() -> str:
     if not claude_login.is_set(paths.claude_login):
         github += "rai claude-login --login; "
     if credential.is_set(paths.agent_credentials):
-        return f"{github}rai status"
+        return github.removesuffix("; ")
     # A token given is an agent wanted: the tab opens the moment there is one.
     return f"rai credential --set && {{ {github}rai ai ready; }}"
 
@@ -151,10 +152,23 @@ def _shell() -> str:
 
 
 def _base_command(first: str) -> list[str]:
-    """The base window: `first`, then the user's shell. A Ctrl+C that kills a command outright
-    would take the non-interactive shell with it, and the window; trapped (not ignored, so
-    each command still takes it), the shell goes on to its interactive one."""
-    return [_shell(), "-c", f"trap : INT; {first}; exec {shlex.quote(_shell())}"]
+    """The base window's shell pane: `first`, then the user's shell, whose exit closes the
+    window as a lone pane's would, status pane included. A Ctrl+C that kills a command outright
+    would take the non-interactive shell with it; trapped (not ignored, so each command still
+    takes it), the shell goes on to its interactive one."""
+    steps = ["trap : INT", *([first] if first else []), shlex.quote(_shell()),
+             'exec tmux kill-window -t "$TMUX_PANE"']
+    return [_shell(), "-c", "; ".join(steps)]
+
+
+def _base_shell() -> str:
+    """The base window's shell pane: the one that is not its status pane."""
+    panes = _tmux("list-panes", "-t", f"={SESSION}:={BASE}", "-F",
+                  "#{pane_id} #{@status}").stdout.split("\n")
+    shells = [line.split()[0] for line in panes if line.strip() and len(line.split()) == 1]
+    if len(shells) != 1:
+        raise TerminalError(f"the base window has {len(shells)} shell panes, not one: {panes}")
+    return shells[0]
 
 
 def offer_claude_login(ended: str) -> None:
@@ -165,11 +179,12 @@ def offer_claude_login(ended: str) -> None:
     target = f"={SESSION}:={BASE}"
     if _tmux("show-options", "-wqv", "-t", target, "@claude_login_asked").stdout.strip() == ended:
         return
-    at = _tmux("display-message", "-p", "-t", target, "#{pane_current_command}").stdout.strip()
+    shell = _base_shell()
+    at = _tmux("display-message", "-p", "-t", shell, "#{pane_current_command}").stdout.strip()
     if at != os.path.basename(_shell()):
         return
     _tmux("set-option", "-w", "-t", target, "@claude_login_asked", ended)
-    _tmux("respawn-pane", "-k", "-t", target, *_base_command("rai claude-login --login"))
+    _tmux("respawn-pane", "-k", "-t", shell, *_base_command("rai claude-login --login"))
 
 
 def session_exists() -> bool:
@@ -177,14 +192,18 @@ def session_exists() -> bool:
 
 
 def ensure_session() -> None:
-    """The base window is a shell, not `rai status`. A window whose command exits takes the
-    window with it and the last window takes the session, so a status command that fails
-    leaves no AI terminal in the one state that requires it — raigolmid down, which is the
-    state an agent repairs the daemon from. Inside the shell its failure prints the recovery
-    hint instead of removing the way to act on it.
+    """The base window is a shell, with `rai status --follow` in a pane above it rather than
+    as the window's command. A window whose command exits takes the window with it and the
+    last window takes the session, so a status that fails would leave no AI terminal in the
+    one state that requires it — raigolmid down, which is the state an agent repairs the
+    daemon from. The status pane says the daemon is not answering, and stays when it fails.
     """
     if not session_exists():
         _tmux("new-session", "-d", "-s", SESSION, "-n", BASE, *_base_command(_first_command()))
+        status = _tmux("split-window", "-d", "-b", "-v", "-l", "1", "-P", "-F", "#{pane_id}",
+                       "-t", f"={SESSION}:={BASE}", "rai", "status", "--follow").stdout.strip()
+        _tmux("set-option", "-p", "-t", status, "@status", "on", ";",
+              "set-option", "-p", "-t", status, "remain-on-exit", "on")
     # Also on a session this did not create: the host config's floor starts bare tmux on
     # the same session name, and adopting it should not leave it unstyled.
     commands: list[str] = []
