@@ -57,6 +57,7 @@ TAKEN = frozenset({
     "watch.failed",
     "channel.unheard",            # another tab's session not hearing its channel
     "channel.silent",             # another tab's channel no longer asking
+    "coordinator.unanswered",     # the machine tab not confirming its own handover
     "documents.maintenance",      # a doc over budget, stale or naming the dead
     "documents.maintenance_failed",
 })

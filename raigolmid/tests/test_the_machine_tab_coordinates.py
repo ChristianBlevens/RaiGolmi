@@ -11,6 +11,7 @@ from raigolmid import claude_login, naming
 from raigolmid.api import with_marks, with_tab_states
 from raigolmid.channel import Channels
 from raigolmid.coordinator import Coordinator
+from raigolmid.manager import TAKEN
 from raigolmid.questions import Questions
 from raigolmid.scopes import build_tab_methods
 from raigolmid.session import SessionError
@@ -252,11 +253,20 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_restarts_on_
     m.pump()
     assert "`ready_to_restart`" in m.queued(MACHINE)[-1]["content"]
 
-    # A turn that heard the ask and did not say ready is asked again.
+    # A turn that heard the ask and did not say ready is the tab failing: said once, for the
+    # manager, and not asked again however often it goes idle.
     _hear(m, MACHINE)
-    assert "`ready_to_restart`" in m.queued(MACHINE)[-1]["content"]
-    item = m.channels.take(MACHINE)
-    m.tab(MACHINE)["agent_activity"](busy=True, channel_seq=item["seq"])
+    for _ in range(3):
+        m.tab(MACHINE)["agent_activity"](busy=True)
+        m.tab(MACHINE)["agent_activity"](busy=False)
+        m.pump()
+    assert m.queued(MACHINE) == []
+    [unanswered] = h.events_of("coordinator.unanswered")
+    assert unanswered.tab == MACHINE and "ready_to_restart" in unanswered.data["message"]
+    assert "coordinator.unanswered" in TAKEN
+
+    # Repaired, it says ready and is restarted at that turn's end.
+    m.tab(MACHINE)["agent_activity"](busy=True)
     m.tab(MACHINE)["ready_to_restart"]()
     m.tab(MACHINE)["agent_activity"](busy=False)
     m.pump()

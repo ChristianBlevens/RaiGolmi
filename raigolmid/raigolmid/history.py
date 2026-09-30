@@ -125,6 +125,7 @@ NOTICED: dict[str, Callable[[Event], str]] = {
     "look.failed": lambda e: f"Your look settings were not applied: {e.data['error']}",
     "manager.unfixable": lambda e: e.data["message"],
     "channel.unheard": lambda e: e.data["message"],
+    "coordinator.unanswered": lambda e: e.data["message"],
     "manager.open_failed": lambda e: f"The manager tab could not open: {e.data['error']}",
     "agent.turn_failed": lambda e: e.data["message"],
     "claude_login.lost": lambda e: (

@@ -265,8 +265,10 @@ class Coordinator:
 
     def _machine_idle(self, tab_id: str, handover: str | None, error: str | None) -> None:
         """The machine tab's own handover, only while the user is away (`Intent.hands_off`):
-        asked at its budget, asked again after a turn that heard it and did not say ready, and
-        restarted after the turn that did."""
+        asked at its budget and restarted after the turn that said ready. A turn that heard it
+        and ended without saying so is the tab failing, not a reason to ask again (the owner,
+        2026-09-29): it is said as `coordinator.unanswered`, which the manager takes, and
+        nothing more is asked until it says ready."""
         if not self.session.intent.hands_off(tab_id):
             if handover is not None:
                 self.session.hand_over(tab_id, None)    # the user is back: theirs to close
@@ -284,11 +286,21 @@ class Coordinator:
             self.events.emit("coordinator.machine_restarted", tab=tab_id, deliver={
                 "content": machine_restart_message(), "meta": {"from": "daemon"}})
             return
-        if handover == "asked":
-            return          # its push is on its way
+        if handover in ("asked", "unanswered"):
+            return          # its push is on its way, or the manager has it
+        if handover == "heard":
+            self.session.hand_over(tab_id, "unanswered")
+            reply = transcript_tail(self.session.agents.home(tab_id), 1)
+            self.events.emit("coordinator.unanswered", tab=tab_id, message=(
+                f"The machine tab {tab_id} was asked to make its thought doc ready and call "
+                "`ready_to_restart` at its context budget, and ended its turn without doing "
+                "so; nothing more is asked of it. It restarts once it calls "
+                "`ready_to_restart`. Its last words: "
+                + (reply[0]["said"] if reply else "(none)")))
+            return
         tokens = context_tokens(self.session.agents.home(tab_id))
         budget = settings.load(self.session.paths.settings).budget_tokens
-        if handover is None and (tokens is None or tokens < budget):
+        if tokens is None or tokens < budget:
             return
         self.session.hand_over(tab_id, "asked")
         self.events.emit(RESTART_ASKED, tab=tab_id, deliver={
@@ -354,7 +366,7 @@ def methods(session: "Session", questions: Questions, channels: Channels,
 
     def ready_to_restart() -> dict[str, Any]:
         tab = session.intent.tabs[caller]
-        if tab.handover not in ("asked", "heard"):
+        if tab.handover not in ("asked", "heard", "unanswered"):
             raise SessionError("nothing asked you to restart: the daemon asks at your context "
                                "budget while you manage tabs")
         session.hand_over(caller, "ready")
