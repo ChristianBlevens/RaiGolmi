@@ -11,6 +11,11 @@ refreshed in two places would have each refresh spend the other's refresh token.
 The refresh is Claude Code's own (2.1.283): a JSON POST of the refresh token, the client id
 and the scopes to `TOKEN_URL`, answered with `access_token`, `expires_in` and, when it turns,
 `refresh_token`.
+
+It is asked again only when it has ended: its refresh token refused as `invalid_grant` (which
+Claude Code also takes as its tokens gone) or past `refreshTokenExpiresAt`. The file is then
+removed, so every place that asks whether it is set asks for it again (`claude_login.lost`,
+answered in the AI terminal's base window); any other failed renewal is retried.
 """
 from __future__ import annotations
 
@@ -37,6 +42,10 @@ RETRY_SECONDS = 300.0
 
 class LoginError(RuntimeError):
     pass
+
+
+class LoginEnded(LoginError):
+    """Only a new sign-in brings it back."""
 
 
 def read(path: Path) -> dict[str, Any]:
@@ -99,8 +108,13 @@ def refreshed(login: dict[str, Any], now: float) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=30) as answer:
             said = json.loads(answer.read())
     except urllib.error.HTTPError as exc:
-        raise LoginError(f"{TOKEN_URL} refused the refresh: {exc.code} "
-                         f"{exc.read()[:300].decode(errors='replace')}") from exc
+        said = exc.read()[:300].decode(errors="replace")
+        try:
+            error = json.loads(said).get("error")
+        except (json.JSONDecodeError, AttributeError):
+            error = None
+        raise (LoginEnded if error == "invalid_grant" else LoginError)(
+            f"{TOKEN_URL} refused the refresh: {exc.code} {said}") from exc
     except (OSError, json.JSONDecodeError) as exc:
         raise LoginError(f"{TOKEN_URL} could not refresh the sign-in: {exc}") from exc
     new = {**oauth, "accessToken": said["access_token"],
@@ -114,7 +128,8 @@ def refreshed(login: dict[str, Any], now: float) -> dict[str, Any]:
 
 
 class Refresher:
-    """Renews the sign-in before it expires, and says so when it cannot."""
+    """Renews the sign-in before it expires, says so when it cannot, and removes it once it
+    has ended. A new one is said by the daemon's file watch (`claude_login.stored`)."""
 
     def __init__(self, path: Path, events: EventLog) -> None:
         self.path = path
@@ -129,10 +144,16 @@ class Refresher:
         if not self.path.exists() or now < self._retry_at:
             return
         try:
-            login = read(self.path)
-            if login["claudeAiOauth"]["expiresAt"] / 1000 - now > REFRESH_AHEAD_SECONDS:
+            oauth = read(self.path)["claudeAiOauth"]
+            if oauth.get("refreshTokenExpiresAt", now * 1000 + 1) / 1000 <= now:
+                raise LoginEnded("its refresh token has expired")
+            if oauth["expiresAt"] / 1000 - now > REFRESH_AHEAD_SECONDS:
                 return
-            write(self.path, refreshed(login, now))
+            write(self.path, refreshed(read(self.path), now))
+        except LoginEnded as exc:
+            self.path.unlink()
+            self.events.emit("claude_login.lost", error=str(exc))
+            return
         except LoginError as exc:
             self._retry_at = now + RETRY_SECONDS
             self.events.emit("claude_login.refresh_failed", error=str(exc))

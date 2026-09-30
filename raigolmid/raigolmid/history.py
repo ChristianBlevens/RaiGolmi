@@ -127,6 +127,9 @@ NOTICED: dict[str, Callable[[Event], str]] = {
     "channel.unheard": lambda e: e.data["message"],
     "manager.open_failed": lambda e: f"The manager tab could not open: {e.data['error']}",
     "agent.turn_failed": lambda e: e.data["message"],
+    "claude_login.lost": lambda e: (
+        f"Your claude.ai sign-in has ended ({e.data['error']}), so a held tab cannot reach your "
+        f"phone until you sign in again, in the AI terminal's first window"),
     "claude_login.refresh_failed": lambda e: (
         f"Your claude.ai sign-in could not be renewed, so a held tab cannot reach your phone: "
         f"{e.data['error']}"),
@@ -144,7 +147,8 @@ OVER = {"manager.opened": frozenset({"manager.open_failed"}),
         "keyboard.applied": frozenset({"keyboard.failed"}),
         "look.applied": frozenset({"look.failed"}),
         "credential.stored": frozenset({"agent.turn_failed"}),
-        "claude_login.refreshed": frozenset({"claude_login.refresh_failed"})}
+        "claude_login.refreshed": frozenset({"claude_login.refresh_failed"}),
+        "claude_login.stored": frozenset({"claude_login.refresh_failed", "claude_login.lost"})}
 
 # The user's own actions, when the event names them.
 BY_THE_USER = frozenset({"tab.opened", "tab.closed"})

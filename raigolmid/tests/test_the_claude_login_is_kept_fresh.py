@@ -64,15 +64,38 @@ def test_it_is_renewed_before_it_expires_and_not_before(tmp_path, token_endpoint
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
-def test_a_renewal_refused_is_said_and_tried_again_later(tmp_path, token_endpoint):
+def test_a_renewal_that_fails_is_said_and_tried_again_later(tmp_path, token_endpoint):
     path, events = tmp_path / "claude-login.json", EventLog(tmp_path / "events.jsonl")
     claude_login.write(path, _login(expires_in=60))
     token_endpoint.answer = urllib.error.HTTPError(
-        claude_login.TOKEN_URL, 400, "Bad Request", {}, io.BytesIO(b'{"error":"invalid_grant"}'))
+        claude_login.TOKEN_URL, 503, "Service Unavailable", {}, io.BytesIO(b'{"error":"busy"}'))
     refresher = claude_login.Refresher(path, events)
     refresher.tick(NOW)
     [failed] = [e for e in events.tail(10) if e.type == "claude_login.refresh_failed"]
-    assert "invalid_grant" in failed.data["error"]
+    assert "503" in failed.data["error"]
     refresher.tick(NOW + 1)
     assert len(token_endpoint) == 1, "not hammered"
     assert claude_login.read(path)["claudeAiOauth"]["accessToken"] == "old-access"
+    refresher.tick(NOW + claude_login.RETRY_SECONDS)
+    assert len(token_endpoint) == 2, "tried again"
+
+
+def test_a_sign_in_that_has_ended_is_removed_so_it_is_asked_again(tmp_path, token_endpoint):
+    """Only a new sign-in brings back a refresh token refused as `invalid_grant` or past its
+    expiry, so it is removed and said, and nothing retries it."""
+    events = EventLog(tmp_path / "events.jsonl")
+    refused, expired = tmp_path / "refused.json", tmp_path / "expired.json"
+    claude_login.write(refused, _login(expires_in=60))
+    token_endpoint.answer = urllib.error.HTTPError(
+        claude_login.TOKEN_URL, 400, "Bad Request", {}, io.BytesIO(b'{"error":"invalid_grant"}'))
+    claude_login.Refresher(refused, events).tick(NOW)
+    login = _login(expires_in=2 * claude_login.REFRESH_AHEAD_SECONDS)
+    login["claudeAiOauth"]["refreshTokenExpiresAt"] = int(NOW * 1000)
+    claude_login.write(expired, login)
+    claude_login.Refresher(expired, events).tick(NOW)
+
+    assert not refused.exists() and not expired.exists()
+    assert len(token_endpoint) == 1, "an expired refresh token is not sent"
+    lost = [e.data["error"] for e in events.tail(10) if e.type == "claude_login.lost"]
+    assert len(lost) == 2 and "invalid_grant" in lost[0] and "expired" in lost[1]
+    assert not any(e.type == "claude_login.refresh_failed" for e in events.tail(10))

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from raigolmid import credential
+from raigolmid import claude_login, credential
 from raigolmid.daemon import Daemon
 from raigolmid.paths import Paths
 
@@ -45,11 +45,14 @@ class _Events:
     def __init__(self) -> None:
         self.emitted: list[str] = []
         self.stored = threading.Event()
+        self.login_stored = threading.Event()
 
     def emit(self, type_: str, **data) -> None:
         self.emitted.append(type_)
         if type_ == "credential.stored":
             self.stored.set()
+        if type_ == "claude_login.stored":
+            self.login_stored.set()
 
 
 def _daemon(tmp_path: Path, session: _Session) -> Daemon:
@@ -134,6 +137,34 @@ def test_a_credential_stored_while_the_daemon_runs_is_said(tmp_path):
         assert not daemon.events.stored.is_set(), "said once, not on every wake"
         credential.write(daemon.paths.agent_credentials, "CLAUDE_CODE_OAUTH_TOKEN", "u")
         assert daemon.events.stored.wait(15), "a replaced credential was never said"
+    finally:
+        daemon._stop.set()
+        thread.join(15)
+
+
+def test_a_claude_login_given_while_the_daemon_runs_is_said_and_its_renewal_is_not(tmp_path):
+    """A sign-in given again after one ended settles the notice that asked for it."""
+    faces = tmp_path / "faces"
+    faces.mkdir()
+    daemon = _daemon(tmp_path, _Session({}, definitions=[faces]))
+    login = {"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": 1,
+                               "scopes": [claude_login.SESSIONS_SCOPE]},
+             "oauthAccount": {"organizationUuid": "org-1"}}
+    thread = threading.Thread(target=daemon._watch_files, daemon=True)
+    thread.start()
+    try:
+        threading.Event().wait(1.0)
+        claude_login.write(daemon.paths.claude_login, login)
+        assert daemon.events.login_stored.wait(15), "the sign-in was never said"
+        daemon.events.login_stored.clear()
+        claude_login.write(daemon.paths.claude_login,
+                           {**login, "claudeAiOauth": {**login["claudeAiOauth"], "accessToken": "b"}})
+        threading.Event().wait(2.0)
+        assert not daemon.events.login_stored.is_set(), "a renewal is not a sign-in"
+        daemon.paths.claude_login.unlink()
+        threading.Event().wait(2.0)
+        claude_login.write(daemon.paths.claude_login, login)
+        assert daemon.events.login_stored.wait(15), "a sign-in after one ended was never said"
     finally:
         daemon._stop.set()
         thread.join(15)

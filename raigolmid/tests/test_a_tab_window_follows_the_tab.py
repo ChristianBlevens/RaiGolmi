@@ -412,3 +412,48 @@ def test_a_daemon_restart_is_outlived_by_the_window(monkeypatch):
                                 [restart_then_close, _closed])
     assert daemon.streams >= 2, "the window did not follow the daemon's next stream"
     assert (code, attaches) == (0, 2)
+
+
+class _BaseWindow:
+    """The base window's pane as tmux keeps it: what runs in it, its window options, and
+    `respawn-pane -k` replacing what runs. Any other command is refused."""
+
+    def __init__(self, monkeypatch, running: str) -> None:
+        self.running, self.options, self.respawned = running, {}, []
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        monkeypatch.setattr(terminal, "_tmux", self)
+
+    def __call__(self, *args, **_kwargs):
+        target = f"={terminal.SESSION}:={terminal.BASE}"
+        out = ""
+        if args[:4] == ("show-options", "-wqv", "-t", target):
+            out = self.options.get(args[4], "")
+        elif args == ("display-message", "-p", "-t", target, "#{pane_current_command}"):
+            out = self.running
+        elif args[:4] == ("set-option", "-w", "-t", target):
+            self.options[args[4]] = args[5]
+        elif args[:4] == ("respawn-pane", "-k", "-t", target):
+            self.respawned.append(args[4:])
+            self.running = "rai"
+        else:
+            raise AssertionError(f"tmux {args} is not what the base window is asked")
+        return terminal.subprocess.CompletedProcess(args, 0, out, "")
+
+
+def test_a_claude_login_that_ended_is_asked_again_in_the_base_window_once(monkeypatch):
+    base = _BaseWindow(monkeypatch, running="bash")
+    terminal.offer_claude_login("100.5")
+    [(shell, flag, command)] = base.respawned
+    assert (shell, flag) == ("/bin/bash", "-c")
+    assert command == "trap : INT; rai claude-login --login; exec /bin/bash"
+    base.running = "bash"               # signed in, back at the shell
+    terminal.offer_claude_login("100.5")
+    assert len(base.respawned) == 1, "every tab window hears the ending; it is asked once"
+    terminal.offer_claude_login("200.0")
+    assert len(base.respawned) == 2, "a later ending is asked again"
+
+
+def test_a_base_window_running_a_command_is_left_to_the_user(monkeypatch):
+    base = _BaseWindow(monkeypatch, running="vim")
+    terminal.offer_claude_login("100.5")
+    assert base.respawned == [] and base.options == {}

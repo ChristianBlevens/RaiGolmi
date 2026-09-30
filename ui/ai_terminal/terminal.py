@@ -32,6 +32,8 @@ from ui import theme
 from ui.theme import SPINNER
 
 SESSION = "raigolmi-ai"
+# The window that is no tab's: the first start's sign-ins, then a shell.
+BASE = "raigolmi"
 # prefix, then this: the current tab's permission put back after an Escape.
 PERMISSION_KEY = "a"
 
@@ -144,6 +146,32 @@ def _first_command() -> str:
     return f"rai credential --set && {{ {github}rai ai ready; }}"
 
 
+def _shell() -> str:
+    return os.environ.get("SHELL") or "/bin/bash"
+
+
+def _base_command(first: str) -> list[str]:
+    """The base window: `first`, then the user's shell. A Ctrl+C that kills a command outright
+    would take the non-interactive shell with it, and the window; trapped (not ignored, so
+    each command still takes it), the shell goes on to its interactive one."""
+    return [_shell(), "-c", f"trap : INT; {first}; exec {shlex.quote(_shell())}"]
+
+
+def offer_claude_login(ended: str) -> None:
+    """The claude.ai sign-in asked again in the base window, where a first start asked it,
+    once the daemon has removed one that ended (`claude_login.lost`, whose time is `ended`).
+    Every tab window hears that event, so the window keeps which ending it was asked for. A
+    base window running a command is the user's and is left; the history says where to sign in."""
+    target = f"={SESSION}:={BASE}"
+    if _tmux("show-options", "-wqv", "-t", target, "@claude_login_asked").stdout.strip() == ended:
+        return
+    at = _tmux("display-message", "-p", "-t", target, "#{pane_current_command}").stdout.strip()
+    if at != os.path.basename(_shell()):
+        return
+    _tmux("set-option", "-w", "-t", target, "@claude_login_asked", ended)
+    _tmux("respawn-pane", "-k", "-t", target, *_base_command("rai claude-login --login"))
+
+
 def session_exists() -> bool:
     return _tmux("has-session", "-t", SESSION, check=False).returncode == 0
 
@@ -156,12 +184,7 @@ def ensure_session() -> None:
     hint instead of removing the way to act on it.
     """
     if not session_exists():
-        shell = os.environ.get("SHELL") or "/bin/bash"
-        # A Ctrl+C that kills a command outright would take the non-interactive shell with
-        # it, and the window; trapped (not ignored, so each command still takes it), the
-        # shell goes on to its interactive one.
-        _tmux("new-session", "-d", "-s", SESSION, "-n", "raigolmi",
-              shell, "-c", f"trap : INT; {_first_command()}; exec {shlex.quote(shell)}")
+        _tmux("new-session", "-d", "-s", SESSION, "-n", BASE, *_base_command(_first_command()))
     # Also on a session this did not create: the host config's floor starts bare tmux on
     # the same session name, and adopting it should not leave it unstyled.
     commands: list[str] = []
@@ -329,6 +352,9 @@ def follow(client, tab: str) -> int:
         if event.get("type") == "tab.opened" or (
                 event.get("type") == "selection.changed" and _in_view(pane)):
             _follow_the_daemon(client, event)
+        if event.get("type") == "claude_login.lost":
+            with _one_at_a_time():
+                offer_claude_login(str(event["ts"]))
         if ours:
             wake.put(event)
 

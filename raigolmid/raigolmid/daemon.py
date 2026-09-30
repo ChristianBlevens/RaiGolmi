@@ -459,7 +459,8 @@ class Daemon:
         directories are watched too, so a face, toolbelt or body written while the daemon
         runs — by the user or by an agent asked for one — reaches the selector. The
         credential's directory is watched so a credential stored while the daemon runs is
-        said (`credential.stored`): the manager waits on it."""
+        said (`credential.stored`): the manager waits on it. The claude.ai sign-in beside it
+        is said the same way when it is given (`claude_login.stored`)."""
         try:
             from watchfiles import watch
         except ImportError:
@@ -472,6 +473,7 @@ class Daemon:
         # Read on every wake as well as on a change, because the first credential creates its
         # directory, and that directory is not being watched yet.
         was_set = credential.is_set(stored)
+        login_was_set = claude_login.is_set(self.paths.claude_login)
 
         def roots_of(watched: dict[str, list[Path]], definitions: list[Path]) -> set[str]:
             # The credential's directory does not exist until the first credential is stored.
@@ -495,6 +497,10 @@ class Daemon:
                     if now_set and (not was_set or stored in changed):
                         self.events.emit("credential.stored")
                     was_set = now_set
+                    login_set = claude_login.is_set(self.paths.claude_login)
+                    if login_set and not login_was_set:
+                        self.events.emit("claude_login.stored")
+                    login_was_set = login_set
                     if any(c.is_relative_to(d) for c in changed for d in definitions):
                         # Emitted after the catalogue is re-read: maintenance sweeps on this
                         # event, and a stale catalogue sends it to document a deleted layer.
