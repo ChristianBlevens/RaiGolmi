@@ -21,7 +21,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import credential, hostsurfaces, keyboard, labels, look, naming, settings
+from . import claude_login, credential, hostsurfaces, keyboard, labels, look, naming, settings
 from .api import ApiServer, build_methods
 from .definitions import SearchPaths
 from .events import EventLog
@@ -136,6 +136,7 @@ class Daemon:
         self.channels = Channels(self.session, self.events)
         self.coordinator = Coordinator(self.session, self.events, self.questions)
         self.limits = Limits(self.session, self.events)
+        self.claude_login = claude_login.Refresher(self.paths.claude_login, self.events)
         # The credential stays here; every agent container is given a placeholder.
         self.credproxy = CredentialProxy(
             self.session.agents.broker, self.events,
@@ -205,6 +206,7 @@ class Daemon:
                              (lambda: self.channels.messages.run(self._stop), "messages"),
                              (lambda: self.coordinator.run(self._stop), "coordinator"),
                              (lambda: self.limits.run(self._stop), "limits"),
+                             (lambda: self.claude_login.run(self._stop), "claude-login"),
                              (self.credproxy.serve, "credproxy"),
                              (lambda: self.permissions.run(self._stop), "permissions"),
                              (lambda: self.agent_sockets.run(self._stop), "agent-sockets"),

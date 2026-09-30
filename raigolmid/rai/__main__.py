@@ -582,6 +582,63 @@ def cmd_credential(args) -> int:
     return 0
 
 
+def cmd_claude_login(args) -> int:
+    """The claude.ai sign-in Remote Control needs (`raigolmid/claude_login.py`), by Claude
+    Code's own `claude auth login` in a scratch agent container: it shows an address to open in
+    any browser and takes the code the page gives back. Its home is a directory made here,
+    beside where the sign-in is kept, and removed once the sign-in is read out of it."""
+    from raigolmid import claude_login
+
+    path = Paths.from_env().claude_login
+    if not args.login:
+        try:
+            claude_login.read(path)
+        except claude_login.LoginError as exc:
+            print(f"rai claude-login: {exc}", file=sys.stderr)
+            return 1
+        print(f"a claude.ai sign-in is set in {path}")
+        return 0
+    print("A tab held for you reaches your phone through Claude Code's Remote Control, which\n"
+          "needs your claude.ai sign-in. Open the address below in any browser, sign in, and\n"
+          "paste the code it shows here. Ctrl+C skips this for now; `rai claude-login\n"
+          "--login` asks again.\n")
+    sys.stdout.flush()
+    from raigolmid import hostimages
+    from raigolmid.runtime.docker_runtime import DockerRuntime
+
+    runtime = DockerRuntime()
+    try:
+        image = hostimages.ensure(runtime, hostimages.agent())
+    except hostimages.HostImageError as exc:
+        print(f"rai claude-login: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        runtime.close()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".claude-login-") as home:
+        try:
+            result = subprocess.run(
+                ["docker", "run", "--rm", "-it", "--user", f"{os.getuid()}:{os.getgid()}",
+                 "-e", "HOME=/login", "-v", f"{home}:/login", "--entrypoint", "claude",
+                 image, "auth", "login"])
+        except KeyboardInterrupt:
+            print("\nnot signed in")
+            return 1
+        if result.returncode != 0:
+            print(f"rai claude-login: claude auth login exited {result.returncode}; nothing "
+                  "stored", file=sys.stderr)
+            return 1
+        try:
+            claude_login.write(path, claude_login.from_claude_home(Path(home)))
+            claude_login.read(path)
+        except claude_login.LoginError as exc:
+            print(f"rai claude-login: {exc}", file=sys.stderr)
+            return 1
+    print(f"signed in; the sign-in is in {path}, readable by you alone, and raigolmid keeps "
+          "it fresh")
+    return 0
+
+
 def cmd_registry_token(args) -> int:
     """The GitHub account a catalog upload opens its pull request from, signed in the
     way `gh auth login` signs in: a one-time code shown here and entered at github.com in any
@@ -900,6 +957,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("registry-token", help="the GitHub sign-in a catalog upload uses")
     p.add_argument("--login", action="store_true", help="sign in to GitHub with a one-time code")
     p.set_defaults(fn=cmd_registry_token)
+
+    p = sub.add_parser("claude-login",
+                       help="the claude.ai sign-in a held tab's Remote Control uses")
+    p.add_argument("--login", action="store_true", help="sign in to claude.ai")
+    p.set_defaults(fn=cmd_claude_login)
 
     p = sub.add_parser("agent-activity",
                        help="an agent's hooks report its session up, busy, idle or failed")

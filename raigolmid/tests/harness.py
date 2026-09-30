@@ -339,7 +339,7 @@ def standalone(tmp_path: Path, monkeypatch):
     settings.install(paths.settings)
     questions = Questions(events, paths)
     broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", runtime,
-                    paths.registry_token)
+                    paths.registry_token, paths.claude_login)
     return events, questions, Judge(events, runtime, tmp_path / "preferences.md", broker,
                                     1), runtime
 

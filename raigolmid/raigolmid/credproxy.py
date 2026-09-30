@@ -57,7 +57,7 @@ import ssl
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from cryptography import x509
@@ -65,7 +65,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from . import credential
+from . import claude_login, credential
 from .events import EventLog
 from .runtime import ContainerRuntime
 from .runtime.base import Mount
@@ -84,7 +84,14 @@ TUNNEL_TIMEOUT = 30.0
 PORT = 47100
 OAUTH, API_KEY = credential.CREDENTIAL_KEYS
 [GITHUB] = credential.REGISTRY_KEYS
-SHAPE = {OAUTH: "sk-ant-oat01-rai-", API_KEY: "sk-ant-api03-rai-", GITHUB: "ghp_rai-"}
+# The claude.ai sign-in's access and refresh tokens (`claude_login.py`), in a held tab's
+# `.credentials.json`. Only the access token is ever swapped: the daemon alone refreshes.
+LOGIN, LOGIN_REFRESH = "CLAUDE_AI_LOGIN", "CLAUDE_AI_LOGIN_REFRESH"
+SHAPE = {OAUTH: "sk-ant-oat01-rai-", API_KEY: "sk-ant-api03-rai-", GITHUB: "ghp_rai-",
+         LOGIN: "sk-ant-oat01-rail-", LOGIN_REFRESH: "sk-ant-ort01-rail-"}
+# Remote Control's session, which authenticates with the worker credential Anthropic hands it
+# (Claude Code 2.1.283's `[remote-bridge] Fetched bridge credentials`) rather than a login.
+SESSION_PATHS = "/v1/code/sessions/"
 # The variable gh reads its token from; git's credential helper hands it on.
 GITHUB_VARIABLE = "GH_TOKEN"
 GIT_HELPER = ('!f() { test "$1" = get && printf "username=x-access-token\\npassword=%s\\n" '
@@ -93,6 +100,8 @@ GIT_HELPER = ('!f() { test "$1" = get && printf "username=x-access-token\\npassw
 HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                  "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length"})
 UPSTREAM_TIMEOUT = 600.0
+# 2100-01-01, in the milliseconds Claude Code keeps an expiry in.
+FAR_EXPIRY_MS = 4102444800000
 
 
 class ProxyError(Exception):
@@ -236,26 +245,42 @@ class Broker:
     """The credential, and what an agent container is given in its place."""
 
     def __init__(self, credentials: Path, secret: Path, authority: Path,
-                 runtime: ContainerRuntime, github: Path) -> None:
+                 runtime: ContainerRuntime, github: Path, login: Path) -> None:
         self.credentials = credentials
         self.github = github
+        self.login = login
         self.placeholders = Placeholders(secret)
         self.authority = Authority(authority)
         self.runtime = runtime
 
-    def environment(self, owner: str) -> dict[str, str]:
-        """Raises what `credential.read` raises: an agent is never started without one."""
+    def environment(self, owner: str, login: bool = False) -> dict[str, str]:
+        """Raises what `credential.read` raises: an agent is never started without one.
+        `login`: the tab signs in with the claude.ai sign-in's placeholders (`login_files`)
+        instead, since Claude Code prefers a credential variable to them."""
         [kind] = credential.read(self.credentials)
         proxy = f"http://{self.runtime.bridge_gateway()}:{PORT}"
         # The GitHub placeholder is issued whether or not the user has signed in yet: the
         # sign-in is read on each request, so one made later holds in tabs already open.
-        return {kind: self.placeholders.issue(owner, kind),
+        return {**({} if login else {kind: self.placeholders.issue(owner, kind)}),
                 GITHUB_VARIABLE: self.placeholders.issue(owner, GITHUB),
                 "GIT_CONFIG_COUNT": "1",
                 "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
                 "GIT_CONFIG_VALUE_0": GIT_HELPER,
                 "HTTPS_PROXY": proxy, "https_proxy": proxy,
                 "NODE_EXTRA_CA_CERTS": CA_TARGET}
+
+    def login_files(self, owner: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """A tab's `.credentials.json` for the claude.ai sign-in, placeholders in place of its
+        tokens and an expiry it never reaches, so it never refreshes; and the account for its
+        `.claude.json`, which Remote Control reads the organization from. Raises what
+        `claude_login.read` raises."""
+        login = claude_login.read(self.login)
+        oauth = {**login["claudeAiOauth"],
+                 "accessToken": self.placeholders.issue(owner, LOGIN),
+                 "refreshToken": self.placeholders.issue(owner, LOGIN_REFRESH),
+                 "expiresAt": FAR_EXPIRY_MS}
+        oauth.pop("refreshTokenExpiresAt", None)
+        return {"claudeAiOauth": oauth}, login["oauthAccount"]
 
     def mounts(self) -> tuple[Mount, ...]:
         return (Mount(source=str(self.authority.cert), target=CA_TARGET, read_only=True),
@@ -326,7 +351,7 @@ class _Handler(BaseHTTPRequestHandler):
         # A request sent to the proxy itself rather than inside a CONNECT is for Anthropic.
         host = getattr(self, "intercepted", proxy.intercepted)
         try:
-            owner, outgoing = proxy.outgoing(self.headers.items(), host)
+            owner, outgoing = proxy.outgoing(self.headers.items(), host, self.path)
         except ProxyError as exc:
             proxy.events.emit("credproxy.refused", host=host, path=self.path, reason=str(exc))
             self._refuse(401, str(exc))
@@ -475,18 +500,31 @@ class CredentialProxy:
     def address(self) -> tuple[str, int]:
         return self._server.server_address[:2]
 
-    def outgoing(self, headers: list[tuple[str, str]],
-                 host: str) -> tuple[str | None, dict[str, str]]:
+    def outgoing(self, headers: list[tuple[str, str]], host: str,
+                 path: str = "") -> tuple[str | None, dict[str, str]]:
         """The request's owner and the headers it goes upstream to `host` with: the credential
-        in place of the placeholder, everything else as sent. No owner: it carried none."""
+        in place of the placeholder, everything else as sent. No owner: it carried none, or it
+        is Remote Control's session carrying its own (`SESSION_PATHS`)."""
         if host in self.github:
             return self._outgoing_github(headers)
         sent = {name.lower(): value for name, value in headers}
         token = (sent.get("authorization", "").removeprefix("Bearer ").strip()
                  or sent.get("x-api-key", "").strip())
-        if not token:
+        if not token or (path.startswith(SESSION_PATHS)
+                         and self.broker.placeholders.owner_of(token) is None):
             return None, {name: value for name, value in headers
                           if name.lower() not in HOP}
+        if (owner := self.broker.placeholders.owner_of(token, (LOGIN,))) is not None:
+            if not self.open_owner(owner):
+                raise ProxyError(f"{owner} is closed")
+            try:
+                real = claude_login.read(self.broker.login)["claudeAiOauth"]["accessToken"]
+            except claude_login.LoginError as exc:
+                raise ProxyError(str(exc)) from exc
+            out = {name: value for name, value in headers
+                   if name.lower() not in HOP | {"authorization", "x-api-key"}}
+            out["Authorization"] = f"Bearer {real}"
+            return owner, out
         owner = self._owner(token, (OAUTH, API_KEY))
         [(kind, real)] = credential.read(self.broker.credentials).items()
         out = {name: value for name, value in headers

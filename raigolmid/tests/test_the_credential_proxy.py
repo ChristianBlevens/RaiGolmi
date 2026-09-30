@@ -13,11 +13,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from raigolmid import credential
+from raigolmid import claude_login, credential
 from raigolmid.credproxy import Broker, CredentialProxy, Placeholders
 from raigolmid.events import EventLog
 from tests.fakeruntime import FakeRuntime
 
+LOGIN = {"claudeAiOauth": {"accessToken": "sk-ant-oat01-the-real-login",
+                           "refreshToken": "sk-ant-ort01-the-real-refresh",
+                           "expiresAt": 1790000000000, "refreshTokenExpiresAt": 1800000000000,
+                           "scopes": ["user:inference", "user:profile",
+                                      "user:sessions:claude_code"],
+                           "subscriptionType": None},
+         "oauthAccount": {"organizationUuid": "org-1", "displayName": "C"}}
 EVENTS = [b"event: message_start\ndata: {}\n\n", b"event: message_stop\ndata: {}\n\n"]
 
 
@@ -62,8 +69,9 @@ def machine(tmp_path):
     credential.write(credentials, "CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-the-real-one")
     credential.write(tmp_path / "registry-token", "GITHUB_TOKEN", "ghp_the-real-one",
                      credential.REGISTRY_KEYS)
+    claude_login.write(tmp_path / "claude-login.json", LOGIN)
     broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", FakeRuntime(),
-                    tmp_path / "registry-token")
+                    tmp_path / "registry-token", tmp_path / "claude-login.json")
     events = EventLog(tmp_path / "events.jsonl", epoch=1)
     open_tabs = {"tab-1", "raigolmid-judge"}
     proxy = CredentialProxy(broker, events, open_tabs.__contains__, host="127.0.0.1", port=0,
@@ -117,6 +125,33 @@ def test_the_usage_limits_reset_is_read_from_its_429(machine, said, resets_at):
     assert status == 429, "the agent is answered as the API answered"
     [limited] = [e for e in events.tail(50) if e.type == "credproxy.limited"]
     assert (limited.data["owner"], limited.data["resets_at"]) == ("tab-1", resets_at)
+
+
+def test_a_held_tab_signs_in_with_placeholders_and_the_sign_in_is_swapped_in(machine):
+    broker, proxy, _, _ = machine
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in broker.environment("tab-1", login=True), \
+        "Claude Code prefers the variable, and Remote Control refuses what it holds"
+    files, account = broker.login_files("tab-1")
+    oauth = files["claudeAiOauth"]
+    assert "the-real" not in json.dumps(files)
+    assert oauth["scopes"] == LOGIN["claudeAiOauth"]["scopes"]
+    assert account["organizationUuid"] == "org-1"
+    status, _ = _post(proxy, {"Authorization": f"Bearer {oauth['accessToken']}"})
+    assert status == 200
+    assert Upstream.seen[-1]["headers"]["Authorization"] == "Bearer sk-ant-oat01-the-real-login"
+    status, _ = _post(proxy, {"Authorization": f"Bearer {oauth['refreshToken']}"})
+    assert status == 401, "the refresh placeholder is never a credential"
+
+
+def test_remote_controls_session_goes_with_its_own_credential_and_nothing_else_does(machine):
+    _, proxy, _, _ = machine
+    conn = http.client.HTTPConnection(*proxy.address, timeout=10)
+    conn.request("POST", "/v1/code/sessions/cse_1/worker/events", body=b"{}",
+                 headers={"Authorization": "Bearer the-session-worker-token"})
+    assert conn.getresponse().status == 200
+    assert Upstream.seen[-1]["headers"]["Authorization"] == "Bearer the-session-worker-token"
+    status, _ = _post(proxy, {"Authorization": "Bearer the-session-worker-token"})
+    assert status == 401
 
 
 def test_an_api_key_goes_as_x_api_key(machine, tmp_path):

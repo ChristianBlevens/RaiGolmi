@@ -185,6 +185,12 @@ class Paths:
         return self.config.parent / PROJECT / "registry-token"
 
     @property
+    def claude_login(self) -> Path:
+        # The user's claude.ai sign-in, which Remote Control needs and the agent credential
+        # cannot give: held and refreshed by raigolmid alone (`claude_login.py`).
+        return self.config.parent / PROJECT / "claude-login.json"
+
+    @property
     def registry_state(self) -> Path:
         # Where each downloaded layer came from, kept out of the layer's own directory.
         return self.state / "registry.json"

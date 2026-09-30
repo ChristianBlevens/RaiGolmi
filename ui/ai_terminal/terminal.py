@@ -126,7 +126,7 @@ def _first_command() -> str:
     is whoever opened this window — on a fresh machine there is nobody else, and no browser to
     be redirected to. So the terminal opens on the question instead of on a status that would
     only say the same thing in smaller print."""
-    from raigolmid import credential
+    from raigolmid import claude_login, credential
     from raigolmid.paths import Paths
 
     paths = Paths.from_env()
@@ -135,6 +135,9 @@ def _first_command() -> str:
     # sign-in costs uploads only, so the agent's tab opens either way.
     github = ("" if credential.is_set(paths.registry_token, credential.REGISTRY_KEYS)
               else "rai registry-token --login; ")
+    # So is the claude.ai sign-in, which only a tab held for the user's phone needs.
+    if not claude_login.is_set(paths.claude_login):
+        github += "rai claude-login --login; "
     if credential.is_set(paths.agent_credentials):
         return f"{github}rai status"
     # A token given is an agent wanted: the tab opens the moment there is one.
