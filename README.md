@@ -160,6 +160,11 @@ It started as a fun way to see what a truly non-opinionated distro could look li
 could help anyone build their OS from nothing. It grew into the AI harness I wanted for
 myself, and I'm sharing it in case other people find it useful too.
 
+To be upfront about how it was made: my part was almost entirely design and testing. I
+decided what it should be and how it should work, used it, and reported what was wrong. The
+implementation itself was almost all written by AI. Only around 1% of the code is mine, and
+that was minor tweaks. That isn't a pitch for AI, it's just how this was actually built.
+
 The name comes from *raise* a golem. *Golmi* is the unformed stuff it's made from.
 
 ### How it's put together
