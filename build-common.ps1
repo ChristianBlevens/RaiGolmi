@@ -46,8 +46,7 @@ function Wsl-Root([string]$command) {
     return $LASTEXITCODE
 }
 
-# What a disk build needs: WSL with Ubuntu, podman in it, and a resolver that reaches the
-# image registry. Each entry: what it is, the command a person runs for it, how it is installed.
+# What a disk build needs: WSL with Ubuntu, and podman in it. Each entry: what it is, the command a person runs for it, how it is installed.
 function Disk-Prerequisites {
     $missing = @()
     if (-not $ubuntu) {
@@ -62,17 +61,6 @@ function Disk-Prerequisites {
                        How  = "wsl -d $distro -u root -- apt-get install -y podman"
                        Do   = { if ((Wsl-Root 'apt-get update -q && apt-get install -y podman') -ne 0) {
                                     Fail "Installing podman in $distro failed; apt's output is above." } } }
-    }
-    # WSL's DNS proxy often cannot resolve the image registry; a fixed resolver can.
-    if ((Wsl-Root 'timeout 10 getent hosts quay.io >/dev/null') -ne 0) {
-        $missing += @{ What = "a DNS resolver $distro can reach quay.io with"
-                       How  = "In ${distro}: point /etc/resolv.conf at 1.1.1.1 and set generateResolvConf = false in /etc/wsl.conf"
-                       # wsl.conf is the user's (Ubuntu's own sets systemd there): one key is set, the rest kept.
-                       Do   = { if ((Wsl-Root ("rm -f /etc/resolv.conf && printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf && touch /etc/wsl.conf && " +
-                                               "if grep -q '^[[:space:]]*generateResolvConf' /etc/wsl.conf; then sed -i 's/^[[:space:]]*generateResolvConf.*/generateResolvConf = false/' /etc/wsl.conf; " +
-                                               "elif grep -q '^\[network\]' /etc/wsl.conf; then sed -i '/^\[network\]/a generateResolvConf = false' /etc/wsl.conf; " +
-                                               "else printf '\n[network]\ngenerateResolvConf = false\n' >> /etc/wsl.conf; fi")) -ne 0) {
-                                    Fail "Setting $distro's resolver failed; its output is above." } } }
     }
     return $missing
 }
@@ -109,8 +97,11 @@ function Build-InWsl([string]$type, [string]$target) {
     New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
     $wslRepo   = (wsl.exe -d $distro --exec wslpath -a ($repo -replace '\\', '/')).Trim()
     $wslTarget = (wsl.exe -d $distro --exec wslpath -a ($target -replace '\\', '/')).Trim()
+    # WSL's DNS proxy (10.255.255.254) often times out on quay.io; the build alone is then
+    # given public resolvers, and the distro's own resolver is left as it is.
+    $resolvers = if ((Wsl-Root 'timeout 10 getent hosts quay.io >/dev/null') -ne 0) { "RESOLVERS='1.1.1.1 8.8.8.8' " } else { '' }
     # Called directly, not through Wsl-Root, so the builder keeps its terminal.
-    wsl.exe -d $distro -u root --exec bash -c "OUT=/root/raigolmi-build TYPE=$type bash '$wslRepo/host/ci/build-local.sh'"
+    wsl.exe -d $distro -u root --exec bash -c "${resolvers}OUT=/root/raigolmi-build TYPE=$type bash '$wslRepo/host/ci/build-local.sh'"
     if ($LASTEXITCODE -ne 0) { Fail "The $type build did not finish; its output is above." }
     # The builder names its file by type; the one image it wrote is the result. What else is
     # there is its manifest and the baked host images, and its layers stay in podman's store

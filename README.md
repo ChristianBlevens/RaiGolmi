@@ -337,8 +337,8 @@ It checks for and offers to install:
 - WSL with Ubuntu and podman.
 
 If you say no, it prints the commands to install each one yourself. If Ubuntu can't look up
-the image registry, it points Ubuntu's DNS at 1.1.1.1 and sets `generateResolvConf = false`
-in its `/etc/wsl.conf`, leaving the rest of that file alone.
+the image registry, the build alone uses 1.1.1.1 and 8.8.8.8; your Ubuntu's own DNS settings
+are never changed.
 
 Running `build.bat` again rebuilds the app and **upgrades your disk in place**. Your files,
 layers and the agents' work all stay. It closes and reopens the app to start on the new

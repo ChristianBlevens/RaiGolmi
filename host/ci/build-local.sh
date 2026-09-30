@@ -18,6 +18,18 @@ image=${IMAGE:-localhost/raigolmi-host:latest}
 out=${OUT:-$HOME/raigolmi-build}
 type=${TYPE:-qcow2}
 
+#  RESOLVERS: nameservers this build alone resolves with, for a machine whose own resolver
+#  cannot reach the registries (WSL's DNS proxy times out on quay.io). They are bound over
+#  /etc/resolv.conf in a mount namespace the build runs in, as root: the machine's own files
+#  are never changed, and nothing outlives the build.
+if [ -n "${RESOLVERS:-}" ] && [ -z "${RESOLVERS_BOUND:-}" ]; then
+    conf=$(mktemp)
+    printf 'nameserver %s\n' $RESOLVERS > "$conf"
+    exec sudo env RESOLVERS_BOUND="$conf" IMAGE="$image" OUT="$out" TYPE="$type" \
+        unshare --mount --propagation private \
+        bash -c 'mount --bind "$RESOLVERS_BOUND" /etc/resolv.conf && rm "$RESOLVERS_BOUND" && exec bash "$0"' "$0"
+fi
+
 mkdir -p "$out"
 
 #  Every podman call is `sudo`: the builder below reads the image out of root's container
