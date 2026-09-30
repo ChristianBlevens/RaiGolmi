@@ -9,7 +9,7 @@ placeholders the proxy swaps (`credproxy.py`) — so the daemon is its one refre
 refreshed in two places would have each refresh spend the other's refresh token.
 
 The refresh is Claude Code's own (2.1.283): a JSON POST of the refresh token, the client id
-and the scopes to `TOKEN_URL`, answered with `access_token`, `expires_in` and, when it turns,
+and the scopes to `TOKEN_URL`, under its HTTP client's user agent (`USER_AGENT`), answered with `access_token`, `expires_in` and, when it turns,
 `refresh_token`.
 
 It is asked again only when it has ended: its refresh token refused as `invalid_grant` (which
@@ -32,6 +32,9 @@ from .events import EventLog
 
 TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+# Claude Code's refresh goes through axios, which names itself; the endpoint's Cloudflare
+# refuses urllib's default (`Python-urllib/…`) with 403 "error code: 1010".
+USER_AGENT = "axios/1.9.0"
 # Remote Control's scope; a login without it is the agent credential over again.
 SESSIONS_SCOPE = "user:sessions:claude_code"
 # An access token lives hours; these only set how early it is renewed and how soon a failed
@@ -103,7 +106,8 @@ def refreshed(login: dict[str, Any], now: float) -> dict[str, Any]:
     body = json.dumps({"grant_type": "refresh_token", "refresh_token": oauth["refreshToken"],
                        "client_id": CLIENT_ID, "scope": " ".join(oauth["scopes"])}).encode()
     request = urllib.request.Request(TOKEN_URL, data=body, method="POST",
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json",
+                                              "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=30) as answer:
             said = json.loads(answer.read())

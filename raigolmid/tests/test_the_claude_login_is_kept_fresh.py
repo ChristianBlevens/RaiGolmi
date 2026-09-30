@@ -32,6 +32,12 @@ def token_endpoint(monkeypatch):
     sent = _Sent()
 
     def urlopen(request, timeout):
+        # A request that names no agent goes out as `Python-urllib/…`, which the endpoint's
+        # Cloudflare refuses before the OAuth server sees it.
+        agent = request.get_header("User-agent") or "Python-urllib/3"
+        if agent.startswith("Python-urllib/"):
+            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {},
+                                         io.BytesIO(b"error code: 1010\n"))
         sent.append((request.full_url, json.loads(request.data)))
         answer = sent.answer
         if isinstance(answer, Exception):
