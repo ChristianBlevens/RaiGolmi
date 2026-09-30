@@ -19,8 +19,8 @@ packages = ["bashInteractive", "coreutils", "python3", "util-linux", "libcap", "
 ```
 
 `packages` are Nix attribute names; find each with `search_packages` first (a hint: Nixery's answer when the image is pulled is the check). An empty list is
-refused. The machine adds what its own launcher needs (`libcap`, `python3`, `coreutils`,
-`util-linux`).
+refused, and so is one missing any of `libcap`, `python3`, `coreutils` and `util-linux`, which
+the view's launcher runs on.
 
 The daemon writes `toolbelt.lock` beside the definition once the toolbelt runs: the image it
 resolved and the store paths. It is reused while `packages` is unchanged. Do not edit it.

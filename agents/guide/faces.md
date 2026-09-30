@@ -127,8 +127,8 @@ middle (the selector: the active face and body, the catalog), the **bottom** cen
 slides up over the lower part of the screen), and the **top** centre (the history menu). A face
 is not told where they are, so put nothing the user needs under those three strips.
 
-The host keeps a bare **Super** tap (the selector) and **Super+`** (the AI terminal); every other
-`Super+<key>` is the face's. Do not bind those two.
+The host keeps a bare **Super** tap (the selector) and **Super+`** (the AI terminal) by default;
+every other `Super+<key>` is the face's. Do not bind those two, or the keys the user's settings move them to.
 
 ## Copy and paste
 
