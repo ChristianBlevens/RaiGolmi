@@ -98,8 +98,6 @@ def _follow_status() -> int:
         columns = shutil.get_terminal_size().columns
         lines = [line[:columns] for line in text.splitlines()]
         with lock:
-            sys.stdout.write("\033[?25l\033[H\033[2J" + "\n".join(lines))
-            sys.stdout.flush()
             pane = os.environ.get("TMUX_PANE")
             if pane is not None:
                 # Never more than half the window: the shell under it is the one to type in.
@@ -108,6 +106,10 @@ def _follow_status() -> int:
                     check=True, capture_output=True, text=True).stdout)
                 subprocess.run(["tmux", "resize-pane", "-t", pane,
                                 "-y", str(max(1, min(len(lines), height // 2)))], check=True)
+            # Only the state now: tmux's `scroll-on-clear` puts a cleared screen into the
+            # scrollback, and a shrink pushes lines there, so each draw clears it too (ED 3).
+            sys.stdout.write("\033[?25l\033[H\033[2J\033[3J" + "\n".join(lines))
+            sys.stdout.flush()
 
     def fetch() -> None:
         try:
