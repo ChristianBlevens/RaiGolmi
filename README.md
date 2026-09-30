@@ -259,7 +259,8 @@ because it's finished or it's asking you something. Just type your answer in tha
 When an agent needs permission for something, a menu pops up in its tab. You can say yes or
 no just this once, for this project, or everywhere. The **×** on a tab archives its
 conversation. For `machine` and your selected body, that gives you a fresh tab with a clean
-slate.
+slate. To pick an old conversation back up, type `/resume` in a tab of the same project and
+press **Ctrl+A**: every archived one is listed there.
 
 Drag to select text (it's copied right away), right-click to paste, and press Ctrl+Enter for
 a new line.
