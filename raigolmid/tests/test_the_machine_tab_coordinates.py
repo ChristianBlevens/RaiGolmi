@@ -107,6 +107,22 @@ def test_a_managed_tabs_turn_ending_wakes_the_machine_tab_with_its_context_use(h
     assert detail["transcript_tail"][-1] == {"role": "assistant", "said": "halfway"}
 
 
+def test_the_machine_tab_is_not_marked_for_the_user_while_it_manages(h):
+    m = Machine(h)
+    viewing = Viewing(h.events, h.paths.viewing)
+    h.events.emit("agent.idle", tab=MACHINE, done=True)
+    for event in viewing._sub.drain(timeout=0.1):
+        viewing.on_event(event)
+
+    def machine() -> dict:
+        status = with_tab_states(h.session.status(), m.questions, m.channels)
+        return next(a for a in with_marks(status, viewing)["agents"] if a["tab"] == MACHINE)
+
+    assert machine()["state"] == "idle" and machine()["marked"]
+    m.tab(MACHINE)["manage"](tab=BODY)
+    assert not machine()["marked"], "the user who handed tabs over is away"
+
+
 def test_an_unmanaged_tab_wakes_nothing(h):
     m = Machine(h)
     m.tab(BODY)["agent_activity"](busy=False)

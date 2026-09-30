@@ -308,8 +308,8 @@ def test_the_manager_lights_the_collapsed_tab_only_while_it_asks(tmp_path):
     events.emit("agent.idle", tab="manager", done=True)
     _heard(viewing)
     for state, lit in (("asking", True), ("idle", False)):
-        status = {"agents": [{"tab": "manager", "state": state, "managed": False},
-                             {"tab": "tab-1", "state": "working", "managed": False}]}
+        status = {"agents": [{"tab": "manager", "state": state, "managed": False, "hands_off": False},
+                             {"tab": "tab-1", "state": "working", "managed": False, "hands_off": False}]}
         out = with_marks(status, viewing)
         assert [a["marked"] for a in out["agents"]] == [True, False]
         assert out["terminal"] == {"viewing": None, "lit": lit}

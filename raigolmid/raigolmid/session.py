@@ -1685,7 +1685,8 @@ class Session:
                      "scope": "manager" if t.manager else "machine" if t.machine
                      else {"body": t.body},
                      "sandbox": self._open_sandbox_of(t),
-                     "status": t.status, "busy": t.busy, "managed": t.managed}
+                     "status": t.status, "busy": t.busy, "managed": t.managed,
+                     "hands_off": self.intent.hands_off(t.tab_id)}
                     for t in self.intent.tabs.values()
                 ],
                 "face_runtime": {
