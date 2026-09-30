@@ -73,6 +73,15 @@ def _clock(t: float) -> str:
     return time.strftime("%H:%M", time.localtime(t))
 
 
+def _handed(e: Event) -> str:
+    said = "handed to the machine tab to manage"
+    if e.data.get("stop_when"):
+        said += f", stopping for you at {e.data['stop_when']!r}"
+    if e.data.get("until"):
+        said += f", until {_clock(e.data['until'])}"
+    return said
+
+
 # What each event this records says. None: this one is not recorded.
 SAYS: dict[str, Callable[[Event], str | None]] = {
     "tab.opened": lambda e: (f"opened for {e.data['body']}" if e.data.get("body")
@@ -80,7 +89,7 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "tab.closed": _closed,
     "agent.idle": lambda e: "done" if e.data["done"] else None,
     "agent.crashed": lambda e: e.data["message"],
-    "tab.managed": lambda e: ("handed to the machine tab to manage" if e.data["on"]
+    "tab.managed": lambda e: (_handed(e) if e.data["on"]
                               else "given back by the daemon: your time for it ran out"
                               if e.data.get("why") == "time"
                               else "taken back from the machine tab"),

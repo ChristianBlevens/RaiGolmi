@@ -372,7 +372,8 @@ def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
     m.pump()
     [asked] = [q for q in m.queued(MACHINE) if "report_run" in q["content"]]
     assert asked["meta"] == {"from": "daemon"}
-    assert "handed to the machine tab to manage" in asked["content"]
+    assert "handed to the machine tab to manage, stopping for you at 'the parser passes'" \
+        in asked["content"], "what the user gave it is in the record"
     assert f"you answered {id} 'which port?': '9090'" in asked["content"]
     assert "the parser is green" in asked["content"], "a tab given back is out of its reach"
     # A machine tab opening, or the daemon starting, asks again only what it has not heard.

@@ -1460,7 +1460,8 @@ class Session:
             ended = self._end_run_if_over()
             self.store.save(self.intent)
         if changed:
-            self.events.emit("tab.managed", tab=tab_id, body=tab.body, on=bool(on), why=why)
+            self.events.emit("tab.managed", tab=tab_id, body=tab.body, on=bool(on), why=why,
+                             stop_when=tab.stop_when, until=tab.until)
         self._say_run_ended(ended)
         return {"tab": tab_id, "managed": bool(on)}
 
