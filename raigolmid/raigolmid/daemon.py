@@ -136,7 +136,8 @@ class Daemon:
         self.channels = Channels(self.session, self.events)
         self.coordinator = Coordinator(self.session, self.events, self.questions)
         self.limits = Limits(self.session, self.events)
-        self.claude_login = claude_login.Refresher(self.paths.claude_login, self.events)
+        self.claude_login = claude_login.Refresher(self.paths.claude_login, self.events,
+                                                   runtime, self.epoch)
         # The credential stays here; every agent container is given a placeholder.
         self.credproxy = CredentialProxy(
             self.session.agents.broker, self.events,

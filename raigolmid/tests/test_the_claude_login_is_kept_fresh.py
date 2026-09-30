@@ -1,16 +1,19 @@
 """The claude.ai sign-in is the daemon's to renew (`claude_login.py`): renewed before it
-expires with Claude Code's own request, kept 0600, and a renewal that fails is said."""
+expires by Claude Code's own `auth login` in a scratch agent container, kept 0600, and a
+renewal that fails is said."""
 from __future__ import annotations
 
-import io
 import json
 import stat
-import urllib.error
+from pathlib import Path
 
 import pytest
 
-from raigolmid import claude_login
+from raigolmid import claude_login, hostimages, naming
 from raigolmid.events import EventLog
+from raigolmid.runtime.base import ExecResult
+
+from tests.fakeruntime import FakeRuntime
 
 NOW = 1_790_000_000.0
 
@@ -22,86 +25,98 @@ def _login(expires_in: float) -> dict:
             "oauthAccount": {"organizationUuid": "org-1"}}
 
 
-class _Sent(list):
-    """What reached the token endpoint, and what it answers next."""
-    answer: object
+class _Runs(list):
+    """The refresh token and scopes each `auth login` was handed, and what it does next:
+    a status the token endpoint refuses with, or None to write a renewed login."""
+    refuse: int | None = None
 
 
 @pytest.fixture()
-def token_endpoint(monkeypatch):
-    sent = _Sent()
+def auth_login(tmp_path, monkeypatch):
+    sources = tmp_path / "sources"
+    (sources / "agents" / "claude").mkdir(parents=True)
+    (sources / "agents" / "claude" / "Dockerfile").write_text("FROM scratch\n")
+    monkeypatch.setenv(hostimages.SOURCE_ENV, str(sources))
+    runtime = FakeRuntime()
+    runtime.add_image(hostimages.agent().tag())
+    runs = _Runs()
 
-    def urlopen(request, timeout):
-        # A request that names no agent goes out as `Python-urllib/…`, which the endpoint's
-        # Cloudflare refuses before the OAuth server sees it.
-        agent = request.get_header("User-agent") or "Python-urllib/3"
-        if agent.startswith("Python-urllib/"):
-            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {},
-                                         io.BytesIO(b"error code: 1010\n"))
-        sent.append((request.full_url, json.loads(request.data)))
-        answer = sent.answer
-        if isinstance(answer, Exception):
-            raise answer
-        return io.BytesIO(json.dumps(answer).encode())
+    def login(spec) -> ExecResult:
+        # What 2.1.283's `auth login` does with a refresh token in its environment: refreshes
+        # without a browser, writes the credentials into $HOME, and says a refusal by its status.
+        assert spec.entrypoint == ("claude",) and spec.command == ("auth", "login")
+        [home] = [Path(m.source) for m in spec.mounts
+                  if m.target == spec.environment["HOME"] and not m.read_only]
+        assert list(home.iterdir()) == [], "a home holding a login would refresh on its own"
+        env = spec.environment
+        runs.append((env[claude_login.REFRESH_TOKEN_ENV], env[claude_login.SCOPES_ENV]))
+        if runs.refuse is not None:
+            return ExecResult(1, "Login failed: Request failed with status code "
+                                 f"{runs.refuse}\n")
+        (home / ".claude").mkdir()
+        (home / ".claude" / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": "new-access", "refreshToken": "new-refresh",
+            "expiresAt": int((NOW + 28800) * 1000), "refreshTokenExpiresAt": None,
+            "scopes": env[claude_login.SCOPES_ENV].split(), "subscriptionType": "max"}}))
+        return ExecResult(0, "Login successful.\n")
 
-    sent.answer = {"access_token": "new-access", "refresh_token": "new-refresh",
-                   "expires_in": 28800, "scope": "user:inference user:sessions:claude_code"}
-    monkeypatch.setattr(claude_login.urllib.request, "urlopen", urlopen)
-    return sent
+    runtime.one_shot[naming.claude_refresh()] = login
+    return runtime, runs
 
 
-def test_it_is_renewed_before_it_expires_and_not_before(tmp_path, token_endpoint):
+def test_it_is_renewed_before_it_expires_and_not_before(tmp_path, auth_login):
+    runtime, runs = auth_login
     path, events = tmp_path / "claude-login.json", EventLog(tmp_path / "events.jsonl")
     claude_login.write(path, _login(expires_in=2 * claude_login.REFRESH_AHEAD_SECONDS))
-    refresher = claude_login.Refresher(path, events)
+    refresher = claude_login.Refresher(path, events, runtime, epoch=1)
     refresher.tick(NOW)
-    assert token_endpoint == []
+    assert runs == []
 
     claude_login.write(path, _login(expires_in=60))
     refresher.tick(NOW)
-    [(url, body)] = token_endpoint
-    assert url == claude_login.TOKEN_URL
-    assert body == {"grant_type": "refresh_token", "refresh_token": "old-refresh",
-                    "client_id": claude_login.CLIENT_ID,
-                    "scope": "user:inference user:sessions:claude_code"}
-    oauth = claude_login.read(path)["claudeAiOauth"]
+    assert runs == [("old-refresh", "user:inference user:sessions:claude_code")]
+    login = claude_login.read(path)
+    oauth = login["claudeAiOauth"]
     assert (oauth["accessToken"], oauth["refreshToken"]) == ("new-access", "new-refresh")
     assert oauth["expiresAt"] == int((NOW + 28800) * 1000)
+    assert login["oauthAccount"] == {"organizationUuid": "org-1"}, "the account is kept"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".claude-refresh-")] == []
+    assert runtime.inspect(naming.claude_refresh()) is None
 
 
-def test_a_renewal_that_fails_is_said_and_tried_again_later(tmp_path, token_endpoint):
+def test_a_renewal_that_fails_is_said_and_tried_again_later(tmp_path, auth_login):
+    runtime, runs = auth_login
     path, events = tmp_path / "claude-login.json", EventLog(tmp_path / "events.jsonl")
     claude_login.write(path, _login(expires_in=60))
-    token_endpoint.answer = urllib.error.HTTPError(
-        claude_login.TOKEN_URL, 503, "Service Unavailable", {}, io.BytesIO(b'{"error":"busy"}'))
-    refresher = claude_login.Refresher(path, events)
+    runs.refuse = 403
+    refresher = claude_login.Refresher(path, events, runtime, epoch=1)
     refresher.tick(NOW)
     [failed] = [e for e in events.tail(10) if e.type == "claude_login.refresh_failed"]
-    assert "503" in failed.data["error"]
+    assert "status code 403" in failed.data["error"]
     refresher.tick(NOW + 1)
-    assert len(token_endpoint) == 1, "not hammered"
+    assert len(runs) == 1, "not hammered"
     assert claude_login.read(path)["claudeAiOauth"]["accessToken"] == "old-access"
     refresher.tick(NOW + claude_login.RETRY_SECONDS)
-    assert len(token_endpoint) == 2, "tried again"
+    assert len(runs) == 2, "tried again"
 
 
-def test_a_sign_in_that_has_ended_is_removed_so_it_is_asked_again(tmp_path, token_endpoint):
-    """Only a new sign-in brings back a refresh token refused as `invalid_grant` or past its
-    expiry, so it is removed and said, and nothing retries it."""
+def test_a_sign_in_that_has_ended_is_removed_so_it_is_asked_again(tmp_path, auth_login):
+    """Only a new sign-in brings back a refresh token the OAuth server refuses or one past
+    its expiry, so it is removed and said, and nothing retries it."""
+    runtime, runs = auth_login
     events = EventLog(tmp_path / "events.jsonl")
     refused, expired = tmp_path / "refused.json", tmp_path / "expired.json"
     claude_login.write(refused, _login(expires_in=60))
-    token_endpoint.answer = urllib.error.HTTPError(
-        claude_login.TOKEN_URL, 400, "Bad Request", {}, io.BytesIO(b'{"error":"invalid_grant"}'))
-    claude_login.Refresher(refused, events).tick(NOW)
+    runs.refuse = 400
+    claude_login.Refresher(refused, events, runtime, epoch=1).tick(NOW)
     login = _login(expires_in=2 * claude_login.REFRESH_AHEAD_SECONDS)
     login["claudeAiOauth"]["refreshTokenExpiresAt"] = int(NOW * 1000)
     claude_login.write(expired, login)
-    claude_login.Refresher(expired, events).tick(NOW)
+    claude_login.Refresher(expired, events, runtime, epoch=1).tick(NOW)
 
     assert not refused.exists() and not expired.exists()
-    assert len(token_endpoint) == 1, "an expired refresh token is not sent"
+    assert len(runs) == 1, "an expired refresh token is not sent"
     lost = [e.data["error"] for e in events.tail(10) if e.type == "claude_login.lost"]
-    assert len(lost) == 2 and "invalid_grant" in lost[0] and "expired" in lost[1]
+    assert len(lost) == 2 and "status code 400" in lost[0] and "expired" in lost[1]
     assert not any(e.type == "claude_login.refresh_failed" for e in events.tail(10))

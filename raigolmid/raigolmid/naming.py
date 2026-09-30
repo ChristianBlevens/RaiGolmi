@@ -110,6 +110,12 @@ def screenshot() -> str:
     return f"{PREFIX}-screenshot"
 
 
+def claude_refresh() -> str:
+    """The claude.ai sign-in's one-shot refresh (`claude_login.py`). One name: the daemon has
+    one refresher."""
+    return f"{PREFIX}-claude-refresh"
+
+
 def judge() -> str:
     """The preferences judge's one-shot run (`judge.py`). One name: it runs one job at a time."""
     return f"{PREFIX}-judge"

@@ -8,12 +8,15 @@ account's `oauthAccount`. Like the agent credential it never enters a tab — a 
 placeholders the proxy swaps (`credproxy.py`) — so the daemon is its one refresher: a login
 refreshed in two places would have each refresh spend the other's refresh token.
 
-The refresh is Claude Code's own (2.1.283): a JSON POST of the refresh token, the client id
-and the scopes to `TOKEN_URL`, under its HTTP client's user agent (`USER_AGENT`), answered with `access_token`, `expires_in` and, when it turns,
-`refresh_token`.
+The refresh is Claude Code's too: its `auth login`, handed the refresh token and scopes in
+place of a browser (`REFRESH_TOKEN_ENV`, `SCOPES_ENV`), refreshes, writes the result to its home
+as a login does, and exits 1 on any refusal, naming the token endpoint's HTTP status. It runs
+the way the login does, in a scratch agent container with an empty home: a home holding a
+login would start Claude Code's own background refresh, spending the same refresh token.
+No other command waits for a refresh before it exits.
 
-It is asked again only when it has ended: its refresh token refused as `invalid_grant` (which
-Claude Code also takes as its tokens gone) or past `refreshTokenExpiresAt`. The file is then
+It is asked again only when it has ended: its refresh token refused by the OAuth server
+itself (400 or 401, which a retry is refused again) or past `refreshTokenExpiresAt`. The file is then
 removed, so every place that asks whether it is set asks for it again (`claude_login.lost`,
 answered in the AI terminal's base window); any other failed renewal is retried.
 """
@@ -21,20 +24,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import tempfile
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
+from . import hostimages, labels, naming
 from .events import EventLog
+from .runtime.base import ContainerRuntime, ContainerSpec, Mount, RuntimeError_
 
-TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
-CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-# Claude Code's refresh goes through axios, which names itself; the endpoint's Cloudflare
-# refuses urllib's default (`Python-urllib/…`) with 403 "error code: 1010".
-USER_AGENT = "axios/1.9.0"
+REFRESH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_REFRESH_TOKEN"
+SCOPES_ENV = "CLAUDE_CODE_OAUTH_SCOPES"
+# How `auth login` says the token endpoint refused it: axios's own message.
+REFUSED = re.compile(r"status code (\d{3})")
+# The OAuth server's refusal of the grant itself; Cloudflare's is 403, a fault 5xx.
+ENDED_STATUSES = frozenset({"400", "401"})
+HOME_IN_CONTAINER = "/login"
+RUN_TIMEOUT = 120.0
 # Remote Control's scope; a login without it is the agent credential over again.
 SESSIONS_SCOPE = "user:sessions:claude_code"
 # An access token lives hours; these only set how early it is renewed and how soon a failed
@@ -62,14 +70,19 @@ def read(path: Path) -> dict[str, Any]:
         raise LoginError(f"{path} does not parse: {exc}") from exc
     if os.stat(path).st_mode & 0o077:
         raise LoginError(f"{path} must be readable by its owner alone (0600)")
+    check(login, str(path))
+    return login
+
+
+def check(login: dict[str, Any], where: str) -> None:
+    """Refuses a login that is not a full-scope claude.ai sign-in, naming `where` it came from."""
     oauth = login.get("claudeAiOauth") or {}
     missing = [k for k in ("accessToken", "refreshToken", "expiresAt", "scopes") if k not in oauth]
     if missing or "organizationUuid" not in (login.get("oauthAccount") or {}):
-        raise LoginError(f"{path} is not a claude.ai sign-in: it lacks "
+        raise LoginError(f"{where} is not a claude.ai sign-in: it lacks "
                          f"{', '.join(missing) or 'the account'}")
     if SESSIONS_SCOPE not in oauth["scopes"]:
-        raise LoginError(f"{path}'s sign-in lacks {SESSIONS_SCOPE}, which Remote Control needs")
-    return login
+        raise LoginError(f"{where}'s sign-in lacks {SESSIONS_SCOPE}, which Remote Control needs")
 
 
 def is_set(path: Path) -> bool:
@@ -91,53 +104,69 @@ def write(path: Path, login: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def from_claude_home(home: Path) -> dict[str, Any]:
-    """What `claude auth login` left in a home: its credentials and the account."""
+def from_claude_home(home: Path, with_account: bool = True) -> dict[str, Any]:
+    """What `claude auth login` left in a home: its credentials and, asked, the account."""
     try:
-        oauth = json.loads((home / ".claude" / ".credentials.json").read_text())["claudeAiOauth"]
-        account = json.loads((home / ".claude.json").read_text())["oauthAccount"]
+        login = {"claudeAiOauth": json.loads(
+            (home / ".claude" / ".credentials.json").read_text())["claudeAiOauth"]}
+        if with_account:
+            login["oauthAccount"] = json.loads((home / ".claude.json").read_text())["oauthAccount"]
     except (OSError, KeyError, json.JSONDecodeError) as exc:
         raise LoginError(f"`claude auth login` left no sign-in in {home}: {exc}") from exc
-    return {"claudeAiOauth": oauth, "oauthAccount": account}
+    return login
 
 
-def refreshed(login: dict[str, Any], now: float) -> dict[str, Any]:
+def refreshed(login: dict[str, Any], runtime: ContainerRuntime, epoch: int,
+              beside: Path) -> dict[str, Any]:
+    """The login renewed by Claude Code's `auth login` in a scratch agent container whose home
+    is a directory made in `beside`. The account is the login's: a refresh does not change
+    whose it is."""
     oauth = login["claudeAiOauth"]
-    body = json.dumps({"grant_type": "refresh_token", "refresh_token": oauth["refreshToken"],
-                       "client_id": CLIENT_ID, "scope": " ".join(oauth["scopes"])}).encode()
-    request = urllib.request.Request(TOKEN_URL, data=body, method="POST",
-                                     headers={"Content-Type": "application/json",
-                                              "User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=30) as answer:
-            said = json.loads(answer.read())
-    except urllib.error.HTTPError as exc:
-        said = exc.read()[:300].decode(errors="replace")
-        try:
-            error = json.loads(said).get("error")
-        except (json.JSONDecodeError, AttributeError):
-            error = None
-        raise (LoginEnded if error == "invalid_grant" else LoginError)(
-            f"{TOKEN_URL} refused the refresh: {exc.code} {said}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise LoginError(f"{TOKEN_URL} could not refresh the sign-in: {exc}") from exc
-    new = {**oauth, "accessToken": said["access_token"],
-           "refreshToken": said.get("refresh_token", oauth["refreshToken"]),
-           "expiresAt": int((now + said["expires_in"]) * 1000)}
-    if "refresh_token_expires_in" in said:
-        new["refreshTokenExpiresAt"] = int((now + said["refresh_token_expires_in"]) * 1000)
-    if "scope" in said:
-        new["scopes"] = said["scope"].split()
-    return {**login, "claudeAiOauth": new}
+        image = hostimages.ensure(runtime, hostimages.agent())
+        # Left by a daemon that stopped mid-run, it would refuse every run after it.
+        runtime.remove(naming.claude_refresh(), force=True)
+        with tempfile.TemporaryDirectory(dir=beside, prefix=".claude-refresh-") as home:
+            result = runtime.run_to_completion(ContainerSpec(
+                name=naming.claude_refresh(),
+                image=image,
+                entrypoint=("claude",),
+                command=("auth", "login"),
+                labels={labels.MANAGED: "true", labels.ROLE: str(labels.Role.CLAUDE_REFRESH),
+                        labels.EPOCH: str(epoch)},
+                environment={"HOME": HOME_IN_CONTAINER,
+                             REFRESH_TOKEN_ENV: oauth["refreshToken"],
+                             SCOPES_ENV: " ".join(oauth["scopes"])},
+                mounts=(Mount(source=home, target=HOME_IN_CONTAINER),),
+                # The daemon's own user, so what it writes in the home is the daemon's to read.
+                user=f"{os.getuid()}:{os.getgid()}",
+                cap_drop=("ALL",),
+                security_opt=("no-new-privileges:true",),
+            ), timeout=RUN_TIMEOUT)
+            if result.exit_code != 0:
+                said = result.output.strip()[-500:]
+                status = REFUSED.search(said)
+                raise (LoginEnded if status and status.group(1) in ENDED_STATUSES else LoginError)(
+                    f"claude auth login could not refresh the sign-in: exited "
+                    f"{result.exit_code}: {said!r}")
+            new = from_claude_home(Path(home), with_account=False)["claudeAiOauth"]
+    except (hostimages.HostImageError, RuntimeError_) as exc:
+        raise LoginError(f"the refresh's container could not run: {exc}") from exc
+    renewed = {**login, "claudeAiOauth": new}
+    check(renewed, "the refreshed sign-in")
+    return renewed
 
 
 class Refresher:
     """Renews the sign-in before it expires, says so when it cannot, and removes it once it
     has ended. A new one is said by the daemon's file watch (`claude_login.stored`)."""
 
-    def __init__(self, path: Path, events: EventLog) -> None:
+    def __init__(self, path: Path, events: EventLog, runtime: ContainerRuntime,
+                 epoch: int) -> None:
         self.path = path
         self.events = events
+        self.runtime = runtime
+        self.epoch = epoch
         self._retry_at = 0.0
 
     def run(self, stop: threading.Event) -> None:
@@ -149,11 +178,14 @@ class Refresher:
             return
         try:
             oauth = read(self.path)["claudeAiOauth"]
-            if oauth.get("refreshTokenExpiresAt", now * 1000 + 1) / 1000 <= now:
+            # Claude Code writes null when the token endpoint names no expiry.
+            ends = oauth.get("refreshTokenExpiresAt")
+            if ends is not None and ends / 1000 <= now:
                 raise LoginEnded("its refresh token has expired")
             if oauth["expiresAt"] / 1000 - now > REFRESH_AHEAD_SECONDS:
                 return
-            write(self.path, refreshed(read(self.path), now))
+            write(self.path, refreshed(read(self.path), self.runtime, self.epoch,
+                                      self.path.parent))
         except LoginEnded as exc:
             self.path.unlink()
             self.events.emit("claude_login.lost", error=str(exc))

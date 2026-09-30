@@ -65,12 +65,14 @@ class Role(StrEnum):
     JUDGE = "judge"
     # The one-shot nix builder a toolbelt Nixery refuses is built in (`flakes.py`).
     FLAKE_BUILD = "flake-build"
+    # The one-shot `claude auth login` that refreshes the claude.ai sign-in (`claude_login.py`).
+    CLAUDE_REFRESH = "claude-refresh"
 
 
 # Run once for a caller and removed by it. One running under the daemon run that started it
 # belongs to a caller still waiting; any other is residue, swept as an orphan.
 ONE_SHOT = frozenset({Role.FACE_MOUNT, Role.CLOSURE_COPY, Role.SCREENSHOT, Role.FACE_INPUT,
-                      Role.JUDGE, Role.FLAKE_BUILD})
+                      Role.JUDGE, Role.FLAKE_BUILD, Role.CLAUDE_REFRESH})
 
 
 class Kind(StrEnum):
