@@ -512,7 +512,8 @@ def test_a_base_window_running_a_command_is_left_to_the_user(monkeypatch):
 
 def test_the_tab_menu_lists_every_tab_in_the_bars_order_and_selects_it(monkeypatch):
     """The bar is cut at the terminal's right edge; the `≡` menu reaches every tab."""
-    rows = ["@0\traigolmi\t0\t\t", "@4\tmanager ⚙\t0\t\t", "@2\ttab-11 machine\t1\t\t",
+    # As `_keep` writes the marks: "1" or "0"; the base window, which it never reaches, has none.
+    rows = ["@0\traigolmi\t0\t\t", "@4\tmanager ⚙\t0\t0\t0", "@2\ttab-11 machine\t1\t0\t0",
             "@7\ttab-10 letthemrise\t0\t1\t1"]
 
     def tmux(*args, **_kwargs):

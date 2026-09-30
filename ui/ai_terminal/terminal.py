@@ -601,8 +601,9 @@ def tab_menu(client_name: str) -> list[str]:
     items: list[str] = []
     for n, line in enumerate(lines, start=1):
         window_id, name, active, marked, managed = line.split("\t")
-        label = (("▸ " if active == "1" else "  ") + ("● " if marked else "")
-                 + ("◇ " if managed else "") + name)
+        # `_keep` writes both marks as "1" or "0"; a window it has not reached has neither.
+        label = (("▸ " if active == "1" else "  ") + ("● " if marked == "1" else "")
+                 + ("◇ " if managed == "1" else "") + name)
         items += [label.replace("#", "##"), str(n) if n < 10 else "",
                   f"select-window -t {window_id}"]
     height = int(_tmux("display-message", "-p", "-c", client_name,
