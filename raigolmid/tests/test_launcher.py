@@ -15,7 +15,8 @@ import time
 
 import pytest
 
-from raigolmid.launcher.client import LauncherClient, LauncherError, LauncherTimeout
+from raigolmid.launcher.client import (LauncherClient, LauncherError, LauncherOutputHeld,
+                                       LauncherTimeout)
 from raigolmid.launcher.server import LauncherServer
 from raigolmid.paths import Paths
 
@@ -231,6 +232,18 @@ def test_an_exec_whose_caller_timed_out_is_ended_not_left_running(launcher, scri
     with pytest.raises(LauncherTimeout):
         launcher.exec(["/bin/sh", "-c", script], cwd="/tmp", timeout=0.5)
     assert _exit_of(launcher, script) == code
+
+
+def test_an_exec_whose_output_a_background_job_holds_says_the_command_exited(launcher):
+    """`&` after a `&&` list backgrounds the whole list, whose shell keeps the output open
+    while the command it waits on runs: the command has exited and said what it had to, and
+    the timeout says that rather than that something failed."""
+    script = "cd /tmp && sleep 30 > /dev/null 2>&1 < /dev/null & echo started"
+    # bash, as an agent's `exec` runs it: dash execs the list's last command in its shell's
+    # place, which leaves nothing holding the output.
+    with pytest.raises(LauncherOutputHeld) as held:
+        launcher.exec(["bash", "-c", script], cwd="/tmp", timeout=2.0)
+    assert "exited 0" in str(held.value) and "started" in str(held.value)
 
 
 def test_binary_output_survives_the_framing(launcher):

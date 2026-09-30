@@ -7,7 +7,9 @@ shapes after that, decided by `pty`:
              process exits, then the connection closes. This is what a shell or a tmux
              window attaches to.
   pty=false  framed `{"stream": "stdout"|"stderr", "data": "..."}` lines followed by one
-             `{"exit": N}`. This is what an agent `exec` over MCP reads.
+             `{"exit": N}`. This is what an agent `exec` over MCP reads. `{"exited": N}`
+             comes once, when the command itself exits: before `exit` when something it left
+             running still holds its output open, which the caller could not tell otherwise.
   stream=true  the connection is the process's stdin and stdout, raw bytes both ways and no
              terminal between: a terminal's line discipline rewrites `\n` and echoes input,
              which breaks any framed protocol (LSP, DAP). stderr goes to the

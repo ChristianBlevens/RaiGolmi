@@ -34,6 +34,11 @@ class LauncherTimeout(LauncherError):
     a caller can say *what* did not answer, which the launcher cannot."""
 
 
+class LauncherOutputHeld(LauncherTimeout):
+    """The command exited, but its output was still open at the timeout: a process it left
+    running holds it. Nothing failed, so nothing about the view is in question."""
+
+
 @dataclass(frozen=True, slots=True)
 class ExecOutput:
     exit_code: int
@@ -172,6 +177,7 @@ class LauncherClient:
         out: list[str] = []
         err: list[str] = []
         exit_code: int | None = None
+        exited: int | None = None
         try:
             sock.sendall(protocol.encode(req.to_wire()))
             with sock.makefile("rb") as fh:
@@ -186,9 +192,20 @@ class LauncherClient:
                     if "exit" in frame:
                         exit_code = int(frame["exit"])
                         break
+                    if "exited" in frame:
+                        exited = int(frame["exited"])
+                        continue
                     text = protocol.frame_bytes(frame).decode("utf-8", errors="replace")
                     (out if frame.get("stream") == "stdout" else err).append(text)
         except socket.timeout as exc:
+            if exited is not None:
+                raise LauncherOutputHeld(
+                    f"{' '.join(cmd)} exited {exited}, but its output was still open after "
+                    f"{timeout}s: a process it started in the background holds it. `&` "
+                    "backgrounds the whole `&&` list before it, and that list's shell keeps "
+                    "the output; background the one command (`{ cmd > log 2>&1 & }`) or "
+                    f"redirect the list. It printed: stdout {''.join(out)[-2000:]!r} stderr "
+                    f"{''.join(err)[-2000:]!r}") from exc
             raise LauncherTimeout(
                 f"{' '.join(cmd)} produced no result within {timeout}s"
             ) from exc
@@ -307,6 +324,8 @@ class LauncherClient:
                     if "exit" in frame:
                         yield ("exit", str(frame["exit"]))
                         return
+                    if "exited" in frame:
+                        continue
                     yield (frame.get("stream", "stdout"),
                            protocol.frame_bytes(frame).decode("utf-8", errors="replace"))
         finally:

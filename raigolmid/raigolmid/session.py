@@ -41,7 +41,7 @@ from .faces import FaceError, Faces
 from .facemounts import FaceMounts, FaceMountError
 from .instances import Instance, Instances, RebuildResult
 from .intent import MANAGER, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent
-from .launcher import LauncherError, LauncherUnreachable
+from .launcher import LauncherError, LauncherOutputHeld, LauncherUnreachable
 from .paths import Paths
 from .presence import Presence, PresenceError
 from .queues import BuildLock, BuildOutcome, Debouncer, InstanceQueues, Superseded
@@ -1240,6 +1240,8 @@ class Session:
                 f"to run {cmd[0]!r}")
         try:
             output = self.views.client(instance_id).exec(cmd, cwd=cwd, timeout=timeout)
+        except LauncherOutputHeld as exc:
+            raise SessionError(str(exc)) from exc
         except LauncherError as exc:
             # A command that ends without an exit code says nothing about *why*. The two
             # cases behave identically here and need opposite investigations: the launcher

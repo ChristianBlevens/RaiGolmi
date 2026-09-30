@@ -400,9 +400,13 @@ class Handler(socketserver.BaseRequestHandler):
         open_fds = {out_r: "stdout", err_r: "stderr"}
         caller = conn.fileno()
         abandoned = False
+        exited = False
         try:
             while open_fds:
                 readable, _, _ = select.select([*open_fds, caller], [], [], 1.0)
+                if not exited and (code := _exited(proc.pid)) is not None:
+                    exited = True
+                    conn.sendall(protocol.encode({"exited": code}))
                 if caller in readable:
                     # The client sends nothing after the start request, so the socket is
                     # readable only at end-of-file: the caller timed out or went away. A
@@ -486,6 +490,17 @@ class Handler(socketserver.BaseRequestHandler):
                 return
             if _exits_within(proc.pid, ABANDON_GRACE):
                 return
+
+
+def _exited(pid: int) -> int | None:
+    """The child's exit code once it has exited, left unreaped for `reap` to collect."""
+    try:
+        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return None
+    if info is None:
+        return None
+    return info.si_status if info.si_code == os.CLD_EXITED else 128 + info.si_status
 
 
 def _exits_within(pid: int, seconds: float) -> bool:
