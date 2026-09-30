@@ -139,7 +139,9 @@ for the machine you installed from it instead, and tells you how to apply it the
   session, so you can answer from your phone. At the end the machine tab writes a report.
 - **Shared.** Upload a face, toolbelt or body to the public
   [registry](https://github.com/ChristianBlevens/raigolmi-registry) from the catalog, and
-  download what others have shared. A body built from your own project is never uploaded.
+  download what others have shared. Bodies are shared too, but one that builds from your own
+  project's working copy is refused, so your code never leaves the machine that way; share
+  the project itself with git.
 
 ## Examples
 
