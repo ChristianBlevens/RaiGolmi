@@ -76,7 +76,7 @@ def test_the_users_git_hooks_and_config_are_read_only_in_an_agent(h):
     # The MCP server's path pairs are the project directories and the home, never the
     # .git overlays.
     assert [t for _, t in json.loads(spec.environment["RAIGOLMI_MOUNTS"])] == [
-        "/work", "/guide", "/agent/plugins", "/home/agent"]
+        "/work", "/guide", "/transfer", "/agent/plugins", "/home/agent"]
 
 
 def test_ref_state_is_recorded_before_a_body_tabs_agent_starts(h):

@@ -264,8 +264,8 @@ def build_server(client: ApiClient):
         return call("managed")
 
     @tool(server, description="Machine tab only: one tab you manage closer — its state, "
-                             "the tail of its thought doc (`lines`) and its last `turns` "
-                             "turns.")
+                             "its SESSION-START.md, the tail of this conversation's thought "
+                             "doc (`lines`) and its last `turns` turns.")
     def managed_tab(tab: str, turns: int = 20, lines: int = 60) -> dict[str, Any]:
         return call("managed_tab", tab=tab, turns=turns, lines=lines)
 
@@ -283,23 +283,26 @@ def build_server(client: ApiClient):
 
     @tool(server, description="Machine tab only: hand a tab you manage over to a fresh "
                              "conversation, in two calls. The first has it make its documents "
-                             "ready; once told that turn ended, read them (`managed_tab`), and "
-                             "the second restarts it on SESSION-START.md and its thought doc "
-                             "(and `brief`, if given), its old conversation archived. Only "
-                             "while it is idle with nothing asked.")
+                             "ready; once told that turn ended, read its SESSION-START.md "
+                             "(`managed_tab`), and the second closes it, its conversation and "
+                             "thought doc archived, and opens a new tab on the same body, "
+                             "still managed, that starts from SESSION-START.md (and `brief`, "
+                             "if given). You manage the new tab by its new id. Only while it "
+                             "is idle with nothing asked.")
     def restart_fresh(tab: str, brief: str | None = None) -> dict[str, Any]:
         return call("restart_fresh", tab=tab, brief=brief)
 
-    @tool(server, description="Machine tab only: say your thought doc is ready for your next "
-                             "conversation, once the daemon has asked at your context budget. "
-                             "You are restarted fresh when this turn ends.")
+    @tool(server, description="Machine tab only: say your /work/SESSION-START.md is ready for "
+                             "your next conversation, once the daemon has asked at your "
+                             "context budget. A new machine tab takes over from it when this "
+                             "turn ends.")
     def ready_to_restart() -> dict[str, Any]:
         return call("ready_to_restart")
 
     @tool(server, description="Machine tab only: the user's report on the run that is over, "
                              "once the daemon asks for it — for each tab what it did, where it "
                              "stands and what is theirs next; what you decided for them; what "
-                             "went wrong. Filed with ~/run.md in their catalog.")
+                             "went wrong. Filed with /work/run.md in their catalog.")
     def report_run(report: str) -> dict[str, Any]:
         return call("report_run", report=report)
 

@@ -56,6 +56,8 @@ class TabIntent:
     # When the user's time for a managed tab runs out (epoch seconds): the daemon then has it
     # make its documents ready and gives it back (`coordinator.py`).
     until: float | None = None
+    # The tab whose work this one took over in a fresh conversation (`Session.succeed_tab`).
+    continues: str | None = None
 
     @property
     def manager(self) -> bool:

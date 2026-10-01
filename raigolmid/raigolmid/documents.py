@@ -28,9 +28,8 @@ from .events import Event
 LAYER_DOC = "LAYER.md"
 SESSION_START = "SESSION-START.md"
 THOUGHTS = "thoughts.md"
-# The thought doc of the conversation before a fresh restart that starts its own.
-PREVIOUS_THOUGHTS = "previous-thoughts.md"
-# The machine tab's record of a run, kept across its conversations until it reports the run.
+# The machine tab's record of a run, in its `/work`, kept across every machine tab's
+# conversation until the run is reported.
 RUN_RECORD = "run.md"
 INCIDENTS = "incidents"
 FIXED = "fixed"
@@ -77,12 +76,14 @@ def index(working_copy: Path, home: Path, layers: list[Layer]) -> dict[str, Any]
     `changed_after` lists the layer's files written since it, and is empty when it is current."""
     return _route([
         (working_copy / SESSION_START, None,
-         "where the work in this working copy stands, rewritten each session. Read it before "
-         "acting; the user's words outrank it. When their instruction changes what the next "
-         "session should do, rewrite it first, then work."),
+         "where the work in this working copy stands, rewritten each session: the one document "
+         "the next conversation starts from. Read it before acting; the user's words outrank "
+         "it. When their instruction changes what the next session should do, rewrite it "
+         "first, then work."),
         (home / THOUGHTS, None,
-         "this tab's thought doc: the goal, what you found, what you decided, written as you "
-         "work. It is archived with this conversation when the tab closes."),
+         "this conversation's thought doc: the goal, what you found, what you decided, written "
+         "as you work — its record, archived with it when the tab closes, never what a "
+         "conversation starts from."),
         *_layer_rows(layers),
     ])
 

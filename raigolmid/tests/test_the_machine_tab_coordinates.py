@@ -89,7 +89,7 @@ def test_only_the_machine_tab_manages_and_only_body_tabs_are_managed(h):
         m.tab(MACHINE)["manage"](tab=MACHINE)
     managed = m.tab(MACHINE)["manage"](tab=BODY)
     assert (managed["managed"], managed["until"]) == (True, None)
-    assert "~/run.md" in managed["next"]
+    assert "/work/run.md" in managed["next"]
     assert h.session.intent.tabs[BODY].managed
     assert [e.data["on"] for e in h.events_of("tab.managed")] == [True]
 
@@ -197,11 +197,12 @@ def _hear(m, tab: str) -> str:
     return item["content"]
 
 
-def test_a_fresh_restart_first_has_the_tab_ready_its_documents_then_starts_it_on_them(h):
+def test_a_fresh_restart_readies_the_tabs_documents_then_hands_its_work_to_a_new_tab(h):
     m = Machine(h)
-    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(MACHINE)["manage"](tab=BODY, stop_when="the parser ships", hours=4)
     home = h.session.agents.home(BODY)
     converse(home)
+    (home / "thoughts.md").write_text("s1 found the lexer slow\n")
 
     m.tab(BODY)["agent_activity"](busy=True)
     with pytest.raises(SessionError, match="working"):
@@ -223,26 +224,49 @@ def test_a_fresh_restart_first_has_the_tab_ready_its_documents_then_starts_it_on
     [told] = m.queued(MACHINE)
     assert "made its documents ready" in told["content"]
 
+    until = h.session.intent.tabs[BODY].until
     restarted = m.tab(MACHINE)["restart_fresh"](tab=BODY, brief="the tests are next")
-    assert restarted["resumed"] is False
-    assert h.session.intent.tabs[BODY].handover is None
-    assert not h.session.agents.has_conversation(BODY), \
-        "a crash before the new session's first turn must not --continue the old one"
+    new = restarted["tab"]
+    assert (restarted["continues"], new != BODY) == (BODY, True)
+    assert BODY not in h.session.intent.tabs
+    assert h.session.intent.run.ended is None, "the run goes on across the handing-on"
+    successor = h.session.intent.tabs[new]
+    assert (successor.body, successor.managed, successor.stop_when, successor.until,
+            successor.continues, successor.handover) == (
+        "myapi", True, "the parser ships", until, BODY, None)
+    # The old conversation and its thought doc are archived together, its record.
     [archived] = [r for r in h.paths.agent_archive.glob("*.json")
-                  if json.loads(r.read_text()).get("fresh_restart")]
-    assert (archived.with_suffix("") / "s1.jsonl").is_file()
-    [brief] = m.queued(BODY)
-    assert "/work/SESSION-START.md" in brief["content"] and "~/thoughts.md" in brief["content"]
+                  if json.loads(r.read_text())["tab"] == BODY]
+    kept = archived.with_suffix("")
+    assert (kept / "thoughts.md").read_text() == "s1 found the lexer slow\n"
+    assert (kept / ".claude" / "projects" / "-work" / "s1.jsonl").is_file()
+    new_home = h.session.agents.home(new)
+    assert not (new_home / "thoughts.md").exists()
+    assert not h.session.agents.has_conversation(new)
+    # It starts from SESSION-START.md and the brief, never the old thought doc.
+    [brief] = m.queued(new)
+    assert "/work/SESSION-START.md" in brief["content"]
     assert "the tests are next" in brief["content"]
+    assert "lexer" not in brief["content"]
+    [row] = m.tab(MACHINE)["managed"]()
+    assert (row["tab"], row["continues"]) == (new, BODY)
+    # The machine tab hears of the new tab's turns without managing it again.
+    m.channels._tabs[MACHINE].queue.clear()
+    h.session.agent_session_started(new)
+    m.tab(new)["agent_activity"](busy=True)
+    m.tab(new)["agent_activity"](busy=False)
+    [told] = m.queued(MACHINE)
+    assert told["meta"]["tab"] == new
 
 
-def test_the_machine_tab_at_its_budget_while_managing_confirms_then_restarts_on_its_thoughts(h):
+def test_the_machine_tab_at_its_budget_while_managing_confirms_then_hands_on_to_a_new_one(h):
     m = Machine(h)
     settingsdoc.write(h.session.paths.settings, agents={"context_budget_tokens": 100000})
     home = h.session.agents.home(MACHINE)
     _usage(home, 105_000)
     (home / "thoughts.md").write_text("tab-2 is porting the parser\n")
-    (home / "run.md").write_text("23:00 handed tab-2\n")
+    record = h.session.paths.work / "run.md"
+    record.write_text("23:00 handed tab-2\n")
 
     # Not managing, the user is there: theirs to close.
     m.tab(MACHINE)["agent_activity"](busy=True)
@@ -275,15 +299,19 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_restarts_on_
     m.tab(MACHINE)["agent_activity"](busy=False)
     m.pump()
 
-    assert h.session.intent.tabs[MACHINE].handover is None
-    assert not (home / "thoughts.md").exists()
-    assert (home / "previous-thoughts.md").read_text() == "tab-2 is porting the parser\n"
+    machine = h.session.intent.machine_tab()
+    assert (machine.tab_id != MACHINE, machine.continues) == (True, MACHINE)
+    assert MACHINE not in h.session.intent.tabs and h.session.intent.tabs[BODY].managed
     [archived] = [r for r in h.paths.agent_archive.glob("*.json")
-                  if json.loads(r.read_text()).get("fresh_restart")]
-    assert (archived.with_suffix("") / "thoughts.md").is_file(), "archived with its conversation"
-    assert "~/previous-thoughts.md" in m.queued(MACHINE)[-1]["content"]
-    assert (home / "run.md").read_text() == "23:00 handed tab-2\n", \
-        "the run's record outlives the conversations it spans"
+                  if json.loads(r.read_text())["tab"] == MACHINE]
+    assert (archived.with_suffix("") / "thoughts.md").read_text() == \
+        "tab-2 is porting the parser\n", "archived with its conversation"
+    new_home = h.session.agents.home(machine.tab_id)
+    assert not (new_home / "thoughts.md").exists()
+    told = m.queued(machine.tab_id)[-1]["content"]
+    assert "/work/SESSION-START.md" in told and "parser" not in told
+    assert record.read_text() == "23:00 handed tab-2\n", \
+        "the run's record outlives the machine tabs it spans"
 
 
 def test_a_tab_stops_where_the_user_said_and_is_held_on_remote_control_until_they_answer(h):
@@ -363,7 +391,8 @@ def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
     m = Machine(h)
     m.tab(MACHINE)["manage"](tab=BODY, stop_when="the parser passes")
     home, body_home = h.session.agents.home(MACHINE), h.session.agents.home(BODY)
-    (home / "run.md").write_text("directed tab-2 to the parser\n")
+    record = h.session.paths.work / "run.md"
+    record.write_text("directed tab-2 to the parser\n")
     converse(body_home)
     (body_home / "thoughts.md").write_text("the parser is green\n")
     id = m.referred(BODY)
@@ -392,7 +421,7 @@ def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
     assert h.session.intent.run is None
     report = h.paths.runs / filed["report"].rsplit("/", 1)[-1]
     assert report.read_text().endswith("tab-2: the parser passes; next is the CLI\n")
-    assert not (home / "run.md").exists()
+    assert not record.exists()
     assert (h.paths.runs / f"{report.stem}-record.md").read_text() == \
         "directed tab-2 to the parser\n"
     [reported] = h.events_of("run.reported")

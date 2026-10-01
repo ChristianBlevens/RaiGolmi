@@ -45,6 +45,7 @@ CHANNEL = ("--channels", "plugin:raigolmi@raigolmi")
 PLUGINS = "/agent/plugins"
 # The layer-authoring guide, a product doc under the source (`agents/guide/`).
 GUIDE = "agents/guide"
+TRANSFER = "/transfer"
 # The prefix of a project directory in a tab's home that links an archived conversation
 # (`Agents._link_archived`).
 ARCHIVED = "-archived-"
@@ -181,6 +182,9 @@ tab is marked in this terminal until they look at it.
   and every layer with its definition directory and whether it can be selected. Start here.
 - `/guide`: how a face, a toolbelt and a body are written, and what each can reach. Read the
   part for a layer before you write or change one.
+- `/transfer`: the user's Windows transfer folder. A file they drop on the RaiGolmi window
+  lands here; a file you write to `/transfer/out` is moved to their Windows
+  `Downloads\RaiGolmi`. It is how a file reaches them or comes from them.
 - `list_items`: the layers as the user's selector shows them, with the sandboxes running on
   each body.
 - `status`: what this tab is on now — body, sandbox, toolbelt, health, builds.
@@ -192,9 +196,9 @@ tab is marked in this terminal until they look at it.
 - `SESSION-START.md` at the root of `/work` says where the work stands. Read it before acting;
   the user's words outrank it. When their instruction changes what the next session should do,
   rewrite it first, then work, and leave it current when you finish.
-- `~/thoughts.md` is this tab's thought doc: the goal, what you found and what you decided,
-  written as you work rather than at the end. It is archived with this conversation when the
-  tab closes.
+- `~/thoughts.md` is this conversation's thought doc: the goal, what you found and what you
+  decided, written as you work rather than at the end. It is the conversation's record,
+  archived with it when the tab closes; no conversation starts from it.
 - `LAYER.md` in a layer's directory is its design, its goals and a general account of how it
   is built, pointing at the real files. Write one when you make a layer, and bring it up to
   date when you change the layer: `index` names the files changed since.
@@ -231,8 +235,8 @@ with `docker commit`.
 
 ## Working without the user
 
-Every agent keeps to a {budget}-token context budget, so keep `~/thoughts.md` good enough to
-continue from in a fresh conversation. Your context use is the input your latest answer took —
+Every agent keeps to a {budget}-token context budget, so keep `SESSION-START.md` good enough
+to continue from in a fresh conversation at any point. Your context use is the input your latest answer took —
 the last `usage` in the newest `~/.claude/projects/-work/*.jsonl` — which is what the daemon
 measures; read it there rather than estimating. The user can hand body tabs to the machine tab to manage,
 and is then away: nothing a managed tab or the machine tab does waits on them. A managed tab's
@@ -240,11 +244,11 @@ questions that the user's preferences cannot answer go to the machine tab, whose
 as the user's would, and a message *From the machine tab* is its direction to you. A turn an API
 error cut off — the usage limit included — is resumed by the daemon once it is over.
 
-**Ending a conversation.** When a conversation ends at the budget, the next starts from your
-documents alone. Before it ends: `SESSION-START.md` says where the work stands and what the next
-session takes, with nothing stale in it; `~/thoughts.md` holds the goal, what was found and
-decided, and the state now; what outlives this work is in the permanent doc it belongs to; and
-what should be committed is.
+**Ending a conversation.** A fresh conversation is a new tab, and it starts from
+`SESSION-START.md` alone. Before this one ends: `SESSION-START.md` is that start — where the work
+stands, what comes next and what to read — as short as it can be and with nothing stale in it;
+`~/thoughts.md` is finished as this conversation's record; what outlives this work is in the
+permanent doc it belongs to; and what should be committed is.
 
 **The machine tab** marks a tab the user hands it with `manage` — with `stop_when`, their words
 for where it stops for them, when they give one — and is told when each turn it manages ends.
@@ -255,15 +259,15 @@ answers their questions with `answer_question` — never putting one to the user
 managed tab's own documents give it — its test budget, what it may ask — are the user's and bind
 the machine tab's directions too: one that stands in the way goes in the report, never reread. At the budget,
 `restart_fresh` first has the tab make its documents ready for its next conversation; once told
-that turn has ended, it reads them with `managed_tab` and either `direct`s the tab to fix what is
-stale or calls `restart_fresh` again, which starts it fresh on `SESSION-START.md`. At its own
-budget while it manages tabs, the daemon asks it to make `~/thoughts.md` ready — every tab it
-manages, what each is working toward, what it told each and what is on its way — and to say so
-with `ready_to_restart`; its next conversation starts from that doc as `~/previous-thoughts.md`,
-and keeps a new `~/thoughts.md` of its own.
+that turn has ended, it reads its `SESSION-START.md` with `managed_tab` and either `direct`s the
+tab to fix what is stale or calls `restart_fresh` again, which closes it and hands its work to a
+new tab, still managed, that starts from `SESSION-START.md`. At its own budget while it manages
+tabs, the daemon asks it to make its own `/work/SESSION-START.md` ready — every tab it manages,
+what each is working toward, the last direction it gave each and what is on its way — and to say
+so with `ready_to_restart`; a new machine tab then takes over from that document.
 
 **A run and its report.** From the first tab handed over until its report, the machine tab keeps
-`~/run.md`, the run's record across all its conversations: what it directed, decided and saw,
+`/work/run.md`, the run's record across all its conversations: what it directed, decided and saw,
 as it happens. When the user gives a tab `hours`, the daemon has it make its documents ready at
 that time and gives it back. Once the last tab is given back — by the time, or by the machine
 tab when the user says stop — the daemon asks for the user's report, and `report_run` files it in
@@ -410,6 +414,8 @@ class Agents:
             # How a layer is written, from the disk's own source.
             Mount(source=str(hostimages.source_root() / GUIDE), target="/guide",
                   read_only=True),
+            # The user's Windows transfer folder, the one every face has as `~/Transfer`.
+            Mount(source=str(self.paths.transfer), target=TRANSFER),
             # The machine's agent: every tab takes up its plugins, and the
             # machine tab is the one that changes them and the instruction templates.
             Mount(source=str(self.paths.agent_plugins), target=PLUGINS,
@@ -417,6 +423,7 @@ class Agents:
             *((Mount(source=str(self.paths.agent_templates), target="/agent/templates"),)
               if spec.tab.machine else ()),
         )
+        self.paths.transfer.mkdir(parents=True, exist_ok=True)
         sockets = self.paths.agent_socket_dir(spec.tab.tab_id)
         sockets.mkdir(parents=True, exist_ok=True, mode=0o700)
         env = {
@@ -571,15 +578,6 @@ class Agents:
             return None
         return self._archive(conversation, tab_id, record)
 
-    def _pass_thoughts_on(self, tab_id: str, archived: str | None) -> None:
-        home = self.home(tab_id)
-        thoughts = home / documents.THOUGHTS
-        if not thoughts.is_file():
-            return
-        if archived is not None:
-            shutil.copy2(thoughts, self.paths.agent_archive / archived / documents.THOUGHTS)
-        os.replace(thoughts, home / documents.PREVIOUS_THOUGHTS)
-
     def _link_archived(self, tab: TabIntent) -> None:
         """Every archived conversation of this tab's kind — its body's, the machine tab's or
         the manager's — linked into its home beside its own, so Claude Code's `/resume`
@@ -631,22 +629,16 @@ class Agents:
         (archive / f"{name}.json").write_text(json.dumps(record), encoding="utf-8")
         return name
 
-    def restart(self, spec: AgentSpec, resume: bool = True,
-                new_thoughts: bool = False) -> tuple[str, bool]:
+    def restart(self, spec: AgentSpec, resume: bool = True) -> tuple[str, bool]:
         """A crashed tab's reopen, and the user's **Restart agent** — the prior
-        conversation resumed in a new container — or a fresh restart, which archives
-        it. The container, and whether it resumed. Nothing is lost silently.
-
-        `new_thoughts` gives the fresh conversation a thought doc of its own: the old one is
-        archived with its conversation and left as `PREVIOUS_THOUGHTS` to start from."""
+        conversation resumed in a new container — or the manager's fresh restart, which
+        archives it. The container, and whether it resumed. Nothing is lost silently."""
         tab = spec.tab
         self.stop(tab.tab_id)
         self._clear_session_records(tab.tab_id)
         if not resume:
-            archived = self.archive_conversation(tab.tab_id, {
+            self.archive_conversation(tab.tab_id, {
                 "tab": tab.tab_id, "body": tab.body, "fresh_restart": True})
-            if new_thoughts:
-                self._pass_thoughts_on(tab.tab_id, archived)
         tab.awaiting_session = True
         # `--continue` with nothing to continue exits: a tab restarted before its first task.
         resume = resume and self.has_conversation(tab.tab_id)

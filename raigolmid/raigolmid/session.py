@@ -746,6 +746,16 @@ class Session:
                                "sandbox")
         return tab
 
+    def session_start(self, tab_id: str) -> str | None:
+        """The `SESSION-START.md` at the root of the tab's `/work`, or None while it has
+        none: the one document its next conversation starts from."""
+        with self._lock:
+            tab = self.intent.tabs.get(tab_id)
+            if tab is None:
+                raise SessionError(f"no tab {tab_id}")
+            doc = self._place(tab).working_copy / documents.SESSION_START
+        return doc.read_text(encoding="utf-8") if doc.is_file() else None
+
     def _place(self, tab: TabIntent) -> Place:
         """Where a tab works, sandbox open or not: a body tab on its body's working copy, the
         machine tab on the no-body `/work`. The sandbox id is its sandbox's whether or
@@ -882,19 +892,14 @@ class Session:
         return tuple(sorted(p for p in candidates
                             if (p == definitions or definitions in p.parents) and git.is_repo(p)))
 
-    def restart_agent(self, tab_id: str, resume: bool = True,
-                      new_thoughts: bool = False) -> dict[str, Any]:
-        """A crashed tab's reopen, and the user's Restart; a fresh one ends its handover.
-        `new_thoughts`: the fresh conversation starts its own thought doc (`Agents.restart`)."""
+    def restart_agent(self, tab_id: str, resume: bool = True) -> dict[str, Any]:
+        """A crashed tab's reopen, the user's Restart, and the manager's fresh restart."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
                 raise SessionError(f"no tab {tab_id}")
             try:
-                container, resumed = self.agents.restart(self._agent_spec(tab), resume=resume,
-                                                         new_thoughts=new_thoughts)
-                if not resume:
-                    tab.handover = None
+                container, resumed = self.agents.restart(self._agent_spec(tab), resume=resume)
             finally:
                 self.store.save(self.intent)
             return {"tab": tab_id, "container": container, "resumed": resumed}
@@ -1096,35 +1101,88 @@ class Session:
         is archived. The tabs that always exist open afresh — the machine tab, or the
         selected body's — so closing one is how its context is cleared."""
         with self._lock:
-            tab = self.intent.tabs.get(tab_id)
-            if tab is None:
-                raise SessionError(f"no tab {tab_id}")
-            if tab.manager:
-                raise SessionError("the manager tab is the daemon's; it closes nothing the "
-                                   "user works in")
-            try:
-                self.agents.stop(tab_id)
-            except AgentError as exc:
-                self.events.emit("agent.stop_failed", tab=tab_id, reason=str(exc))
-            archive = None
-            try:
-                archive = self.agents.archive_home(tab_id, {"tab": tab_id, "body": tab.body})
-            except AgentError as exc:
-                self.events.emit("agent.home_archive_failed", tab=tab_id, reason=str(exc))
-            self._prune_kept()
-            held = self.intent.sandbox_of(tab_id)
-            released = None
-            if held is not None:
-                # While the tab is still the face tab, so the face is seen to leave its sandbox.
-                released = self._release(held, tab_id)
-            del self.intent.tabs[tab_id]
+            tab = self._closable(tab_id)
+            closed, released = self._close(tab)
             ended = self._end_run_if_over()
             self.store.save(self.intent)
-            self.events.emit("tab.closed", tab=tab_id, body=tab.body, instance=held,
-                             archive=archive, by="user")
+            self.events.emit("tab.closed", **closed, by="user")
         self._say_run_ended(ended)
         self._stop_released(released)
         return self.ensure_tabs(by="user")
+
+    def succeed_tab(self, tab_id: str, by: str) -> TabIntent:
+        """A fresh conversation is a new tab: this one closes as the user's close does, its
+        home archived with its thought doc as that conversation's record, and a new tab on
+        the same body takes over its work, the user's handing-over carried (`managed`,
+        `stop_when`, `until`). The new tab is in the intent before this one leaves it, so a
+        run is never seen to end between them. `by` is who handed the work on, "machine" or
+        "daemon"."""
+        with self._lock:
+            tab = self._closable(tab_id)
+            if tab.held is not None:
+                raise SessionError(f"{tab_id} is held for the user; theirs until they answer")
+            successor = TabIntent(tab_id=self.intent.new_tab_id(), body=tab.body,
+                                  managed=tab.managed, stop_when=tab.stop_when,
+                                  until=tab.until, continues=tab_id)
+            self.intent.tabs[successor.tab_id] = successor
+            closed, released = self._close(tab)
+            self.store.save(self.intent)
+            self.events.emit("tab.closed", **closed, reason="continued",
+                             continued_by=successor.tab_id, by=by)
+            self.events.emit("tab.opened", tab=successor.tab_id, body=tab.body, by=by,
+                             continues=tab_id)
+            if successor.managed:
+                self.events.emit("tab.managed", tab=successor.tab_id, body=tab.body, on=True,
+                                 why="continued", stop_when=successor.stop_when,
+                                 until=successor.until)
+            failed, ended = None, None
+            try:
+                self._start_agent(successor, resume=False)
+            except Exception as exc:
+                failed = exc
+                del self.intent.tabs[successor.tab_id]
+                ended = self._end_run_if_over()
+                self.store.save(self.intent)
+                self.events.emit("tab.closed", tab=successor.tab_id, body=tab.body,
+                                 reason="agent did not start")
+        self._say_run_ended(ended)
+        self._stop_released(released)
+        if failed is not None:
+            raise failed
+        return successor
+
+    def _closable(self, tab_id: str) -> TabIntent:
+        tab = self.intent.tabs.get(tab_id)
+        if tab is None:
+            raise SessionError(f"no tab {tab_id}")
+        if tab.manager:
+            raise SessionError("the manager tab is the daemon's; it closes nothing the "
+                               "user works in")
+        return tab
+
+    def _close(self, tab: TabIntent) -> tuple[dict[str, Any], str | None]:
+        """Under the lock: the tab's agent stopped, its home archived, its sandbox released
+        and the tab gone from the intent. What `tab.closed` says, and the released sandbox
+        for `_stop_released` once the lock is let go."""
+        try:
+            self.agents.stop(tab.tab_id)
+        except AgentError as exc:
+            self.events.emit("agent.stop_failed", tab=tab.tab_id, reason=str(exc))
+        archive = None
+        try:
+            archive = self.agents.archive_home(tab.tab_id, {"tab": tab.tab_id,
+                                                            "body": tab.body})
+        except AgentError as exc:
+            self.events.emit("agent.home_archive_failed", tab=tab.tab_id, reason=str(exc))
+        self._prune_kept()
+        held = self.intent.sandbox_of(tab.tab_id)
+        released = None
+        if held is not None:
+            # While the tab is still the face tab, so the face is seen to leave its sandbox.
+            released = self._release(held, tab.tab_id)
+        del self.intent.tabs[tab.tab_id]
+        return {"tab": tab.tab_id, "body": tab.body, "instance": held,
+                "archive": archive}, released
 
     # --- rebuilds ----------------------------------------------------
     def rebuild_body(self, instance_id: str, why: str) -> RebuildReport:
@@ -1490,8 +1548,8 @@ class Session:
 
     def report_run(self, machine_tab: str, report: str) -> dict[str, Any]:
         """The machine tab's report on the run that is over, kept under `Paths.runs` beside
-        its record of the run (`documents.RUN_RECORD`), which leaves its home so the next run
-        keeps its own. The run is over once reported."""
+        its record of the run (`documents.RUN_RECORD` in its `/work`), which moves there so
+        the next run keeps its own. The run is over once reported."""
         if not report.strip():
             raise SessionError("a report needs words: what each tab did and where it stands")
         with self._lock:
@@ -1513,7 +1571,7 @@ class Session:
             self.paths.runs.mkdir(parents=True, exist_ok=True)
             path = self.paths.runs / f"{name}.md"
             path.write_text(f"# The run from {span}\n\n{report.strip()}\n", encoding="utf-8")
-            record = self.agents.home(machine_tab) / documents.RUN_RECORD
+            record = self.paths.work / documents.RUN_RECORD
             kept = None
             if record.is_file():
                 kept = self.paths.runs / f"{name}-record.md"
