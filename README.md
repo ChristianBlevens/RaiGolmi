@@ -111,8 +111,8 @@ tab: *"Orchestrate the notes-api and myapi work. Stop if the API design needs my
 stop after 4 hours."* Then you go to bed.
 
 The machine tab takes over both tabs, and they get a ◇ in the terminal. When they have
-questions, they ask the machine tab instead of you, and it answers them and keeps them on
-track. When a tab's conversation gets too long, its work is handed to a new tab that starts
+questions, they ask the machine tab instead of you. It decides everything you didn't keep
+for yourself, and writes each decision down so you can overturn it. When a tab's conversation gets too long, its work is handed to a new tab that starts
 from its `SESSION-START.md`. If the usage limit cuts one off, it resumes once the limit resets.
 
 At 2am the notes-api tab hits the design question you said was yours. It stops and waits
@@ -292,15 +292,19 @@ right tab.
 You hand tabs over to the machine tab in plain words. You can give it a point where you want
 a tab to stop for you, a number of hours, or both. From then on:
 
-- a managed tab's questions go to the machine tab, which answers them and steers the work;
+- a managed tab's questions go to the machine tab, which answers them and steers the work.
+  It stands in for you on every decision you didn't keep with your stop, design questions
+  included, and records each one in the run's record so you can overturn it;
 - when a tab's context fills up, its work is handed to a fresh conversation through its own
   session notes, and the machine tab does the same for itself;
 - a tab cut off by a usage limit or an API error is resumed;
 - a tab that reaches your stop is held for you as a Claude Code Remote Control session,
   named after its project, and typing in the tab takes it back;
 - when the time runs out, each tab finishes up and is given back;
+- each time the machine tab hands itself over, it files a progress report on that stretch,
+  so a run of any length keeps its whole record;
 - once the last tab is back, the machine tab writes a report, which you'll find in the
-  catalog under Documents, Runs.
+  catalog under Documents, Runs, next to the progress reports.
 
 Every handover, hold and ending shows up in the history.
 
