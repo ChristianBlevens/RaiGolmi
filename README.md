@@ -112,8 +112,8 @@ stop after 4 hours."* Then you go to bed.
 
 The machine tab takes over both tabs, and they get a ◇ in the terminal. When they have
 questions, they ask the machine tab instead of you, and it answers them and keeps them on
-track. When a tab's conversation gets too long, it's handed to a fresh one that picks up
-where it left off. If the usage limit cuts one off, it resumes once the limit resets.
+track. When a tab's conversation gets too long, its work is handed to a new tab that starts
+from its `SESSION-START.md`. If the usage limit cuts one off, it resumes once the limit resets.
 
 At 2am the notes-api tab hits the design question you said was yours. It stops and waits
 for you as a Remote Control session, so if you're up you can answer it from your phone.
@@ -269,7 +269,8 @@ conversation. For `machine` and your selected body, that gives you a fresh tab w
 slate. To pick an old conversation back up, type `/resume` in a tab of the same project and
 press **Ctrl+A**: every archived one is listed there.
 
-Drag to select text (it's copied right away), right-click to paste, and press Ctrl+Enter for
+Drag to select text: it's copied right away and stays selected where it is. The wheel
+scrolls with it, and a key or a click ends it. Right-click to paste, and press Ctrl+Enter for
 a new line.
 
 ### The manager, in more detail
@@ -329,7 +330,9 @@ it the way you would.
 
 Copy and paste works both ways between Windows and the machine. Drop a file on the window
 and it shows up in `~/Transfer`. Put a file in `~/Transfer/out` and it lands in
-`Downloads\RaiGolmi`. **Ctrl + Alt + R** redraws the window if it ever looks wrong.
+`Downloads\RaiGolmi`. Every agent tab has the same folder at `/transfer`: it reads what you
+drop there, and sends you a file by writing it to `/transfer/out`.
+**Ctrl + Alt + R** redraws the window if it ever looks wrong.
 
 ### What `setup.bat` installs
 
