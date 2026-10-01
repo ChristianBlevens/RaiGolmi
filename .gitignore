@@ -34,8 +34,10 @@ result-*
 .idea/
 .vscode/
 
-# The launcher and its disk, built on Windows by the root build.bat
+# The launcher and its disk, built on Windows by the root build.bat or downloaded by
+# setup.bat (with the partial download and the launcher waiting to replace a running one)
 /windows/RaiGolmi.exe
+/windows/RaiGolmi.exe.*
 /windows/RaiGolmi.pdb
 /windows/bin/
 /windows/obj/

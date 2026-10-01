@@ -1,0 +1,144 @@
+# The published release: the launcher, a fresh disk and the host image, all in one public
+# package on ghcr.io, which setup.ps1 installs and updates from. One package, so making it
+# public is one switch.
+#
+#   ghcr.io/<owner>/raigolmi:<commit>, :latest   the launcher and a compressed qcow2, an OCI
+#                                                 artifact of two files (oras), annotated with
+#                                                 the commit
+#   ghcr.io/<owner>/raigolmi:host-<commit>       the bootc host image; a machine already
+#                                                 installed switches to it to upgrade
+#
+# The same build runs locally (build.bat, host/ci/build-local.sh).
+name: publish
+
+# ⚠ **No push trigger, deliberately.** It runs only when dispatched (`gh workflow run
+# publish.yml`): a release exists because a person asked for one.
+on:
+  workflow_dispatch:
+
+jobs:
+  launcher:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      # The csproj sets EnableWindowsTargeting, so the Windows exe builds here.
+      - name: Build RaiGolmi.exe
+        run: dotnet publish windows/RaiGolmi.csproj -c Release -nologo -o launcher
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher
+          path: launcher/RaiGolmi.exe
+          retention-days: 1
+
+  publish:
+    needs: launcher
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # A hosted runner has roughly 14 GB free on /, and the disk build needs the source
+      # image, the builder's object store and then a second copy of the finished disk when
+      # it is exported — all on that one filesystem. The preinstalled toolchains below are
+      # tens of gigabytes this job never touches.
+      #
+      # `df` runs before and after, and again before the export, because "no space left on
+      # device" gives no clue which of the three stages grew: a recurrence should be
+      # readable from the log rather than reasoned about.
+      - name: Make room on the runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h /
+
+      # An OCI repository name must be lowercase and a GitHub owner name need not be;
+      # Actions expressions have no lowercase function and bash's `,,` does it.
+      - name: Resolve the package
+        run: |
+          echo "PACKAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/raigolmi" >> "$GITHUB_ENV"
+          echo "HOST_TAG=host-${{ github.sha }}" >> "$GITHUB_ENV"
+
+      # The build context is the repository root: the Containerfile installs raigolmid and
+      # ui from source, both of which live above host/.
+      - name: Build the host container
+        run: sudo podman build -t localhost/raigolmi-host-base:latest -f host/Containerfile .
+
+      # The host's own images, built from the tree the image above ships and baked into it
+      # (raigolmid/raigolmid/hostimages.py).
+      - name: Bake in the host's own images
+        run: |
+          bash host/ci/bake-host-images.sh localhost/raigolmi-host-base:latest \
+              "$PACKAGE:$HOST_TAG" "$RUNNER_TEMP/host-images"
+          df -h /
+
+      - name: Push the host image
+        run: |
+          echo '${{ secrets.GITHUB_TOKEN }}' | sudo podman login ghcr.io -u '${{ github.actor }}' --password-stdin
+          sudo podman push "$PACKAGE:$HOST_TAG"
+
+      # The disk names the image it was built from as what it upgrades from, so it is built
+      # from the pushed reference rather than a local tag. Every podman call is `sudo`: the
+      # builder reads the image out of root's container storage.
+      - name: Build the disk
+        run: |
+          mkdir -p output
+          df -h /
+          # --rootfs: `quay.io/fedora/fedora-bootc` declares no default root filesystem
+          # type, and bootc-image-builder refuses rather than picking one —
+          # "missing required info: DefaultRootFs". xfs rather than btrfs because Docker's
+          # overlay2 driver is what runs every body on this host, and overlay2 wants a
+          # filesystem with d_type; mkfs.xfs gives that by default.
+          sudo podman run --rm --privileged --security-opt label=type:unconfined_t \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v "$PWD/host/ci/config.toml:/config.toml:ro" \
+            -v "$PWD/output:/output" \
+            quay.io/centos-bootc/bootc-image-builder:latest \
+            --type qcow2 --rootfs xfs "$PACKAGE:$HOST_TAG"
+          sudo chown -R "$USER" output
+
+      # Compressed clusters QEMU reads as they are, so the launcher boots the download
+      # without unpacking it; what the guest writes is stored uncompressed.
+      - name: Compress the disk
+        run: |
+          sudo apt-get install -y -q qemu-utils
+          mkdir -p release
+          # The builder names its file by type; the one qcow2 it wrote is the disk.
+          disk=$(find output -name '*.qcow2')
+          [ "$(printf '%s\n' "$disk" | grep -c .)" = 1 ] || { echo "the builder wrote: $disk" >&2; exit 1; }
+          qemu-img convert -c -O qcow2 "$disk" release/raigolmi.qcow2
+          rm -rf output
+          ls -l release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: launcher
+          path: release
+
+      - name: Install oras
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/oras.tgz" \
+            https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz
+          tar -xzf "$RUNNER_TEMP/oras.tgz" -C "$RUNNER_TEMP" oras
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # Pushed from inside release/ so each file's title is its bare name, which setup.ps1
+      # finds them by.
+      - name: Push the release
+        working-directory: release
+        run: |
+          echo '${{ secrets.GITHUB_TOKEN }}' | oras login ghcr.io -u '${{ github.actor }}' --password-stdin
+          oras push "$PACKAGE:${{ github.sha }}" \
+            --artifact-type application/vnd.raigolmi.release.v1 \
+            --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
+            RaiGolmi.exe:application/vnd.microsoft.portable-executable \
+            raigolmi.qcow2:application/vnd.raigolmi.qcow2
+          oras tag "$PACKAGE:${{ github.sha }}" latest

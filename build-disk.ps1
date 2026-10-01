@@ -9,7 +9,7 @@ $formats = [ordered]@{
     '1' = @{ Type = 'raw'; File = 'raigolmi.raw'
              Says = 'raw: an image written straight to a drive (Rufus, dd), which then boots it' }
     '2' = @{ Type = 'anaconda-iso'; File = 'raigolmi-installer.iso'
-             Says = 'installer ISO: boots from a USB stick and installs onto the FIRST disk it finds, erasing it' }
+             Says = 'installer ISO: boots from a USB stick and asks which disk to install onto (untested)' }
     '3' = @{ Type = 'qcow2'; File = 'raigolmi.qcow2'
              Says = 'qcow2: a disk for QEMU or another hypervisor' }
 }

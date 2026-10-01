@@ -6,8 +6,8 @@
 #
 #  ⚠ bootc-image-builder needs --privileged and access to the host's container storage.
 #
-#  ⚠ **This is the normal path.** .github/workflows/host-image.yml runs only when dispatched,
-#  so nothing produces a disk unless a person runs one of the two.
+#  The published release is the same build in .github/workflows/publish.yml, run only when
+#  dispatched; this is the build from a checkout (build.bat runs it in WSL).
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -54,9 +54,12 @@ else
     #  --rootfs: the Fedora bootc base declares no default root filesystem type and the builder
     #  refuses rather than choosing one. xfs because Docker's overlay2 driver runs every body
     #  here and wants d_type, which mkfs.xfs provides by default.
+    #  The installer asks where to install (installer.toml); the disk types are sized by config.toml.
+    config=config.toml
+    [ "$type" = anaconda-iso ] && config=installer.toml
     sudo podman run --rm -it --privileged --network=host --security-opt label=type:unconfined_t \
         -v /var/lib/containers/storage:/var/lib/containers/storage \
-        -v "$repo/host/ci/config.toml:/config.toml:ro" \
+        -v "$repo/host/ci/$config:/config.toml:ro" \
         -v "$out:/output" \
         quay.io/centos-bootc/bootc-image-builder:latest \
         --type "$type" --rootfs "${ROOTFS:-xfs}" "$image"

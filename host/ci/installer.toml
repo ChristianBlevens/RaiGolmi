@@ -1,0 +1,12 @@
+#  bootc-image-builder's config for the installer ISO (TYPE=anaconda-iso) alone; the disk
+#  types use config.toml.
+#
+#  A kickstart with no storage commands: the builder adds only `ostreecontainer` for the
+#  embedded image (osbuild.org/docs/bootc, "Anaconda ISO (installer) options"), so Anaconda
+#  stops at Installation Destination and the person installing picks the disk, and language,
+#  keyboard and time zone with it. Root stays locked: the image makes its own user.
+[customizations.installer.kickstart]
+contents = """
+graphical
+rootpw --lock
+"""
