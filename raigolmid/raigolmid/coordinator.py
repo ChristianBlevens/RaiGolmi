@@ -310,7 +310,9 @@ def run_record(session: "Session", events: EventLog, questions: Questions,
     managed: dict[str, str | None] = {}
     lines = []
     for event in read:
-        if event.ts < run.started or (run.ended is not None and event.ts > run.ended):
+        if event.type == "run.ended" and event.data["started"] == run.started:
+            break       # the giving back that ended it is emitted just before, and is in it
+        if event.ts < run.started:
             continue
         if event.type == "tab.managed" and event.data["on"]:
             managed.setdefault(event.tab, event.data["body"])

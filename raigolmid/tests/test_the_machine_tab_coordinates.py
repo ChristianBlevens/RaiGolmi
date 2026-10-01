@@ -436,7 +436,8 @@ def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
     assert not record.exists()
     assert (h.paths.runs / f"{report.stem}-record-01.md").read_text() == \
         "directed tab-2 to the parser\n"
-    assert f"you answered {id}" in (h.paths.runs / f"{report.stem}-daemon-01.md").read_text()
+    daemon = (h.paths.runs / f"{report.stem}-daemon-01.md").read_text()
+    assert f"you answered {id}" in daemon and "taken back from the machine tab" in daemon
     [reported] = h.events_of("run.reported")
     assert reported.data["report"] == report.name
     with pytest.raises(SessionError, match="no run"):
