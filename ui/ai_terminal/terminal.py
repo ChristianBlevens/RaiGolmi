@@ -86,18 +86,40 @@ def style(look: theme.Look) -> dict[str, str]:
 # copy tmux makes goes to the clipboard and to the primary, which a bare terminal's right-click
 # pastes (`host/foot/foot.ini`); `set-clipboard off` keeps it the one writer. Right-click pastes
 # the clipboard, bracketed, and tmux's own menus go with it.
+#
+# A copy keeps the selection and the view where they are: copy mode stays until a click or a
+# key. A selection turns scroll-exit off, so the wheel carries it to the bottom (and, held,
+# extends it) without leaving copy mode, which would drop it. Copy mode is the mouse's alone:
+# its tables hold only these, so every key falls through to the root table's `Any`, which
+# leaves copy mode and hands the key to the agent. A mouse event there has a position; a key
+# has none.
 COPY_COMMAND = ("sh -c 'f=$(mktemp) && cat >\"$f\" && wl-copy <\"$f\" && "
                 "wl-copy --primary <\"$f\"; rm -f \"$f\"'")
-_SELECT = "select-pane -t = ; copy-mode -H ; send-keys -X %s ; run-shell -d 0.3 ; " \
-          "send-keys -X copy-pipe-and-cancel"
+_COPY = "send-keys -X scroll-exit-off ; send-keys -X %s ; run-shell -d 0.3 ; " \
+        "send-keys -X copy-pipe-no-clear"
 MOUSE = {
     "MouseDrag1Pane": "select-pane -t = ; copy-mode -M",
-    "DoubleClick1Pane": _SELECT % "select-word",
-    "TripleClick1Pane": _SELECT % "select-line",
+    "DoubleClick1Pane": "select-pane -t = ; copy-mode -H ; " + _COPY % "select-word",
+    "TripleClick1Pane": "select-pane -t = ; copy-mode -H ; " + _COPY % "select-line",
     "MouseDown3Pane": (
         "select-pane -t = ; run-shell -b \"wl-paste --no-newline --type text | "
         "tmux load-buffer -b rai-paste - && tmux paste-buffer -p -d -b rai-paste -t '#{pane_id}'\""),
+    "Any": ("if-shell -F '#{&&:#{pane_in_mode},#{==:#{mouse_y},}}' "
+            "'send-keys -X cancel' ; send-keys"),
 }
+COPY_MODE = {
+    "MouseDown1Pane": ("select-pane ; send-keys -X clear-selection ; "
+                       "send-keys -X scroll-exit-on ; "
+                       "if-shell -F '#{==:#{scroll_position},0}' 'send-keys -X cancel'"),
+    "MouseDrag1Pane": "select-pane ; send-keys -X scroll-exit-off ; send-keys -X begin-selection",
+    "MouseDragEnd1Pane": "send-keys -X copy-pipe-no-clear",
+    "WheelUpPane": "select-pane ; send-keys -N5 -X scroll-up",
+    "WheelDownPane": "select-pane ; send-keys -N5 -X scroll-down",
+    "DoubleClick1Pane": "select-pane ; " + _COPY % "select-word",
+    "TripleClick1Pane": "select-pane ; " + _COPY % "select-line",
+    "MouseDown3Pane": "send-keys -X cancel ; " + MOUSE["MouseDown3Pane"],
+}
+COPY_TABLES = ("copy-mode", "copy-mode-vi")
 MENUS = ("M-MouseDown3Pane", "MouseDown3Status", "MouseDown3StatusLeft", "M-MouseDown3Status",
          "M-MouseDown3StatusLeft")
 
@@ -238,6 +260,10 @@ def ensure_session() -> None:
         commands += [";", "bind-key", "-T", "root", key, command]
     for key in MENUS:
         commands += [";", "unbind-key", "-q", "-T", "root", key]
+    for table in COPY_TABLES:
+        commands += [";", "unbind-key", "-a", "-T", table]
+        for key, command in COPY_MODE.items():
+            commands += [";", "bind-key", "-T", table, key, command]
     # A permission's menu that could not be drawn is drawn by this key (`offer_permission`).
     commands += [";", "bind-key", "-T", "prefix", PERMISSION_KEY,
                  "run-shell -b 'rai ai permission 2>&1 | systemd-cat -t rai-ai'"]
