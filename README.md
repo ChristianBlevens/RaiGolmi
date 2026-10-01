@@ -36,8 +36,8 @@ Closing it shuts the machine down properly.
 
 To update, run `setup.bat` again. It downloads the new app, and your machine downloads its
 new system and **upgrades in place**: your files, layers and the agents' work all stay. It
-closes and reopens the app to start on the new system, and the old one stays in the boot
-menu in case you need to go back.
+closes and reopens the app to start on the new system. The old one stays in the boot menu
+until the new one has started properly, then it's removed to save space.
 
 ### The first start
 
@@ -191,8 +191,8 @@ in production, with a toolbelt attached beside it. The toolbelt sees the body's 
 processes but never changes them, so the thing that runs is the thing that ships.
 
 Under the layers is the **host**: an immutable Fedora image with the daemon (`raigolmid`),
-the three edges and the AI terminal. Agents can't change it. It's only replaced by building
-a new image, and the previous one stays in the boot menu.
+the three edges and the AI terminal. Agents can't change it. It's only replaced by an update
+or a build, and the previous one stays in the boot menu until the new one has started.
 
 Here's roughly what the machine tab writes for the two examples above. A face:
 
