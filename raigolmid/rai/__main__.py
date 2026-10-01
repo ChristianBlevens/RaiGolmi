@@ -356,7 +356,7 @@ def _await_a_shell(where: str, reason: str, ready) -> bool:
     `ready()` holds; False on Ctrl-D."""
     import select
 
-    print(f"\r\naos terminal: {reason}\r\n"
+    print(f"\r\nrai terminal: {reason}\r\n"
           f"Enter opens a shell in {where}; Ctrl-D closes this window.",
           file=sys.stderr)
     while True:

@@ -118,7 +118,7 @@ from its `SESSION-START.md`. If the usage limit cuts one off, it resumes once th
 At 2am the notes-api tab hits the design question you said was yours. It stops and waits
 for you as a Remote Control session, so if you're up you can answer it from your phone.
 Otherwise it's there in the morning. At the 4-hour mark the rest wrap up, and the machine
-tab writes a report of the whole run. You read it in the catalog, under Documents, Runs.
+tab writes its report on the run. You read it in the catalog, under Documents, Runs.
 
 ### When something breaks
 
@@ -142,7 +142,8 @@ it. The catalog shows you exactly which files will go, and you can untick any of
 upload goes up as a pull request from your GitHub account to the public
 [registry](https://github.com/ChristianBlevens/raigolmi-registry). Toolbelts and bodies can
 be shared the same way. A body that builds from your own project folder is the one thing
-that's refused, so your code doesn't leave the machine by accident. Share your project with
+that's refused, so your code doesn't leave the machine by accident. You can only upload
+what you made: a downloaded layer you've changed stays yours to keep. Share your project with
 git instead.
 
 ## Everything else
@@ -252,7 +253,7 @@ that part well.
   busy. The `rai` command works here.
 - **`machine`** is for the machine itself. Go here to make or change a face, make a
   toolbelt or a new body, change how the machine works, or hand other tabs over to run on
-  their own. It's the only tab that edits faces. It can even change the plugins and
+  their own. It's the tab that makes and changes faces. It can even change the plugins and
   instructions the other agents start with.
 - **A body's tab** is for that one project. It works only on that project's code, its
   sandbox and its toolbelt. It opens when you select the body.
@@ -262,6 +263,11 @@ that part well.
 The **`≡`** at the left of the bar lists every tab. A **●** on a tab means it wants you,
 because it's finished or it's asking you something. Just type your answer in that tab. A
 **◇** means the machine tab is managing it.
+
+Before a question reaches you, it's checked against your **Preferences** document, and if
+that already settles it, it's answered from there. Every answer you give is written back into
+it, so the same question won't need you twice. A question you leave for 30 minutes gets
+"no answer" and the agent decides for itself; a permission left that long is a no.
 
 When an agent needs permission for something, a menu pops up in its tab. You can say yes or
 no just this once, for this project, or everywhere. The **×** on a tab archives its
@@ -278,7 +284,8 @@ a new line.
 The manager takes any failure that gets in the way of using the machine: a container that
 dies again after its one automatic restart, a desktop or editor that won't start, one of the
 host's own screens failing, the clipboard bridge dropping, or another tab that stops
-responding. The point is that you're never the one who has to take a failure to an AI.
+responding. It also keeps the agents' documents in shape: one that's grown past its size,
+names something that no longer exists, or describes a layer that has since changed. The point is that you're never the one who has to take a failure to an AI.
 
 It reads the logs, the journal and the machine's state. It repairs things with the daemon's
 own tools (restarting an agent, rebuilding or repairing a sandbox, bringing your desktop
@@ -295,8 +302,8 @@ a tab to stop for you, a number of hours, or both. From then on:
 - a managed tab's questions go to the machine tab, which answers them and steers the work.
   It stands in for you on every decision you didn't keep with your stop, design questions
   included, and records each one in the run's record so you can overturn it;
-- when a tab's context fills up, its work is handed to a fresh conversation through its own
-  session notes, and the machine tab does the same for itself;
+- when a tab's conversation reaches its budget, it's handed to a new tab that starts from
+  the project's `SESSION-START.md`, and the machine tab does the same for itself;
 - a tab cut off by a usage limit or an API error is resumed;
 - a tab that reaches your stop is held for you as a Claude Code Remote Control session,
   named after its project, and typing in the tab takes it back;
@@ -315,20 +322,29 @@ builds, restarts and anything that went wrong. The tab lights up when there's so
 haven't seen. When something goes wrong that's yours to deal with, it pops open on its own
 for a few seconds. Entries stay for a week.
 
+A question answered from your preferences shows the line it came from. If that's not what
+you'd have said, pick another choice or type your own answer and press Enter. The agent gets
+your answer, and your preferences are updated with it.
+
 ### The catalog and settings
 
 Open the catalog from the selector. It lists your faces, bodies and toolbelts, plus
-documents: your settings, the agents' thought docs, each layer's doc, the manager's
-incidents, and run reports. Turn on **Server** to see what other people have shared. Use
+**Documents** you can edit: your settings, your preferences, the permissions you answered
+"always" (edit it to take one back), the instructions every tab starts with, each
+project's `SESSION-START.md`, each layer's doc, the manager's incidents, and run reports.
+**Thoughts** has the agents' thought docs, to read. Turn on **Server** to see what other people have shared. Use
 **Download** and **Install** to get something, **Upload** to share something you made, and
 **Delete** to remove it.
 
-Every key, colour and size is in the **Settings** document there. Edit it, save, and it
-takes effect right away. If a save doesn't parse, it's refused and you're told why.
+Every key, colour and size is in the **Settings** document there, along with the keyboard,
+the display scale, the model the agents run and their conversation budget. Edit it and save.
+Keys and looks change right away, and the model and budget at a tab's next start. If a save
+doesn't parse, it's refused and you're told why.
 
-At the bottom of the selector, **Don't drive my current face** stops agents from clicking
-and typing on your screen. Without it, an agent can take screenshots of your desktop and use
-it the way you would.
+At the top of the selector, **Don't drive my current face** stops agents from clicking and
+typing on your screen. With it off, an agent can use your desktop the way you would, once
+you've stepped away from the keyboard, and one tab at a time. Agents can take screenshots
+either way.
 
 ### Files and clipboard on Windows
 
@@ -344,7 +360,7 @@ It checks for and offers to install:
 
 - the Windows Hypervisor Platform;
 - the .NET 8 Desktop Runtime;
-- Windows' OpenSSH client, which updates reach the machine through;
+- Windows' OpenSSH client, which the clipboard, `~/Transfer` and updates go through;
 - MSYS2;
 - a patched QEMU and virglrenderer, downloaded from
   [raigolmi-packages](https://github.com/ChristianBlevens/raigolmi-packages), because the
@@ -388,7 +404,8 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 - A face's first start builds its image and takes a few minutes, with a blank screen. After
   that, switching faces takes under a second.
 - There's no XWayland, so X11-only programs don't run in a face. WebKit-based browsers don't
-  work either. Firefox does.
+  work either. Firefox does, and so does Chromium with a few flags.
+- The clipboard between Windows and the machine carries text only.
 - Agents commit as `Claude (<tab>)`, and merging is up to you.
 
 ### How it keeps you safe
@@ -396,8 +413,8 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 - The whole machine runs in a VM, or on its own hardware, so nothing outside it is at risk.
 - The host is read-only at runtime, and the bare host is always there to fall back to.
 - Each agent runs in its own container, with no capabilities and no Docker socket. It sees
-  its own work, the layer definitions, and a control socket for its own tab, and nothing
-  else.
+  its own work, the layer definitions, `/transfer`, the layer-writing guide, and a control
+  socket for its own tab, and nothing else.
 - Containers can't reach the host except through the daemon's credential proxy. Your Claude
   token and sign-ins never go into a tab. Tabs hold placeholders, and the proxy swaps in the
   real ones on the way out, with GitHub's only ever sent to GitHub.
@@ -414,9 +431,10 @@ Run it from the `raigolmi` tab's shell.
 | `rai terminal` | A shell in a sandbox's toolbelt |
 | `rai exec` | Run a command in a sandbox's toolbelt |
 | `rai rebuild` / `rai repair` | Rebuild a body, or tear a sandbox down and rebuild it |
-| `rai events -f` | Follow the event log, even with the daemon down |
+| `rai events [-f]` | The event log, read from disk if the daemon is down; `-f` follows it |
+| `rai ai restart <tab>` / `rai ai kill <tab>` | Restart a tab's agent, or stop it |
 | `rai diagnose` | Bundle the logs and state into one file you can send |
-| `rai credential --set`, `rai registry-token --login`, `rai claude-login --login` | Redo the three first-start steps |
+| `rai credential --set`, `rai registry-token --login`, `rai claude-login --login` | Redo the three first-start steps (`--api-key` with `--set` takes a Console API key instead) |
 
 ### What it's made of
 
