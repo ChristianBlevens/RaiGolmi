@@ -24,13 +24,20 @@ use it (up to 60 GB), and a Claude account.
 ```
 git clone https://github.com/ChristianBlevens/RaiGolmi
 cd RaiGolmi
-build.bat
+setup.bat
 ```
 
-`build.bat` checks for what it needs and asks once before installing anything that's
-missing. The first build takes about 11 minutes. When it's done there's a `RaiGolmi`
-shortcut next to `build.bat`. Open it, and close the window when you're done. Closing it
-shuts the machine down properly.
+(Or download the repository as a ZIP from GitHub, unzip it and double-click `setup.bat`.)
+
+`setup.bat` checks for what it needs and asks once before installing anything that's
+missing, then downloads the app and its disk (about 2 GB). When it's done there's a
+`RaiGolmi` shortcut next to `setup.bat`. Open it, and close the window when you're done.
+Closing it shuts the machine down properly.
+
+To update, run `setup.bat` again. It downloads the new app, and your machine downloads its
+new system and **upgrades in place**: your files, layers and the agents' work all stay. It
+closes and reopens the app to start on the new system, and the old one stays in the boot
+menu in case you need to go back.
 
 ### The first start
 
@@ -324,26 +331,35 @@ Copy and paste works both ways between Windows and the machine. Drop a file on t
 and it shows up in `~/Transfer`. Put a file in `~/Transfer/out` and it lands in
 `Downloads\RaiGolmi`. **Ctrl + Alt + R** redraws the window if it ever looks wrong.
 
-### What `build.bat` installs, and upgrading
+### What `setup.bat` installs
 
 It checks for and offers to install:
 
 - the Windows Hypervisor Platform;
-- the .NET 8 SDK;
+- the .NET 8 Desktop Runtime;
+- Windows' OpenSSH client, which updates reach the machine through;
 - MSYS2;
 - a patched QEMU and virglrenderer, downloaded from
   [raigolmi-packages](https://github.com/ChristianBlevens/raigolmi-packages), because the
-  stock ones can't show the boot screen or give disk space back;
-- WSL with Ubuntu and podman.
+  stock ones can't show the boot screen or give disk space back.
 
-If you say no, it prints the commands to install each one yourself. If Ubuntu can't look up
-the image registry, the build alone uses 1.1.1.1 and 8.8.8.8; your Ubuntu's own DNS settings
-are never changed.
+If you say no, it prints the commands to install each one yourself. The app and disk come
+from [the `raigolmi` package](https://github.com/ChristianBlevens/RaiGolmi/pkgs/container/raigolmi)
+on GitHub's container registry. For a fresh disk, delete `disk\raigolmi.qcow2` and run it
+again.
 
-Running `build.bat` again rebuilds the app and **upgrades your disk in place**. Your files,
-layers and the agents' work all stay. It closes and reopens the app to start on the new
-system, and the old one stays in the boot menu in case you need to go back. For a fresh disk,
-delete `disk\raigolmi.qcow2` first. `build-launcher.bat` rebuilds just the app.
+### Building it yourself
+
+`build.bat` builds the same app and disk from your checkout instead of downloading them, for
+when you change the code. On top of what `setup.bat` installs, it needs the .NET 8 SDK and
+WSL with Ubuntu and podman, and offers to install them. The first build takes about 11
+minutes. Running it again rebuilds the app and upgrades your disk in place, the same way an
+update does. If Ubuntu can't look up the image registry, the build alone uses 1.1.1.1 and
+8.8.8.8; your Ubuntu's own DNS settings are never changed. `build-launcher.bat` rebuilds just
+the app.
+
+A release is published by running the `publish` workflow on GitHub (Actions → publish → Run
+workflow); `setup.bat` then offers it to everyone.
 
 ### Other ways to run it
 
@@ -351,8 +367,8 @@ delete `disk\raigolmi.qcow2` first. `build-launcher.bat` rebuilds just the app.
 
 - **raw**: write it straight to a drive (Rufus, `dd`) and boot a PC from it. It's 60 GB
   from the start.
-- **installer ISO**: put it on a USB stick. It installs onto the first disk it finds and
-  **wipes it**.
+- **installer ISO**: put it on a USB stick. It asks which disk to install onto. **This
+  installer is untested**: nobody has booted one yet.
 - **qcow2**: for a VM of your own. It's the same disk the Windows app boots.
 
 If the disk you pick already exists, it builds an upgrade for the machine you installed from
