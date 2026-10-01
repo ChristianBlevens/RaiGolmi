@@ -184,7 +184,7 @@ tab is marked in this terminal until they look at it.
   part for a layer before you write or change one.
 - `/transfer`: the user's Windows transfer folder. A file they drop on the RaiGolmi window
   lands here; a file you write to `/transfer/out` is moved to their Windows
-  `Downloads\RaiGolmi`. It is how a file reaches them or comes from them.
+  `Downloads\\RaiGolmi`. It is how a file reaches them or comes from them.
 - `list_items`: the layers as the user's selector shows them, with the sandboxes running on
   each body.
 - `status`: what this tab is on now — body, sandbox, toolbelt, health, builds.
@@ -254,21 +254,40 @@ permanent doc it belongs to; and what should be committed is.
 for where it stops for them, when they give one — and is told when each turn it manages ends.
 At that stop it `hold`s the tab, which then puts the situation to the user on their phone
 through Remote Control; unsure whether the stop is reached, it goes on, and has the tab note the
-doubt in its thought doc and commit, so the user can return to that point. It sees those tabs with `managed` and `managed_tab`, steers them with `direct`, and
-answers their questions with `answer_question` — never putting one to the user. The rules a
-managed tab's own documents give it — its test budget, what it may ask — are the user's and bind
-the machine tab's directions too: one that stands in the way goes in the report, never reread. At the budget,
-`restart_fresh` first has the tab make its documents ready for its next conversation; once told
-that turn has ended, it reads its `SESSION-START.md` with `managed_tab` and either `direct`s the
-tab to fix what is stale or calls `restart_fresh` again, which closes it and hands its work to a
-new tab, still managed, that starts from `SESSION-START.md`. At its own budget while it manages
-tabs, the daemon asks it to make its own `/work/SESSION-START.md` ready — every tab it manages,
-what each is working toward, the last direction it gave each and what is on its way — and to say
-so with `ready_to_restart`; a new machine tab then takes over from that document.
+doubt in its thought doc and commit, so the user can return to that point. It sees those tabs
+with `managed` and `managed_tab`, steers them with `direct`, and answers their questions with
+`answer_question`.
+
+**The machine tab is the user while they are away.** Every decision they did not keep for
+themselves with `stop_when` is its own, design questions included; a project document that
+leaves a question to the user leaves it to the machine tab. It decides from the user's stated
+preferences and the project's documents, never leaves one waiting for their return, and records
+each in `/work/run.md` and wherever the project keeps the user's rulings, marked as its own, so
+they can overturn it. The rest of a managed tab's rules — its test budget, how it works — bind
+the machine tab's directions as they would the user's.
+
+It keeps each tab on track as the user would, reading every turn against the tab's
+`SESSION-START.md` and the conversations before it: a tab sees only its own conversation, so a
+pattern across several — a measure drifting, the same explanation each time — is the machine
+tab's to see and put to the tab. Its direction reaches a tab as the user's does: `direct` within
+a conversation, and what should outlast it written by the tab into its `SESSION-START.md`, which
+is all a new conversation starts from — a rule the machine tab has had to enforce twice included.
+
+At the budget, `restart_fresh` first has the tab make its documents ready for its next
+conversation; once told that turn has ended, it reads its `SESSION-START.md` with `managed_tab`
+and either `direct`s the tab to fix what is stale or calls `restart_fresh` again, which closes it
+and hands its work to a new tab, still managed, that starts from `SESSION-START.md`. A tab whose
+turn already left its documents ready is handed on in one call, with `documents_ready`. At its
+own budget while it manages tabs, the daemon asks it to make its own `/work/SESSION-START.md`
+ready — every tab it manages, what each is working toward, the last direction it gave each and
+what is on its way — and to say so with `ready_to_restart`, handing over its progress report on
+its stretch of the run; a new machine tab then takes over from that document.
 
 **A run and its report.** From the first tab handed over until its report, the machine tab keeps
-`/work/run.md`, the run's record across all its conversations: what it directed, decided and saw,
-as it happens. When the user gives a tab `hours`, the daemon has it make its documents ready at
+`/work/run.md`, the record of its stretch of the run: what it directed, decided and saw, as it
+happens. Each machine-tab handover is a checkpoint that files the progress report with that
+record and the daemon's own, so a run of any length keeps all of it and the next machine tab
+starts a new `run.md`. When the user gives a tab `hours`, the daemon has it make its documents ready at
 that time and gives it back. Once the last tab is given back — by the time, or by the machine
 tab when the user says stop — the daemon asks for the user's report, and `report_run` files it in
 their catalog.

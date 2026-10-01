@@ -56,6 +56,16 @@ from .views import Views
 INPUT_PATIENCE = 30.0
 
 
+def _run_name(run: Run) -> str:
+    """The stem every file of a run is kept under in `Paths.runs`: when it started."""
+    return time.strftime("%Y%m%dT%H%M%S", time.localtime(run.started))
+
+
+def _span(start: float, end: float) -> str:
+    return " to ".join(time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(t))
+                       for t in (start, end))
+
+
 class SessionError(Exception):
     pass
 
@@ -1546,10 +1556,53 @@ class Session:
         if run is not None:
             self.events.emit("run.ended", started=run.started, ended=run.ended)
 
-    def report_run(self, machine_tab: str, report: str) -> dict[str, Any]:
+    def _file_stretch(self, run: Run, stretch: int, record: list[str]) -> dict[str, str | None]:
+        """Under the lock: the current stretch's records kept under `Paths.runs` — the machine
+        tab's (`documents.RUN_RECORD` in its `/work`, moved so the next stretch keeps its own)
+        and the daemon's, in the history's words."""
+        name = _run_name(run)
+        self.paths.runs.mkdir(parents=True, exist_ok=True)
+        daemon = self.paths.runs / f"{name}-daemon-{stretch:02d}.md"
+        daemon.write_text(f"# The daemon's record of the run, stretch {stretch}, "
+                          f"{_span(run.since or run.started, time.time())}\n\n"
+                          + "".join(f"{line}\n" for line in record), encoding="utf-8")
+        mine = self.paths.work / documents.RUN_RECORD
+        kept = None
+        if mine.is_file():
+            kept = self.paths.runs / f"{name}-record-{stretch:02d}.md"
+            os.replace(mine, kept)
+        return {"record": str(kept) if kept else None, "daemon_record": str(daemon)}
+
+    def checkpoint_run(self, machine_tab: str, report: str, record: list[str],
+                       read_at: float) -> dict[str, Any]:
+        """The outgoing machine tab's progress report on its stretch of the run, filed with
+        that stretch's records; the next stretch starts at `read_at`, when the daemon's record
+        was read, so an event is in one stretch or both, never neither."""
+        if not report.strip():
+            raise SessionError("a progress report needs words: what each tab did in this "
+                               "stretch and where it stands")
+        with self._lock:
+            run = self.intent.run
+            if run is None:
+                raise SessionError("there is no run to report on: one starts when the user "
+                                   "hands you a tab")
+            stretch = run.checkpoints + 1
+            self.paths.runs.mkdir(parents=True, exist_ok=True)
+            path = self.paths.runs / f"{_run_name(run)}-progress-{stretch:02d}.md"
+            path.write_text(f"# The run's progress, stretch {stretch}, "
+                            f"{_span(run.since or run.started, time.time())}\n\n"
+                            f"{report.strip()}\n", encoding="utf-8")
+            filed = self._file_stretch(run, stretch, record)
+            run.checkpoints, run.since = stretch, read_at
+            self.store.save(self.intent)
+        self.events.emit("run.checkpoint", tab=machine_tab, started=run.started,
+                         stretch=stretch, report=path.name)
+        return {"report": str(path), **filed}
+
+    def report_run(self, machine_tab: str, report: str, record: list[str]) -> dict[str, Any]:
         """The machine tab's report on the run that is over, kept under `Paths.runs` beside
-        its record of the run (`documents.RUN_RECORD` in its `/work`), which moves there so
-        the next run keeps its own. The run is over once reported."""
+        the last stretch's records (`_file_stretch`) and the progress reports of the stretches
+        before it. The run is over once reported."""
         if not report.strip():
             raise SessionError("a report needs words: what each tab did and where it stands")
         with self._lock:
@@ -1565,23 +1618,16 @@ class Session:
                 raise SessionError(
                     "the daemon's request for the report, with its own record of the run, "
                     "reaches you when this turn ends: end your turn and write the report then")
-            name = time.strftime("%Y%m%dT%H%M%S", time.localtime(run.started))
-            span = " to ".join(time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(t))
-                               for t in (run.started, run.ended))
             self.paths.runs.mkdir(parents=True, exist_ok=True)
-            path = self.paths.runs / f"{name}.md"
-            path.write_text(f"# The run from {span}\n\n{report.strip()}\n", encoding="utf-8")
-            record = self.paths.work / documents.RUN_RECORD
-            kept = None
-            if record.is_file():
-                kept = self.paths.runs / f"{name}-record.md"
-                os.replace(record, kept)
+            path = self.paths.runs / f"{_run_name(run)}.md"
+            path.write_text(f"# The run from {_span(run.started, run.ended)}\n\n"
+                            f"{report.strip()}\n", encoding="utf-8")
+            filed = self._file_stretch(run, run.checkpoints + 1, record)
             self.intent.run = None
             self.store.save(self.intent)
         self.events.emit("run.reported", tab=machine_tab, started=run.started, ended=run.ended,
                          report=path.name)
-        return {"report": str(path), "record": str(kept) if kept else None,
-                "status": "reported",
+        return {"report": str(path), **filed, "status": "reported",
                 "next": "The user reads it in the catalog, under Documents, Runs."}
 
     def managed_tabs(self) -> set[str]:

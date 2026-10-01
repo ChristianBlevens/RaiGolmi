@@ -264,10 +264,13 @@ def build_server(client: ApiClient):
         return call("managed")
 
     @tool(server, description="Machine tab only: one tab you manage closer — its state, "
-                             "its SESSION-START.md, the tail of this conversation's thought "
-                             "doc (`lines`) and its last `turns` turns.")
-    def managed_tab(tab: str, turns: int = 20, lines: int = 60) -> dict[str, Any]:
-        return call("managed_tab", tab=tab, turns=turns, lines=lines)
+                             "its SESSION-START.md's size and, unless `session_start` is "
+                             "false, its text; the tail of this conversation's thought doc "
+                             "(`lines`) and its last `turns` turns, the last one whole.")
+    def managed_tab(tab: str, turns: int = 20, lines: int = 60,
+                    session_start: bool = True) -> dict[str, Any]:
+        return call("managed_tab", tab=tab, turns=turns, lines=lines,
+                    session_start=session_start)
 
     @tool(server, description="Machine tab only: tell a tab you manage what to do. It is "
                              "that tab's next message once its turn ends; nothing comes back "
@@ -286,23 +289,29 @@ def build_server(client: ApiClient):
                              "ready; once told that turn ended, read its SESSION-START.md "
                              "(`managed_tab`), and the second closes it, its conversation and "
                              "thought doc archived, and opens a new tab on the same body, "
-                             "still managed, that starts from SESSION-START.md (and `brief`, "
-                             "if given). You manage the new tab by its new id. Only while it "
-                             "is idle with nothing asked.")
-    def restart_fresh(tab: str, brief: str | None = None) -> dict[str, Any]:
-        return call("restart_fresh", tab=tab, brief=brief)
+                             "still managed, that starts from SESSION-START.md alone, as it "
+                             "would for the user: a direction that outlasts this conversation "
+                             "goes in that document. `documents_ready` makes it one call, for "
+                             "a tab whose last turn already left its documents ready and whose "
+                             "SESSION-START.md you have read. You manage the new tab by its new "
+                             "id. Only while it is idle with nothing asked.")
+    def restart_fresh(tab: str, documents_ready: bool = False) -> dict[str, Any]:
+        return call("restart_fresh", tab=tab, documents_ready=documents_ready)
 
     @tool(server, description="Machine tab only: say your /work/SESSION-START.md is ready for "
                              "your next conversation, once the daemon has asked at your "
-                             "context budget. A new machine tab takes over from it when this "
-                             "turn ends.")
-    def ready_to_restart() -> dict[str, Any]:
-        return call("ready_to_restart")
+                             "context budget, handing over `report`, the user's progress "
+                             "report on this stretch of the run. It is filed in their catalog "
+                             "with /work/run.md and the daemon's record of the stretch, and a "
+                             "new machine tab takes over when this turn ends.")
+    def ready_to_restart(report: str) -> dict[str, Any]:
+        return call("ready_to_restart", report=report)
 
     @tool(server, description="Machine tab only: the user's report on the run that is over, "
                              "once the daemon asks for it — for each tab what it did, where it "
                              "stands and what is theirs next; what you decided for them; what "
-                             "went wrong. Filed with /work/run.md in their catalog.")
+                             "went wrong. Filed in their catalog with /work/run.md, the "
+                             "daemon's record and the progress reports of earlier stretches.")
     def report_run(report: str) -> dict[str, Any]:
         return call("report_run", report=report)
 

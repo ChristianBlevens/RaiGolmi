@@ -110,6 +110,9 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "tab.held": lambda e: f"held for you: {e.data['situation']}",
     "run.ended": lambda e: (f"the machine tab's run from {_clock(e.data['started'])} ended: "
                             "every tab is given back, and it is asked for its report"),
+    "run.checkpoint": lambda e: (f"its progress report on the run from "
+                                 f"{_clock(e.data['started'])}, stretch {e.data['stretch']}, "
+                                 "is in the catalog, under Documents, Runs"),
     "run.reported": lambda e: (f"its report on the run from {_clock(e.data['started'])} to "
                                f"{_clock(e.data['ended'])} is in the catalog, under Documents, "
                                "Runs"),
