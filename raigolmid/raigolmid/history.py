@@ -170,11 +170,12 @@ NOTICED: dict[str, Callable[[Event], str]] = {
     "stalls.unstick_failed": lambda e: (f"The manager tab was stuck and could not be "
                                         f"restarted: {e.data['error']}"),
     "claude_login.lost": lambda e: (
-        f"Your claude.ai sign-in has ended ({e.data['error']}), so a held tab cannot reach your "
-        f"phone until you sign in again, in the AI terminal's first window"),
+        f"Your claude.ai sign-in has ended ({e.data['error']}): your tabs go on without Remote "
+        f"Control until you sign in again, in the AI terminal's first window"),
     "claude_login.refresh_failed": lambda e: (
-        f"Your claude.ai sign-in could not be renewed, so a held tab cannot reach your phone: "
-        f"{e.data['error']}"),
+        f"Your claude.ai sign-in could not be renewed, and is tried again: {e.data['error']}"),
+    "remote_control.restart_failed": lambda e: (
+        f"Tab {e.tab} could not be restarted to follow your claude.ai sign-in: {e.data['error']}"),
     "judge.failed": lambda e: (
         f"The preferences judge failed on {e.data['id']}"
         + (", so it is put to you" if e.data["stage"] == "judge" else

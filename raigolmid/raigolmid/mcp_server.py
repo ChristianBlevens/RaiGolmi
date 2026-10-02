@@ -280,8 +280,7 @@ def build_server(client: ApiClient):
         return call("manage", tab=tab, on=on, stop_when=stop_when, hours=hours)
 
     @tool(server, description="Machine tab only: hold a tab you manage for the user, at the "
-                             "stop they gave. It is resumed on Remote Control, which reaches "
-                             "their phone, and told to put `situation` to them — where the "
+                             "stop they gave. It is told to put `situation` to them — where the "
                              "work stands, what is theirs to decide, the options. Nothing of "
                              "yours reaches it until they answer in it; you are told then.")
     def hold(tab: str, situation: str) -> dict[str, Any]:

@@ -653,8 +653,8 @@ def cmd_claude_login(args) -> int:
             return 1
         print(f"a claude.ai sign-in is set in {path}")
         return 0
-    print("A tab held for you reaches your phone through Claude Code's Remote Control, which\n"
-          "needs your claude.ai sign-in. Open the address below in any browser, sign in, and\n"
+    print("Every tab reaches your phone through Claude Code's Remote Control, which needs\n"
+          "your claude.ai sign-in. Open the address below in any browser, sign in, and\n"
           "paste the code it shows here. Ctrl+C skips this for now; `rai claude-login\n"
           "--login` asks again.\n")
     sys.stdout.flush()
@@ -1024,7 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_registry_token)
 
     p = sub.add_parser("claude-login",
-                       help="the claude.ai sign-in a held tab's Remote Control uses")
+                       help="the claude.ai sign-in every tab's Remote Control uses")
     p.add_argument("--login", action="store_true", help="sign in to claude.ai")
     p.set_defaults(fn=cmd_claude_login)
 

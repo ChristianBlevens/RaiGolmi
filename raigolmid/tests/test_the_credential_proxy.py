@@ -128,7 +128,7 @@ def test_the_usage_limits_reset_is_read_from_its_429(machine, said, resets_at):
     assert (limited.data["owner"], limited.data["resets_at"]) == ("tab-1", resets_at)
 
 
-def test_a_held_tab_signs_in_with_placeholders_and_the_sign_in_is_swapped_in(machine):
+def test_a_tab_signs_in_with_placeholders_and_the_sign_in_is_swapped_in(machine):
     broker, proxy, _, _ = machine
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in broker.environment("tab-1", login=True), \
         "Claude Code prefers the variable, and Remote Control refuses what it holds"

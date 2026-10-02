@@ -26,8 +26,8 @@ turn ends a new machine tab takes over.
 
 **A managed tab stops where the user said** (`TabIntent.stop_when`, given as they hand it
 over, and in every message about it): at that goal or decision the machine tab `hold`s it on
-the situation, and the tab is resumed on Remote Control to put it to them on their phone
-(`Session.hold`). Nothing of the machine tab's reaches a held tab; the user's own words in it
+the situation, and the tab puts it to them, at the screen or on their phone through Remote
+Control (`Session.hold`). Nothing of the machine tab's reaches a held tab; the user's own words in it
 release it (`Session.release`), and the machine tab is told.
 
 **And stops when the user's time for it runs out** (`TabIntent.until`): the daemon, not the
@@ -54,7 +54,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import api, claude_login, documents, history, limits, settings
+from . import api, documents, history, limits, settings
 from .channel import Channels
 from .events import Event, EventLog
 from .intent import Run, TabIntent
@@ -162,8 +162,7 @@ def hold_message(stop_when: str | None, situation: str) -> str:
     stop = f" at {stop_when!r}" if stop_when else ""
     return (f"From the machine tab: you are held for the user{stop}. The situation, as the "
             f"machine tab puts it:\n\n{situation}\n\nPut it to them now, in this "
-            "conversation — they reach it from their phone through Remote Control, or at the "
-            "screen: where the work stands, the choice or the next step that is theirs, the "
+            "conversation, which they reach at the screen or from their phone: where the work stands, the choice or the next step that is theirs, the "
             "options and what you recommend. Then end your turn; their answer is your next "
             "message. Do nothing more of the work until it comes.")
 
@@ -395,7 +394,7 @@ class Coordinator:
     def tick(self, now: float) -> None:
         """Each managed tab whose time has run out: its wrap-up pushed, unless a handover
         already has it making its documents ready; given back once they are, or at once
-        while it is held for the user, who has it on Remote Control as it stands."""
+        while it is held for the user, who has it as it stands."""
         for tab in list(self.session.intent.tabs.values()):
             if not tab.managed or not self._time_up(tab, now):
                 continue
@@ -416,7 +415,7 @@ class Coordinator:
         run = self.session.intent.run
         if run is not None and run.ended is not None:
             return      # the last tab: the report request, which follows, says it
-        state = ("was held for them, and stays on Remote Control as it stands" if held
+        state = ("was held for them, and is theirs as it stands" if held
                  else "made its documents ready")
         self._to_machine(tab.tab_id, "coordinator.given_back", (
             f"The user's time for tab {tab.tab_id} ({tab.body}) ran out at {clock(until)}; it "
@@ -702,20 +701,12 @@ class Verbs:
                         "first turn ends."}
 
     def hold(self, tab: str, situation: str) -> dict[str, Any]:
-        """The tab stopped for the user where they said, resumed on Remote Control and told to
-        put `situation` to them. Refused while it works, since the restart would cut its turn
-        off, and without the claude.ai sign-in Remote Control needs."""
+        """The tab stopped for the user where they said, and told to put `situation` to
+        them."""
         agent = self._unheld(tab)
         if not situation.strip():
             raise SessionError("a hold needs the situation: where the work stands and what is "
                                "the user's to decide")
-        if agent.busy:
-            raise SessionError(f"{tab} is working; hold it once its turn ends")
-        if not claude_login.is_set(self.session.paths.claude_login):
-            raise SessionError(
-                "the user has not signed in to claude.ai (`rai claude-login --login`), so a held "
-                "tab cannot reach their phone: `direct` the tab to stop and write the situation "
-                "at the top of its SESSION-START.md, where they will see it when they return")
         held = self.session.hold(tab, situation)
         self.events.emit("coordinator.held", tab=tab, deliver={
             "content": hold_message(agent.stop_when, situation), "meta": {"from": "machine"}})

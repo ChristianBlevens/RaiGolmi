@@ -88,8 +88,8 @@ TUNNEL_TIMEOUT = 30.0
 PORT = 47100
 OAUTH, API_KEY = credential.CREDENTIAL_KEYS
 [GITHUB] = credential.REGISTRY_KEYS
-# The claude.ai sign-in's access and refresh tokens (`claude_login.py`), in a held tab's
-# `.credentials.json`. Only the access token is ever swapped: the daemon alone refreshes.
+# The claude.ai sign-in's access and refresh tokens (`claude_login.py`), in every tab's
+# `.credentials.json` while it is set. Only the access token is ever swapped: the daemon alone refreshes.
 LOGIN, LOGIN_REFRESH = "CLAUDE_AI_LOGIN", "CLAUDE_AI_LOGIN_REFRESH"
 SHAPE = {OAUTH: "sk-ant-oat01-rai-", API_KEY: "sk-ant-api03-rai-", GITHUB: "ghp_rai-",
          LOGIN: "sk-ant-oat01-rail-", LOGIN_REFRESH: "sk-ant-ort01-rail-"}

@@ -4,7 +4,7 @@ The agent credential is a long-lived token, which Claude Code limits to inferenc
 Control asks a full-scope login (`user:sessions:claude_code`). It is got once, at a first
 start, by Claude Code's own `claude auth login` in a scratch agent container (`rai
 claude-login --login`), and kept here as that login wrote it: its `claudeAiOauth` and the
-account's `oauthAccount`. Like the agent credential it never enters a tab — a held tab gets
+account's `oauthAccount`. Like the agent credential it never enters a tab — every tab gets
 placeholders the proxy swaps (`credproxy.py`) — so the daemon is its one refresher: a login
 refreshed in two places would have each refresh spend the other's refresh token.
 

@@ -1,3 +1,8 @@
+<!-- purpose: the public face: what RaiGolmi is and how a user installs, starts and uses it, casual reader first, then the narrated uses, then the reference
+not-here: design (ARCHITECTURE.md), settled calls (docs/standing-rulings.md), development state (SESSION-START.md), measurements (docs/findings.md)
+shape: bounded
+audited: 23901 2026-10-02
+-->
 # RaiGolmi
 
 RaiGolmi is a Linux distro that comes with nothing. There's no desktop, no apps, no editor,
@@ -116,7 +121,7 @@ for yourself, and writes each decision down so you can overturn it. When a tab's
 from its `SESSION-START.md`. If the usage limit cuts one off, it resumes once the limit resets.
 
 At 2am the notes-api tab hits the design question you said was yours. It stops and waits
-for you as a Remote Control session, so if you're up you can answer it from your phone.
+for you, and since every tab is a Remote Control session, if you're up you can answer it from your phone.
 Otherwise it's there in the morning. At the 4-hour mark the rest wrap up, and the machine
 tab writes its report on the run. You read it in the catalog, under Documents, Runs.
 
@@ -308,8 +313,9 @@ a tab to stop for you, a number of hours, or both. From then on:
 - when a tab's conversation reaches its budget, it's handed to a new tab that starts from
   the project's `SESSION-START.md`, and the machine tab does the same for itself;
 - a tab cut off by a usage limit or an API error is resumed;
-- a tab that reaches your stop is held for you as a Claude Code Remote Control session,
-  named after its project, and typing in the tab takes it back;
+- every tab, the machine tab and the manager included, is a Claude Code Remote Control
+  session named after its project, so you can follow any of them from your phone;
+- a tab that reaches your stop is held for you, and typing in the tab takes it back;
 - when the time runs out, each tab finishes up and is given back;
 - each time the machine tab hands itself over, it files a progress report on that stretch,
   so a run of any length keeps its whole record;

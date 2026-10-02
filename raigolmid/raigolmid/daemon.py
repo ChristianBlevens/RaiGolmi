@@ -33,6 +33,7 @@ from .channel import Channels
 from .clipboard import ClipboardBridge
 from .coordinator import Coordinator
 from .limits import Limits
+from .remotecontrol import RemoteControl
 from .stalls import Stalls
 from .credproxy import CredentialProxy
 from .permissions import Permissions
@@ -138,6 +139,7 @@ class Daemon:
         self.coordinator = Coordinator(self.session, self.events, self.questions)
         self.limits = Limits(self.session, self.events)
         self.stalls = Stalls(self.session, self.events)
+        self.remote_control = RemoteControl(self.session, self.events)
         self.claude_login = claude_login.Refresher(self.paths.claude_login, self.events,
                                                    runtime, self.epoch)
         # The credential stays here; every agent container is given a placeholder.
@@ -210,6 +212,7 @@ class Daemon:
                              (lambda: self.coordinator.run(self._stop), "coordinator"),
                              (lambda: self.limits.run(self._stop), "limits"),
                              (lambda: self.stalls.run(self._stop), "stalls"),
+                             (lambda: self.remote_control.run(self._stop), "remote-control"),
                              (lambda: self.claude_login.run(self._stop), "claude-login"),
                              (self.credproxy.serve, "credproxy"),
                              (lambda: self.permissions.run(self._stop), "permissions"),

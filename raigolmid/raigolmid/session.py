@@ -924,8 +924,8 @@ class Session:
             return {"tab": tab_id, "container": container, "resumed": resumed}
 
     def hold(self, tab_id: str, situation: str) -> dict[str, Any]:
-        """A managed tab stopped for the user: resumed on Remote Control, which reaches their
-        phone (`Agents.start`), until their own words in it release it (`release`)."""
+        """A managed tab stopped for the user, until their own words in it release it
+        (`release`). It is on Remote Control already, as every tab is (`Agents.start`)."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
@@ -933,11 +933,10 @@ class Session:
             tab.held = situation
             self.store.save(self.intent)
         self.events.emit("tab.held", tab=tab_id, body=tab.body, situation=situation)
-        return self.restart_agent(tab_id, resume=True)
+        return {"tab": tab_id, "held": situation}
 
     def release(self, tab_id: str) -> None:
-        """The user answered in a held tab. It keeps Remote Control until its next restart,
-        so they can go on talking to it."""
+        """The user answered in a held tab."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None or tab.held is None:
