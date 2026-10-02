@@ -21,12 +21,13 @@ from tests.fakeruntime import FakeRuntime
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _archive(path: Path, tags: list[str]) -> Path:
+def _archive(path: Path, tags: list[str], config: bytes = b"{}") -> Path:
     manifest = json.dumps([{"Config": "c.json", "RepoTags": tags, "Layers": []}]).encode()
     with tarfile.open(path, "w") as tar:
-        info = tarfile.TarInfo("manifest.json")
-        info.size = len(manifest)
-        tar.addfile(info, io.BytesIO(manifest))
+        for name, data in (("manifest.json", manifest), ("c.json", config)):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
     return path
 
 
@@ -44,6 +45,21 @@ def test_a_carried_image_is_loaded_not_built(tmp_path, monkeypatch):
     runtime = FakeRuntime()
     assert hostimages.ensure(runtime, image) == image.tag()
     assert runtime.build_count == 0
+
+
+def test_an_image_the_archive_moves_a_tag_off_is_removed(tmp_path, monkeypatch):
+    """The archive carries its own build of a tag already here — another disk's, or one built
+    on the machine — so loading it leaves the image that tag named with no name, which only
+    its id can remove."""
+    here, missing = _image(tmp_path, "selector"), _image(tmp_path, "claude")
+    monkeypatch.setenv(hostimages.ARCHIVE_ENV, str(_archive(
+        tmp_path / "a.tar", [here.tag(), missing.tag()], config=b'{"built": "elsewhere"}')))
+    runtime = FakeRuntime()
+    before = runtime.add_image(here.tag()).id
+    hostimages.ensure(runtime, missing)
+    assert runtime.image(here.tag()).id != before, "the load moved the tag"
+    assert runtime.image(before) is None
+    assert all(i.tags for i in runtime.list_images())
 
 
 def test_the_archive_is_read_once(tmp_path, monkeypatch):

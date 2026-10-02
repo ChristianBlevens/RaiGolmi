@@ -217,9 +217,8 @@ class Machine
         a.Add("-machine type=q35,accel=whpx,kernel-irqchip=on -cpu max -m 8192 -smp " + Environment.ProcessorCount);
         a.Add("-drive " + Quote("if=pflash,format=raw,readonly=on,file=" + Opt(Firmware)));
         a.Add("-drive " + Quote("if=pflash,format=raw,file=" + Opt(Vars)));
-        // What the guest frees (its weekly fstrim, a deleted image) goes back to qcow2's free
-        // clusters and is written again, so the file stops growing at the guest's peak use.
-        // Windows' file driver cannot punch holes, so it does not shrink on its own.
+        // What the guest discards (its trim every ten minutes and at shutdown) the patched QEMU
+        // releases from the sparse file, so the file shrinks with the guest's use while it runs.
         a.Add("-drive " + Quote("file=" + Opt(Disk) + ",format=qcow2,discard=unmap,detect-zeroes=unmap"));
         a.Add("-device virtio-vga-gl -device qemu-xhci,id=xhci -device usb-tablet,bus=xhci.0");
         a.Add("-netdev user,id=net0,hostfwd=tcp:127.0.0.1:" + SshPort + "-:22 -device virtio-net,netdev=net0");

@@ -102,12 +102,18 @@ class FakeRuntime(ContainerRuntime):
 
     # --- test helpers ----------------------------------------------------------------
     def add_image(self, reference: str, labels: dict[str, str] | None = None,
-                  config: dict[str, Any] | None = None) -> ImageInfo:
+                  config: dict[str, Any] | None = None,
+                  image_id: str | None = None) -> ImageInfo:
         # Shaped as Docker's are: a hex digest, which callers use as a path component.
-        info = ImageInfo(id="sha256:" + hashlib.sha256(reference.encode()).hexdigest(),
+        info = ImageInfo(id=image_id or "sha256:" + hashlib.sha256(reference.encode()).hexdigest(),
                          tags=(reference,),
                          labels=labels or {}, config=config or {})
+        previous = self._images.get(reference)
         self._images[reference] = info
+        if (previous is not None and previous.id != info.id
+                and not any(i.id == previous.id for i in self._images.values())):
+            # As Docker does: the image a tag moved off stays, under no name, until removed.
+            self._images[previous.id] = dataclasses.replace(previous, tags=())
         return info
 
     def pause(self, name: str) -> None:
@@ -422,6 +428,8 @@ class FakeRuntime(ContainerRuntime):
     # --- images ----------------------------------------------------------------------
     def image(self, reference: str) -> ImageInfo | None:
         found = self._images.get(reference)
+        if found is None and reference.startswith("sha256:"):
+            found = next((i for i in self._images.values() if i.id == reference), None)
         if found is None and "@" in reference:
             found = next((i for i in self._images.values() if reference in i.repo_digests), None)
         return found
@@ -531,10 +539,23 @@ class FakeRuntime(ContainerRuntime):
             raise RuntimeError_(f"could not load {archive}: invalid manifest.json")
         # Docker names what it loaded in its familiar form: `docker.io/` and `library/` go,
         # and any other registry — podman's `localhost/` included — stays.
-        tags = [re.sub(r"^docker\.io/(library/)?", "", t)
-                for entry in manifest for t in entry.get("RepoTags") or ()]
-        for tag in tags:
-            self.add_image(tag)
+        tags = []
+        for entry in manifest:
+            # An image's id is the digest of its config, so loading what is already here moves
+            # nothing, and loading another build of it moves its tags.
+            config = entry.get("Config")
+            image_id = None
+            if config:
+                with tarfile.open(archive) as tar:
+                    try:
+                        member = tar.extractfile(config)
+                    except KeyError as exc:
+                        raise RuntimeError_(f"could not load {archive}: {exc}") from exc
+                    image_id = "sha256:" + hashlib.sha256(member.read()).hexdigest()
+            for tag in entry.get("RepoTags") or ():
+                tag = re.sub(r"^docker\.io/(library/)?", "", tag)
+                self.add_image(tag, image_id=image_id)
+                tags.append(tag)
         return tags
 
     def remove_image(self, reference: str) -> None:
