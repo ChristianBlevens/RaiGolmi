@@ -843,7 +843,13 @@ def cmd_agent_activity(args) -> int:
     memory = (Memory.from_json(json.loads(store.read_text())) if store.exists()
               else Memory())
     hook = json.load(sys.stdin)
-    decision = decide(hook, memory)
+    from raigolmid.transcript import main_rows, undeclared_documents
+    # Its own thought doc is the conversation's record, never declared; a doc it cannot write
+    # (the guide, a read-only layer) is not its to keep.
+    thoughts = str(Path.home() / "thoughts.md")
+    undeclared = [doc for doc in undeclared_documents(main_rows(Path(hook["transcript_path"])))
+                  if doc != thoughts and os.access(doc, os.W_OK)]
+    decision = decide(hook, memory, undeclared)
     store.parent.mkdir(exist_ok=True)
     store.write_text(json.dumps(decision.memory.to_json()))
     if decision.refusal is not None:

@@ -49,7 +49,6 @@ transcript. The daemon reads every tab's home; no tab can read another's.
 """
 from __future__ import annotations
 
-import json
 import threading
 import time
 from pathlib import Path
@@ -61,6 +60,7 @@ from .events import Event, EventLog
 from .intent import Run, TabIntent
 from .questions import Questions
 from .session import SessionError
+from .transcript import latest_transcript, main_rows
 
 if TYPE_CHECKING:
     from .session import Session
@@ -69,25 +69,6 @@ if TYPE_CHECKING:
 TAIL_TURNS = 20
 TAIL_LINES = 60
 TURN_CHARS = 2000
-
-
-def latest_transcript(home: Path) -> Path | None:
-    transcripts = list((home / ".claude" / "projects" / "-work").glob("*.jsonl"))
-    return max(transcripts, key=lambda p: p.stat().st_mtime) if transcripts else None
-
-
-def main_rows(transcript: Path) -> list[dict[str, Any]]:
-    """The main conversation's user and assistant rows, in order; a subagent's are not it."""
-    rows = []
-    with transcript.open(encoding="utf-8") as lines:
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # a line being written as it is read
-            if row.get("type") in ("user", "assistant") and not row.get("isSidechain"):
-                rows.append(row)
-    return rows
 
 
 def context_tokens(home: Path) -> int | None:

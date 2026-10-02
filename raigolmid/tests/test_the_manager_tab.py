@@ -147,20 +147,16 @@ def test_a_doc_naming_the_dead_sends_the_manager_one_job_until_its_facts_change(
     """On facts, not a count — the same facts never page it twice."""
     from raigolmid.maintenance import Maintenance
     upkeep = Maintenance(h.session, h.events)
-    for table in (h.session.catalogue.faces, h.session.catalogue.toolbelts,
-                  h.session.catalogue.bodies):
-        for item in table.values():
-            if item.directory:
-                (item.directory / "LAYER.md").write_text("What it is.\n", encoding="utf-8")
+    _every_layer_documented(h)
     toolbelt = h.session.catalogue.toolbelts["python-dev"].directory
     doc = toolbelt / "LAYER.md"
-    doc.write_text("Built from `toolbelt.toml`.\n", encoding="utf-8")
+    doc.write_text(_headed("Built from `toolbelt.toml`.\n"), encoding="utf-8")
     upkeep.sweep()
     upkeep.sweep()
     _route(m)
     assert MANAGER not in h.session.intent.tabs, "a current doc is no job"
 
-    doc.write_text("Built from `toolbelt.toml` and `gone.nix`.\n", encoding="utf-8")
+    doc.write_text(_headed("Built from `toolbelt.toml` and `gone.nix`.\n"), encoding="utf-8")
     upkeep.sweep()
     upkeep.sweep()
     _route(m)
@@ -191,34 +187,67 @@ def test_a_layer_left_without_a_doc_goes_to_the_manager_once_no_tab_is_working(h
     assert "missing: the layer at" in incident.read_text()
 
 
+def _headed(text, shape="bounded", audited=None):
+    body = text
+    size = audited if audited is not None else len(body.encode())
+    return (f"<!-- purpose: what it is\nnot-here: anything else, in its own doc\n"
+            f"shape: {shape}\naudited: {size} 2026-10-02\n-->\n{body}")
+
+
 def _every_layer_documented(h):
     for table in (h.session.catalogue.faces, h.session.catalogue.toolbelts,
                   h.session.catalogue.bodies):
         for item in table.values():
             if item.directory:
-                (item.directory / "LAYER.md").write_text("What it is.\n", encoding="utf-8")
+                for doc in item.directory.rglob("*.md"):
+                    doc.write_text(_headed("What it is.\n"), encoding="utf-8")
+                (item.directory / "LAYER.md").write_text(_headed("What it is.\n"),
+                                                         encoding="utf-8")
 
 
-def test_a_body_with_a_tab_is_its_tabs_to_document_until_the_tab_closes(h, m):
-    """A body that has its own tab is that tab's, so the manager never writes into a
-    working copy an agent holds."""
+def test_a_bodys_docs_are_judged_only_while_its_tab_is_idle(h, m):
+    """A body's tab declares every doc it read before its turn ends, so its docs are judged at
+    rest and never while it may be mid-edit — and a kept tab does not shield them for good."""
     from raigolmid.maintenance import Maintenance
     upkeep = Maintenance(h.session, h.events)
     _every_layer_documented(h)
-    h.session.select("body", "myapi")
     tab = h.tab("myapi")
+    h.session.intent.tabs[tab].busy = True
     doc = h.session.catalogue.bodies["myapi"].directory / "LAYER.md"
-    doc.write_text("Runs `gone.py`.\n", encoding="utf-8")
+    doc.write_text(_headed("Runs `gone.py`.\n"), encoding="utf-8")
     upkeep.sweep()
     _route(m)
     assert MANAGER not in h.session.intent.tabs
 
-    h.session.deselect("body")
-    h.session.close_tab(tab)
-    assert h.session.intent.body_tab("myapi") is None
+    h.session.intent.tabs[tab].busy = False
     upkeep.sweep()
     _route(m)
     assert _queued(m) == ["documents.maintenance"]
+
+
+def test_every_doc_of_a_working_copy_is_held_to_its_header_in_one_job(h, m):
+    """A doc with no purpose header, and one grown a quarter past its audit, are one job for
+    the body that owns them — and growth is one fact however far it goes."""
+    from raigolmid.maintenance import Maintenance
+    upkeep = Maintenance(h.session, h.events)
+    _every_layer_documented(h)
+    copy = h.session.catalogue.bodies["myapi"].source_root
+    (copy / "docs").mkdir(exist_ok=True)
+    (copy / "docs" / "notes.md").write_text("Notes.\n", encoding="utf-8")
+    design = copy / "DESIGN.md"
+    design.write_text(_headed("x" * 1000 + "\n", audited=1000), encoding="utf-8")
+    upkeep.sweep()
+    design.write_text(_headed("x" * 8000 + "\n", audited=1000), encoding="utf-8")
+    upkeep.sweep()
+    design.write_text(_headed("x" * 9000 + "\n", audited=1000), encoding="utf-8")
+    upkeep.sweep()
+    jobs = h.events_of("documents.maintenance")
+    assert [job.data["document"] for job in jobs] == ["/definitions/bodies/myapi"] * 2
+    first, grown = (job.data["documents"] for job in jobs)
+    assert first == {"/definitions/bodies/myapi/docs/notes.md":
+                     ["header: it does not open with its purpose header"]}
+    [(name, [reason])] = grown.items()
+    assert name.endswith("/DESIGN.md") and reason.startswith("grown since its audit: from 1000")
 
 
 def test_a_definition_is_judged_only_while_the_machine_tab_is_not_changing_it(h, m):
@@ -229,7 +258,7 @@ def test_a_definition_is_judged_only_while_the_machine_tab_is_not_changing_it(h,
     assert machine is not None
     machine.busy = True
     doc = h.session.catalogue.toolbelts["python-dev"].directory / "LAYER.md"
-    doc.write_text("Built from `gone.nix`.\n", encoding="utf-8")
+    doc.write_text(_headed("Built from `gone.nix`.\n"), encoding="utf-8")
     upkeep.sweep()
     _route(m)
     assert MANAGER not in h.session.intent.tabs, "the machine tab may be mid-edit"
@@ -253,11 +282,9 @@ def test_a_stale_doc_is_one_fact_whichever_files_move(h, m):
     (layer / "b.nix").write_text("{}\n", encoding="utf-8")
     upkeep.sweep()
     _route(m)
-    assert h.events_of("documents.maintenance")[-1].data["document"].endswith(
-        "python-dev/LAYER.md")
     stale = [e for e in h.events_of("documents.maintenance")
-             if e.data["document"].endswith("python-dev/LAYER.md")]
-    assert len(stale) == 1
+             if any(d.endswith("python-dev/LAYER.md") for d in e.data["documents"])]
+    assert len(stale) == 1 and stale[0].data["document"].endswith("python-dev")
 
 
 def test_one_failure_said_twice_is_one_incident_and_one_message(h, m):

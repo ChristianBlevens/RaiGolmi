@@ -7,6 +7,10 @@ an agent knows to write them. A layer's description doc is **stale** when a file
 was written after it: modification time is the evidence, because a layer need not be a git
 repository.
 
+Every document opens with a header (`HEADER_FORMAT`) naming its purpose, what does not belong
+in it, its shape, and the size its last audit left; a doc without one, or grown well past that
+size, is due an audit against it.
+
 The manager's documents are the machine's, not a tab's, so they live in the daemon's state and
 outlive every manager session (`Paths.manager_documents`, mounted at `/manager`). The daemon
 opens an incident's doc as it hands the manager the failure, so there is one per incident
@@ -62,19 +66,28 @@ def _layer_files(directory: Path) -> list[Path]:
     return files
 
 
+def markdown(directory: Path) -> list[Path]:
+    """Every document in a layer or working copy, by the same answer as its files."""
+    return sorted(f for f in _layer_files(directory) if f.suffix == ".md" and f.is_file())
+
+
 def changed_after(doc: Path, directory: Path) -> list[str]:
     """The layer's files written after its doc, relative to the layer. The doc's own
-    temporaries (`LAYER.md.tmp.*`, an editor's atomic write) are the doc, not the layer."""
+    temporaries (`LAYER.md.tmp.*`, an editor's atomic write) are the doc, not the layer, and
+    its other documents describe it rather than make it: an audit writing one is no change."""
     written = doc.stat().st_mtime
     return sorted(str(f.relative_to(directory)) for f in _layer_files(directory)
                   if f.name not in _NOT_THE_LAYERS and not f.name.startswith(LAYER_DOC)
+                  and f.suffix != ".md"
                   and f.is_file() and f.stat().st_mtime > written)
 
 
 def index(working_copy: Path, home: Path, layers: list[Layer]) -> dict[str, Any]:
     """`documents` exist; `missing` are expected and unwritten. A layer doc's
-    `changed_after` lists the layer's files written since it, and is empty when it is current."""
-    return _route([
+    `changed_after` lists the layer's files written since it, and is empty when it is current.
+    Every other document in the working copy is listed by its header's purpose, so which to
+    read is chosen from the index rather than by opening each."""
+    expected = [
         (working_copy / SESSION_START, None,
          "where the work in this working copy stands, rewritten each session: the one document "
          "the next conversation starts from. Read it before acting; the user's words outrank "
@@ -85,7 +98,17 @@ def index(working_copy: Path, home: Path, layers: list[Layer]) -> dict[str, Any]
          "as you work — its record, archived with it when the tab closes, never what a "
          "conversation starts from."),
         *_layer_rows(layers),
-    ])
+    ]
+    named = {path for path, _, _ in expected}
+    expected += [(doc, None, purpose(doc)) for doc in markdown(working_copy) if doc not in named]
+    return _route(expected)
+
+
+def purpose(doc: Path) -> str:
+    fields = read_header(doc.read_text(encoding="utf-8", errors="replace"))
+    if fields is None or not fields.get("purpose"):
+        return "no purpose header yet: what it is for is unwritten"
+    return fields["purpose"]
 
 
 def _route(expected: list[tuple[Path, Path | None, str]]) -> dict[str, Any]:
@@ -157,6 +180,58 @@ def manager_index(root: Path, layers: list[Layer]) -> dict[str, Any]:
 # A document is kept small so it is read whole; its budget says how small for
 # its kind. Past it, the manager is sent to cut it down.
 BUDGET = {LAYER_DOC: 8 * 1024, SESSION_START: 16 * 1024, PATTERNS: 32 * 1024}
+
+# Every document opens with its header: what it is for, what is not, and how it grows. It is an
+# HTML comment, so an agent reading the file sees it and a rendered page (a public README) does
+# not. An audit holds the doc to its purpose and moves out what `not-here` names; a `log` rolls
+# its oldest entries into an `archive`, which is never trimmed and never audited for growth.
+HEADER_FORMAT = ("<!-- purpose: what this document is for, in one sentence\n"
+                 "not-here: what does not belong in it, and where each goes instead\n"
+                 "shape: bounded | log | archive\n"
+                 "audited: <bytes> <YYYY-MM-DD>\n"
+                 "-->")
+SHAPES = ("bounded", "log", "archive")
+_HEADER_KEYS = ("purpose", "not-here", "shape", "audited")
+_HEADER_OPEN = "<!-- purpose:"
+_AUDITED = re.compile(r"^(\d+) (\d{4}-\d{2}-\d{2})$")
+# A doc is audited again once it has grown by a quarter since the last audit, whatever its size:
+# a design doc and a starting guide drift at the same rate relative to what they hold. Growth of
+# under a few pages is still cheap to read whole, so it never pages the manager.
+GROWTH = 1.25
+GROWTH_FLOOR = 4 * 1024
+
+
+def read_header(text: str) -> dict[str, str] | None:
+    """The header's fields, or None when the doc does not open with one."""
+    end = text.find("-->")
+    if not text.startswith(_HEADER_OPEN) or end < 0:
+        return None
+    fields = {}
+    for line in text[len("<!-- "):end].splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+def header_reasons(text: str, size: int) -> list[str]:
+    """Why the doc's header does not serve, or why it is due an audit against it, or nothing."""
+    fields = read_header(text)
+    if fields is None:
+        return [f"{_HEADER}it does not open with its purpose header"]
+    missing = [key for key in _HEADER_KEYS if not fields.get(key)]
+    if missing:
+        return [f"{_HEADER}its header has no {', '.join(missing)}"]
+    if fields["shape"] not in SHAPES:
+        return [f"{_HEADER}its shape `{fields['shape']}` is not one of {', '.join(SHAPES)}"]
+    audited = _AUDITED.match(fields["audited"])
+    if audited is None:
+        return [f"{_HEADER}its `audited` is not `<bytes> <YYYY-MM-DD>`"]
+    was = int(audited[1])
+    if fields["shape"] != "archive" and size >= was * GROWTH and size - was >= GROWTH_FLOOR:
+        return [f"{_GROWN}from {was} bytes at its audit on {audited[2]} to {size}: hold it to its "
+                "purpose and its not-here"]
+    return []
 
 # What reads as a file in backticks: a path with a slash, a name with one of these
 # extensions, or one of the bare names. Anything else in backticks — a tool, a word, a
@@ -236,21 +311,28 @@ def _resolve(path: str, base: Path, mounts: dict[str, Path]) -> Path | None:
 
 def fact(reason: str) -> str:
     """What a reason is a fact of, for telling a new fact from the same one restated: a stale
-    doc is one fact whichever of its layer's files moved."""
-    return "stale" if reason.startswith(_STALE) else reason
+    doc is one fact whichever of its layer's files moved, and a growing doc one fact however
+    far it has grown."""
+    for prefix in (_STALE, _GROWN):
+        if reason.startswith(prefix):
+            return prefix.rstrip(": ")
+    return reason
 
 
 _STALE = "stale: "
+_GROWN = "grown since its audit: "
+_HEADER = "header: "
 
 
-def maintenance(doc: Path, budget: int, mounts: dict[str, Path] | None,
+def maintenance(doc: Path, budget: int | None, mounts: dict[str, Path] | None,
                 layer_directory: Path | None = None) -> list[str]:
-    """Why this doc needs its maintenance job, or nothing.
-    `mounts` None is a record of failures, which names what went missing by its nature, so
-    its references are not checked."""
-    reasons = []
-    size = doc.stat().st_size
-    if size > budget:
+    """Why this doc needs its maintenance job, or nothing. `budget` is its kind's, where its
+    kind has one. `mounts` None is a record of failures, which names what went missing by its
+    nature, so its references are not checked."""
+    text = doc.read_text(encoding="utf-8")
+    size = len(text.encode("utf-8"))
+    reasons = header_reasons(text, size)
+    if budget is not None and size > budget:
         reasons.append(f"{size} bytes, over its budget of {budget}")
     if layer_directory is not None:
         changed = changed_after(doc, layer_directory)

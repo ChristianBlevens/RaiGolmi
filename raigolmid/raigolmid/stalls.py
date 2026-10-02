@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import git, naming
 from .agent_stop import Memory
-from .coordinator import latest_transcript, main_rows
+from .transcript import latest_transcript, main_rows
 from .events import Event, EventLog
 from .intent import MANAGER
 from .runtime.base import RuntimeError_

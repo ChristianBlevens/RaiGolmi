@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import traceback
+from pathlib import Path
 from typing import Any
 
 from .client import ApiClient, ApiError
@@ -124,6 +125,29 @@ def container_mounts() -> list[tuple[str, str]]:
     return [] if raw is None else [(host, inside) for host, inside in json.loads(raw)]
 
 
+def register_declare(server) -> None:
+    """The stop hook's question answered (`agent_stop`): every tab and the manager read
+    documents, so both servers carry it. It is answered in the conversation's transcript, which
+    the hook reads, so the daemon is not asked."""
+    @tool(server, description="Declare the documents (`.md`) you read: `current` when "
+                             "nothing you learned or changed makes it stale, `updated` once "
+                             "you have brought it up to date within its header's purpose. "
+                             "Each doc you read and can change is asked about at the end of "
+                             "your turn until it is declared. `documents` is a list of "
+                             "{path, state}, each path absolute.")
+    def declare_documents(documents: list[dict[str, str]]) -> str:
+        from mcp.server.mcpserver.exceptions import ToolError
+        for doc in documents:
+            path, state = doc.get("path", ""), doc.get("state")
+            if not path.startswith("/") or not path.endswith(".md"):
+                raise ToolError(f"{path!r}: a document is an absolute path to a `.md` file")
+            if not Path(path).is_file():
+                raise ToolError(f"{path}: no such file")
+            if state not in ("current", "updated"):
+                raise ToolError(f"{path}: state is `current` or `updated`, not {state!r}")
+        return f"declared {len(documents)}"
+
+
 def build_server(client: ApiClient):
     from mcp.server.mcpserver import MCPServer
 
@@ -151,6 +175,8 @@ def build_server(client: ApiClient):
                              "it can be selected. Generated at each call, so never stale.")
     def index() -> dict[str, Any]:
         return call("index")
+
+    register_declare(server)
 
     @tool(server, description="The faces, toolbelts and bodies as the user's selector shows "
                              "them: whether each is selected and selectable and why not, a "
@@ -406,6 +432,8 @@ def build_machine_server(client: ApiClient):
                              "face, toolbelt and body. Generated at each call.")
     def index() -> dict[str, Any]:
         return call("index")
+
+    register_declare(server)
 
     @tool(server, description="The machine's recent events, newest last: every failure, crash, "
                              "reconcile and start, with its reason.")

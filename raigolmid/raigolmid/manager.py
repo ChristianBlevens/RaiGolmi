@@ -60,7 +60,7 @@ TAKEN = frozenset({
     "coordinator.unanswered",     # the machine tab not confirming its own handover
     "tab.stalled",                # a working tab whose conversation stands still (`stalls.py`)
     "tab.spinning",               # a working tab whose working copy does not change
-    "documents.maintenance",      # a doc over budget, stale or naming the dead
+    "documents.maintenance",      # an owner's docs: no header, grown, over budget, stale, dead refs
     "documents.maintenance_failed",
 })
 

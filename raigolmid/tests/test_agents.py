@@ -466,6 +466,16 @@ def test_the_index_routes_to_the_documents_that_exist_and_every_layer(h, monkeyp
     (work / "SESSION-START.md").write_text("where it stands\n", encoding="utf-8")
     assert [d["path"] for d in index()["documents"]] == ["/work/SESSION-START.md"]
     assert "/work/SESSION-START.md" not in {d["path"] for d in index()["missing"]}
+    (work / "docs").mkdir(exist_ok=True)
+    (work / "docs" / "DESIGN.md").write_text(
+        "<!-- purpose: the design of the api\nnot-here: n\nshape: bounded\naudited: 1 "
+        "2026-10-02\n-->\n", encoding="utf-8")
+    (work / "NOTES.md").write_text("notes\n", encoding="utf-8")
+    routed = {d["path"]: d["what"] for d in index()["documents"]}
+    assert routed["/work/docs/DESIGN.md"] == "the design of the api"
+    assert routed["/work/NOTES.md"].startswith("no purpose header yet")
+    (work / "docs" / "DESIGN.md").unlink()
+    (work / "NOTES.md").unlink()
 
     toolbelt = h.session.catalogue.toolbelts["python-dev"].directory
     doc = toolbelt / "LAYER.md"
@@ -544,3 +554,27 @@ def test_a_repository_made_while_agents_run_is_protected_once_a_turn_ends(h):
             break
         time.sleep(0.05)
     assert target in mounts and mounts[target].read_only
+
+
+def test_a_declared_document_is_one_that_exists_in_a_state_it_can_be_in(tmp_path):
+    """A declaration answers the stop hook's question, so one naming no doc, or a state that is
+    no answer, is refused in words rather than taken as one."""
+    import asyncio
+    from mcp.server.mcpserver.exceptions import ToolError
+    from raigolmid.mcp_server import build_server
+
+    doc = tmp_path / "DESIGN.md"
+    doc.write_text("<!-- purpose: p -->\n", encoding="utf-8")
+    server = build_server(_Refusing("unused"))
+
+    def declare(*documents):
+        return asyncio.run(server.call_tool("declare_documents",
+                                            {"documents": list(documents)}))
+
+    assert "declared 1" in str(declare({"path": str(doc), "state": "current"}))
+    for wrong, said in (({"path": "DESIGN.md", "state": "current"}, "absolute path"),
+                        ({"path": str(tmp_path / "gone.md"), "state": "current"}, "no such"),
+                        ({"path": str(doc), "state": "fine"}, "`current` or `updated`")):
+        with pytest.raises(ToolError) as raised:
+            declare(wrong)
+        assert said in str(raised.value)

@@ -52,8 +52,25 @@ def test_a_dead_path_line_or_symbol_is_named_and_a_word_is_never_a_claim(tmp_pat
 
 
 def test_a_record_of_failures_is_held_to_its_budget_and_never_to_what_it_names(tmp_path):
-    _write(tmp_path / "patterns.md", "`python-version.nix` was missing\n", 100)
+    _write(tmp_path / "patterns.md", "<!-- purpose: failures\nnot-here: fixes in progress\n"
+           "shape: log\naudited: 90 2026-10-02\n-->\n`python-version.nix` was missing\n", 100)
     assert documents.maintenance(tmp_path / "patterns.md", 1024, None) == []
+
+
+def test_a_header_serves_only_whole_and_an_archive_never_grows_into_an_audit():
+    head = "<!-- purpose: p\nnot-here: n\nshape: {shape}\naudited: {audited}\n-->\n"
+    assert documents.header_reasons("# Title\n", 8) == [
+        "header: it does not open with its purpose header"]
+    assert documents.header_reasons("<!-- purpose: p\nshape: log\n-->", 30) == [
+        "header: its header has no not-here, audited"]
+    assert documents.header_reasons(head.format(shape="notes", audited="1 2026-10-02"), 60) == [
+        "header: its shape `notes` is not one of bounded, log, archive"]
+    assert documents.header_reasons(head.format(shape="log", audited="10000 2026-10-02"),
+                                    14000) == []
+    assert documents.header_reasons(head.format(shape="log", audited="10000 2026-10-02"),
+                                    15000)[0].startswith("grown since its audit: from 10000")
+    assert documents.header_reasons(head.format(shape="archive", audited="1 2026-10-02"),
+                                    10 ** 6) == []
 
 
 def test_a_slash_alone_is_no_claim_and_the_daemons_lock_is_named_before_it_exists(tmp_path):
