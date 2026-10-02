@@ -217,6 +217,13 @@ class DockerRuntime(ContainerRuntime):
             raise RuntimeError_(f"could not read logs for '{name_or_id}': {exc}") from exc
         return raw.decode("utf-8", errors="replace")
 
+    def processes(self, name_or_id: str) -> str:
+        try:
+            top = self._client.containers.get(name_or_id).top(ps_args="-eo pid,ppid,etime,args")
+        except (NotFound, APIError) as exc:
+            raise RuntimeError_(f"could not list the processes of '{name_or_id}': {exc}") from exc
+        return "\n".join("\t".join(row) for row in [top["Titles"], *(top["Processes"] or [])])
+
     def _exec_target(self, name_or_id: str) -> Container:
         try:
             container = self._client.containers.get(name_or_id)

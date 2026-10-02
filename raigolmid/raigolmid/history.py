@@ -102,6 +102,9 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "tab.closed": _closed,
     "agent.idle": lambda e: "done" if e.data["done"] else None,
     "agent.crashed": lambda e: e.data["message"],
+    "tab.stalled": lambda e: e.data["message"],
+    "tab.spinning": lambda e: e.data["message"],
+    "tab.unstuck": lambda e: "its turn stopped by the manager, which said why",
     "tab.managed": lambda e: (None if e.data.get("why") == "continued"
                               else _handed(e) if e.data["on"]
                               else "given back by the daemon: your time for it ran out"
@@ -164,6 +167,8 @@ NOTICED: dict[str, Callable[[Event], str]] = {
     "coordinator.unanswered": lambda e: e.data["message"],
     "manager.open_failed": lambda e: f"The manager tab could not open: {e.data['error']}",
     "agent.turn_failed": lambda e: e.data["message"],
+    "stalls.unstick_failed": lambda e: (f"The manager tab was stuck and could not be "
+                                        f"restarted: {e.data['error']}"),
     "claude_login.lost": lambda e: (
         f"Your claude.ai sign-in has ended ({e.data['error']}), so a held tab cannot reach your "
         f"phone until you sign in again, in the AI terminal's first window"),

@@ -52,6 +52,8 @@ LOCAL_ONLY_IMAGES = ("raigolmi/", "raigolmid/body-")
 class FakeRuntime(ContainerRuntime):
     def __init__(self) -> None:
         self._containers: dict[str, dict[str, Any]] = {}
+        # What `processes` lists beyond its header, per container, as a test stages it.
+        self.staged_processes: dict[str, list[str]] = {}
         self._images: dict[str, ImageInfo] = {}
         # What the registry names a reference by now, when a test moves it; otherwise the
         # digest `pull` gives it. `registry_offline` is a registry that cannot be reached.
@@ -374,6 +376,18 @@ class FakeRuntime(ContainerRuntime):
             rec["status"] = "removed"
             rec["pid"] = None
             self._emit("destroy", rec)
+
+    def processes(self, name_or_id: str) -> str:
+        # Docker refuses `top` for a container it does not have and for one not running.
+        info = self.inspect(name_or_id)
+        if info is None:
+            raise RuntimeError_(f"could not list the processes of '{name_or_id}': 404 Not "
+                                f"Found: No such container: {name_or_id}")
+        if not info.running:
+            raise RuntimeError_(f"could not list the processes of '{name_or_id}': 409 "
+                                f"Conflict: Container {name_or_id} is not running")
+        return "\n".join(["PID\tPPID\tELAPSED\tCOMMAND",
+                          *self.staged_processes.get(name_or_id, [])])
 
     def logs(self, name_or_id: str, tail: int = 100) -> str:
         # Docker has no logs for a container it does not have, and `DockerRuntime` turns

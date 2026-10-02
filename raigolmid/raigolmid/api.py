@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from . import stalls
 from .events import EventLog
 from .channel import Channels
 from .intent import MANAGER
@@ -69,6 +70,7 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "ensure_tabs": lambda: session.ensure_tabs(),
         "restart_agent": lambda tab_id, resume=True: session.restart_agent(tab_id, resume),
         "close_tab": lambda tab_id: session.close_tab(tab_id),
+        "unstick": lambda tab_id, note: stalls.unstick(session, events, tab_id, note),
         "exec": lambda target, cmd, cwd="/work", timeout=300.0: session.exec(
             target, cmd, cwd, timeout),
         "rebuild_body": lambda instance_id: session.rebuild_body(

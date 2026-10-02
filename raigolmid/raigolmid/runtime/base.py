@@ -159,6 +159,13 @@ class ContainerRuntime(abc.ABC):
     @abc.abstractmethod
     def logs(self, name_or_id: str, tail: int = 100) -> str: ...
 
+    @abc.abstractmethod
+    def processes(self, name_or_id: str) -> str:
+        """A running container's processes, one per line with its pid, parent, age and
+        command, read from the host (`docker top`): nothing runs inside the container, so a
+        view or a distroless one answers too. Raises `RuntimeError_` for one that is gone or
+        not running."""
+
     def diagnostic_log(self, name_or_id: str, tail: int = 100) -> str:
         """The log for an error that explains a container's failure. Docker refuses logs for
         a container that is dead or marked for removal, and that refusal is the answer — so

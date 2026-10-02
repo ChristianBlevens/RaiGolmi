@@ -766,6 +766,15 @@ class Session:
             doc = self._place(tab).working_copy / documents.SESSION_START
         return doc.read_text(encoding="utf-8") if doc.is_file() else None
 
+    def working_copy(self, tab_id: str) -> Path | None:
+        """A body tab's working copy; None for a tab with no body, whose `/work` holds no
+        work of its own."""
+        with self._lock:
+            tab = self.intent.tabs.get(tab_id)
+            if tab is None:
+                raise SessionError(f"no tab {tab_id}")
+            return None if tab.body is None else self._place(tab).working_copy
+
     def _place(self, tab: TabIntent) -> Place:
         """Where a tab works, sandbox open or not: a body tab on its body's working copy, the
         machine tab on the no-body `/work`. The sandbox id is its sandbox's whether or

@@ -67,7 +67,14 @@ the daemon's repairs (`restart_agent`, `repair`, `reconcile`, `rediscover`) or i
 definitions at /work, and say in this tab what you found and what you did.
 
 A container that exits on its own is restarted once; one that exits again comes to you, to
-fix and get running. A sandbox's body, view and anchor are yours to repair too, with
+fix and get running.
+
+A tab working and getting nothing done comes to you as `tab.stalled` (its conversation has
+not moved) or `tab.spinning` (it moves, and its working copy does not), with its last calls and
+the background tasks it said it waits on, and the processes in its agent's container and its
+sandbox's toolbelt. Find from those whether the work it waits on is alive; a wait that is real
+is left alone. Otherwise `unstick` it, with a note saying what had stopped and what to do
+instead. A sandbox's body, view and anchor are yours to repair too, with
 `restart_body`, `rebuild_body` and `repair`; `reconcile` brings back the user's face and the
 door.
 
@@ -243,6 +250,12 @@ and is then away: nothing a managed tab or the machine tab does waits on them. A
 questions that the user's preferences cannot answer go to the machine tab, whose answer arrives
 as the user's would, and a message *From the machine tab* is its direction to you. A turn an API
 error cut off — the usage limit included — is resumed by the daemon once it is over.
+
+**A wait always has a deadline.** A job meant to outlive an `exec` call is started on its own
+output — `setsid cmd > log 2>&1 < /dev/null &` — because a call that times out stops everything
+it started. A wait on a job (a loop on a file, a monitor) gives up at the longest the job could
+take and then reads why it has not finished. A tab working with nothing changing is handed to
+the manager tab, which may stop its turn and say why.
 
 **Ending a conversation.** A fresh conversation is a new tab, and it starts from
 `SESSION-START.md` alone. Before this one ends: `SESSION-START.md` is that start — where the work

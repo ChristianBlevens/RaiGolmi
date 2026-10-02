@@ -234,16 +234,34 @@ def test_an_exec_whose_caller_timed_out_is_ended_not_left_running(launcher, scri
     assert _exit_of(launcher, script) == code
 
 
-def test_an_exec_whose_output_a_background_job_holds_says_the_command_exited(launcher):
+def test_an_exec_whose_output_a_background_job_holds_says_the_job_was_stopped(
+        launcher, tmp_path):
     """`&` after a `&&` list backgrounds the whole list, whose shell keeps the output open
-    while the command it waits on runs: the command has exited and said what it had to, and
-    the timeout says that rather than that something failed."""
-    script = "cd /tmp && sleep 30 > /dev/null 2>&1 < /dev/null & echo started"
+    while the command it waits on runs: the timeout says the command exited, and that the
+    job was stopped, which it then is. An agent told only that a job "holds" the output
+    waited an hour on a test the launcher had ended."""
+    pid_file = tmp_path / "job.pid"
+    script = (f"cd /tmp && sh -c 'echo $$ > {pid_file}; exec sleep 30' > /dev/null 2>&1 "
+              "< /dev/null & echo started")
     # bash, as an agent's `exec` runs it: dash execs the list's last command in its shell's
     # place, which leaves nothing holding the output.
     with pytest.raises(LauncherOutputHeld) as held:
         launcher.exec(["bash", "-c", script], cwd="/tmp", timeout=2.0)
-    assert "exited 0" in str(held.value) and "started" in str(held.value)
+    said = str(held.value)
+    assert "exited 0" in said and "started" in said and "has been stopped" in said
+    job = int(pid_file.read_text())
+    deadline = time.time() + 5.0
+    while time.time() < deadline and _alive(job):
+        time.sleep(0.1)
+    assert not _alive(job)
+
+
+def _alive(pid: int) -> bool:
+    """Running, not a zombie awaiting its reaper."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(") ")[1][0] != "Z"
+    except (FileNotFoundError, IndexError):
+        return False
 
 
 def test_binary_output_survives_the_framing(launcher):

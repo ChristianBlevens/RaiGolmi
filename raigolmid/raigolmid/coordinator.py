@@ -71,12 +71,12 @@ TAIL_LINES = 60
 TURN_CHARS = 2000
 
 
-def _latest_transcript(home: Path) -> Path | None:
+def latest_transcript(home: Path) -> Path | None:
     transcripts = list((home / ".claude" / "projects" / "-work").glob("*.jsonl"))
     return max(transcripts, key=lambda p: p.stat().st_mtime) if transcripts else None
 
 
-def _main_rows(transcript: Path) -> list[dict[str, Any]]:
+def main_rows(transcript: Path) -> list[dict[str, Any]]:
     """The main conversation's user and assistant rows, in order; a subagent's are not it."""
     rows = []
     with transcript.open(encoding="utf-8") as lines:
@@ -92,10 +92,10 @@ def _main_rows(transcript: Path) -> list[dict[str, Any]]:
 
 def context_tokens(home: Path) -> int | None:
     """The input the latest main-conversation answer took; None before the first answer."""
-    transcript = _latest_transcript(home)
+    transcript = latest_transcript(home)
     if transcript is None:
         return None
-    for row in reversed(_main_rows(transcript)):
+    for row in reversed(main_rows(transcript)):
         usage = (row.get("message") or {}).get("usage")
         if row["type"] == "assistant" and usage:
             return (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
@@ -121,11 +121,11 @@ def _said(row: dict[str, Any]) -> str:
 def transcript_tail(home: Path, turns: int) -> list[dict[str, str]]:
     """The last `turns` turns, each cut to `TURN_CHARS` but the last: that is the tab's
     report at its turn's end, which the machine tab and the run's report read whole."""
-    transcript = _latest_transcript(home)
+    transcript = latest_transcript(home)
     if transcript is None:
         return []
     tail = []
-    for row in _main_rows(transcript):
+    for row in main_rows(transcript):
         said = _said(row).strip()
         if said:
             tail.append({"role": row["type"], "said": said})

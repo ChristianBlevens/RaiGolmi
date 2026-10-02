@@ -35,8 +35,9 @@ class LauncherTimeout(LauncherError):
 
 
 class LauncherOutputHeld(LauncherTimeout):
-    """The command exited, but its output was still open at the timeout: a process it left
-    running holds it. Nothing failed, so nothing about the view is in question."""
+    """The command exited, but a process it left running held its output at the timeout.
+    Nothing about the view is in question; the work is: the launcher ends the command's
+    process group once its caller stops waiting (`server._abandon`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,14 +201,18 @@ class LauncherClient:
         except socket.timeout as exc:
             if exited is not None:
                 raise LauncherOutputHeld(
-                    f"{' '.join(cmd)} exited {exited}, but its output was still open after "
-                    f"{timeout}s: a process it started in the background holds it. `&` "
-                    "backgrounds the whole `&&` list before it, and that list's shell keeps "
-                    "the output; background the one command (`{ cmd > log 2>&1 & }`) or "
-                    f"redirect the list. It printed: stdout {''.join(out)[-2000:]!r} stderr "
+                    f"{' '.join(cmd)} exited {exited}, but a process it started in the "
+                    f"background still held its output after {timeout}s, so everything it "
+                    "started has been stopped. Anything of it still running left its process "
+                    "group (`setsid`, or GNU `timeout`, which takes its own) and is cut off "
+                    "from what started it: check before waiting on it. `&` after a `&&` list "
+                    "backgrounds the whole list, whose shell keeps the output; a job that "
+                    "outlives the call is started on its own output: `setsid cmd > log 2>&1 "
+                    f"< /dev/null &`. It printed: stdout {''.join(out)[-2000:]!r} stderr "
                     f"{''.join(err)[-2000:]!r}") from exc
             raise LauncherTimeout(
-                f"{' '.join(cmd)} produced no result within {timeout}s"
+                f"{' '.join(cmd)} produced no result within {timeout}s and has been stopped, "
+                "with everything it started"
             ) from exc
         finally:
             sock.close()

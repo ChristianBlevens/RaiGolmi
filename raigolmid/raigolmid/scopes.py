@@ -36,9 +36,9 @@ from .session import Session, SessionError
 SOCKET = "raigolmid.sock"
 
 # Of the full table, what the manager's machine scope reaches: the machine's state
-# read-only, its channel, and the repairs the daemon already has.
+# read-only, its channel, and the repairs the daemon already has — never a shell in a sandbox.
 MACHINE = ("version", "status", "list_items", "events", "container_logs", "journal",
-           "crash_logs", "restart_agent", "repair", "reconcile", "rediscover")
+           "crash_logs", "restart_agent", "repair", "reconcile", "rediscover", "unstick")
 
 # Of the full table, what a face reaches: a read-only view of the machine, and every sandbox's
 # toolbelt by name (a face works with every body). Beyond it, what the user does themselves,

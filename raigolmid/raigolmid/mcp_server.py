@@ -161,7 +161,11 @@ def build_server(client: ApiClient):
 
     @tool(server, description="Run a command in your sandbox's toolbelt container, where the "
                              "toolbelt and the language servers run. Returns stdout, "
-                             "stderr and the exit code.")
+                             "stderr and the exit code. `timeout` is how long it may go "
+                             "without output; when it passes, everything the command started "
+                             "is stopped, background jobs included. A job meant to outlive "
+                             "the call is started on its own output: `setsid cmd > log 2>&1 "
+                             "< /dev/null &`.")
     def exec(cmd: list[str], cwd: str = "/work", timeout: float = 300.0) -> dict[str, Any]:
         return client.call("exec", cmd=cmd, cwd=cwd, timeout=timeout)
 
@@ -437,6 +441,12 @@ def build_machine_server(client: ApiClient):
     @tool(server, description="Restart an agent tab's agent, resuming its conversation.")
     def restart_agent(tab_id: str, resume: bool = True) -> dict[str, Any]:
         return call("restart_agent", tab_id=tab_id, resume=resume)
+
+    @tool(server, description="Stop a stuck tab's turn and every background task in its "
+                             "session, and start its next turn on your note: what had stopped "
+                             "and what to do instead. Its conversation is kept.")
+    def unstick(tab_id: str, note: str) -> dict[str, Any]:
+        return call("unstick", tab_id=tab_id, note=note)
 
     @tool(server, description="Recreate a sandbox from its recorded intent: its anchor, body "
                              "and view.")
