@@ -284,7 +284,10 @@ a new line.
 The manager takes any failure that gets in the way of using the machine: a container that
 dies again after its one automatic restart, a desktop or editor that won't start, one of the
 host's own screens failing, the clipboard bridge dropping, or another tab that stops
-responding. It also keeps the agents' documents in shape: one that's grown past its size,
+responding. It also catches a tab that's stuck: one working for ten minutes with nothing in its
+conversation moving, or for half an hour without anything in its work changing. It looks at
+what the tab was running, leaves a real long wait alone, and otherwise stops the tab's turn and
+tells it what went wrong. It also keeps the agents' documents in shape: one that's grown past its size,
 names something that no longer exists, or describes a layer that has since changed. The point is that you're never the one who has to take a failure to an AI.
 
 It reads the logs, the journal and the machine's state. It repairs things with the daemon's
