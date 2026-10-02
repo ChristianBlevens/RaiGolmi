@@ -327,8 +327,7 @@ _HEADER = "header: "
 def maintenance(doc: Path, budget: int | None, mounts: dict[str, Path] | None,
                 layer_directory: Path | None = None) -> list[str]:
     """Why this doc needs its maintenance job, or nothing. `budget` is its kind's, where its
-    kind has one. `mounts` None is a record of failures, which names what went missing by its
-    nature, so its references are not checked."""
+    kind has one. With `mounts` None, what the doc names is not checked."""
     text = doc.read_text(encoding="utf-8")
     size = len(text.encode("utf-8"))
     reasons = header_reasons(text, size)

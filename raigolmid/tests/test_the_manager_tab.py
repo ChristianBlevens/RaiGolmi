@@ -227,13 +227,14 @@ def test_a_bodys_docs_are_judged_only_while_its_tab_is_idle(h, m):
 
 def test_every_doc_of_a_working_copy_is_held_to_its_header_in_one_job(h, m):
     """A doc with no purpose header, and one grown a quarter past its audit, are one job for
-    the body that owns them — and growth is one fact however far it goes."""
+    the body that owns them — and growth is one fact however far it goes. A project's own doc
+    names files as it pleases; only a layer doc and SESSION-START.md are held to what they cite."""
     from raigolmid.maintenance import Maintenance
     upkeep = Maintenance(h.session, h.events)
     _every_layer_documented(h)
     copy = h.session.catalogue.bodies["myapi"].source_root
     (copy / "docs").mkdir(exist_ok=True)
-    (copy / "docs" / "notes.md").write_text("Notes.\n", encoding="utf-8")
+    (copy / "docs" / "notes.md").write_text("Notes on `market.rs`.\n", encoding="utf-8")
     design = copy / "DESIGN.md"
     design.write_text(_headed("x" * 1000 + "\n", audited=1000), encoding="utf-8")
     upkeep.sweep()

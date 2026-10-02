@@ -9,8 +9,10 @@ the user) is asked about once and never keeps the tab.
 
 A turn also ends only once every document the agent read and can change is declared current or
 brought up to date (`declare_documents`): the conversation that read a doc is the one that knows
-whether what it learned makes the doc stale. One that is not declared is asked about once per
-turn; a turn that answers nothing still ends, and the next turn's end asks again.
+whether what it learned or changed makes it wrong or incomplete. The question names the portions
+read, and a declaration answers for those alone, so a few lines read never oblige reading the
+rest. A doc not declared is asked about once per turn; a turn that answers nothing still ends,
+and the next turn's end asks again.
 
 `decide` is pure. The hook's input, the documents still undeclared and the tab's memory of what
 it has asked are the inputs, and the report, the refusal and the new memory are the outputs.
@@ -19,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping
 
 _WAITING = re.compile(r"^\s*waiting:\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
 
@@ -78,21 +80,33 @@ def _ask(unasked: list[dict[str, Any]]) -> str:
         "you name is running, and you are woken when each finishes.")
 
 
-def _declare(documents: list[str]) -> str:
-    lines = "\n".join(f"  - {doc}" for doc in documents)
+# Enough of what was read to recall it by, without the question growing with every read.
+_PORTIONS_SHOWN = 3
+
+
+def _declare(documents: Mapping[str, list[str]]) -> str:
+    def read(portions: list[str]) -> str:
+        shown = "; ".join(portions[:_PORTIONS_SHOWN])
+        more = len(portions) - _PORTIONS_SHOWN
+        return shown + (f"; and {more} more" if more > 0 else "")
+
+    lines = "\n".join(f"  - {doc}: {read(portions)}" for doc, portions in documents.items())
     return (
-        "Your turn is ending with documents you read and have not declared:\n"
-        f"{lines}\n"
-        "For each, decide whether what you learned or changed this turn makes it stale. Bring "
-        "any that is stale up to date, holding it to the purpose and not-here in its header, then "
-        "call `declare_documents` with each path and `current` or `updated`.")
+        "Your turn is ending with documents you read and have not declared, each with what you "
+        f"read of it:\n{lines}\n"
+        "For the part you read, and only that part, decide whether what you learned or changed "
+        "makes it wrong or incomplete; do not read the rest to answer. Correct or add to any "
+        "that is, keeping to the purpose and not-here in its header, then call "
+        "`declare_documents` with each path and `current` or `updated`.")
 
 
 def decide(hook: dict[str, Any], memory: Memory,
-           undeclared: Sequence[str] = ()) -> Decision:
+           undeclared: Mapping[str, list[str]] | None = None) -> Decision:
+    undeclared = undeclared or {}
     running = _running(hook)
     if hook["stop_hook_active"]:
-        unasked_documents = [doc for doc in undeclared if doc not in memory.documents]
+        unasked_documents = {doc: portions for doc, portions in undeclared.items()
+                             if doc not in memory.documents}
         answers = _WAITING.findall(hook["last_assistant_message"] or "")
         if answers:
             named = {w.strip("`") for w in answers[-1].replace(",", " ").split()} - {"none"}
@@ -103,7 +117,7 @@ def decide(hook: dict[str, Any], memory: Memory,
         if unasked:
             return Decision(None, _ask(unasked), memory)
         memory = Memory(asked=memory.asked, waiting=memory.waiting & set(running))
-        unasked_documents = list(undeclared)
+        unasked_documents = dict(undeclared)
     if unasked_documents:
         return Decision(None, _declare(unasked_documents),
                         Memory(memory.asked, memory.waiting,

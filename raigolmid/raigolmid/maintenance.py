@@ -9,9 +9,10 @@ gone idle.
 
 Every `.md` the manager can reach is swept: each layer's and each working copy's under the
 definitions, and its own `patterns.md`. A working copy elsewhere is its own tab's to keep, and is
-not checked rather than reported as current. Incident docs are not swept, and `patterns.md` is
-never checked for what it names: both record failures, dead paths included, and a job about one
-would open an incident about itself.
+not checked rather than reported as current. Incident docs are not swept. What a doc names is
+checked only in a layer doc and a working copy's `SESSION-START.md`, the two written to cite
+from their own directory: a project's other docs name files by bare name and from wherever
+they were written, and `patterns.md` records failures, dead paths included.
 
 A document is judged when the tab that owns it is not in the middle of changing it: a body's
 docs are its tab's and are judged while that tab is idle, since a tab declares every doc it read
@@ -83,7 +84,7 @@ class Maintenance:
                 tab = self.session.intent.body_tab(body)
                 if tab is not None and tab.busy:
                     continue
-            if mounts is not None and machine_working:
+            if owner != root and machine_working:
                 continue
             if not doc.is_file():
                 if working:
@@ -133,10 +134,11 @@ class Maintenance:
                     for doc in documents.markdown(directory):
                         if doc == layer_doc:
                             continue
-                        budget = (documents.BUDGET[documents.SESSION_START]
-                                  if body is not None and doc == item.source_root
-                                  / documents.SESSION_START else None)
-                        yield owner, doc, budget, cites, None, body
+                        if body is not None and doc == item.source_root / documents.SESSION_START:
+                            yield (owner, doc, documents.BUDGET[documents.SESSION_START], cites,
+                                   None, body)
+                        else:
+                            yield owner, doc, None, None, None, body
         patterns = root / documents.PATTERNS
         if patterns.is_file():
             yield (root, patterns, documents.BUDGET[documents.PATTERNS], None, None, None)
