@@ -244,6 +244,10 @@ def test_every_doc_of_a_working_copy_is_held_to_its_header_in_one_job(h, m):
     upkeep.sweep()
     jobs = h.events_of("documents.maintenance")
     assert [job.data["document"] for job in jobs] == ["/definitions/bodies/myapi"] * 2
+    (h.paths.manager_documents / "patterns.md").parent.mkdir(parents=True, exist_ok=True)
+    (h.paths.manager_documents / "patterns.md").write_text("A pattern.\n", encoding="utf-8")
+    upkeep.sweep()
+    assert h.events_of("documents.maintenance")[-1].data["document"] == "/manager"
     first, grown = (job.data["documents"] for job in jobs)
     assert first == {"/definitions/bodies/myapi/docs/notes.md":
                      ["header: it does not open with its purpose header"]}

@@ -72,7 +72,8 @@ class Maintenance:
 
         def seen(path: Path) -> str:
             host, inside = next((h, i) for h, i in as_manager_sees if path.is_relative_to(h))
-            return f"{inside}/{path.relative_to(host)}".rstrip("/")
+            under = path.relative_to(host)
+            return inside if under == Path(".") else f"{inside}/{under}"
 
         tabs = [tab for tab in self.session.intent.tabs.values() if not tab.manager]
         working = any(tab.busy for tab in tabs)
