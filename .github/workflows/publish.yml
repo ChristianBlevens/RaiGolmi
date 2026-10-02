@@ -97,11 +97,20 @@ jobs:
           # "missing required info: DefaultRootFs". xfs rather than btrfs because Docker's
           # overlay2 driver is what runs every body on this host, and overlay2 wants a
           # filesystem with d_type; mkfs.xfs gives that by default.
+          # quay's CDN drops a blob mid-read ("unexpected EOF") often enough to fail a release
+          # on an intact image, so the builder is pulled on its own, retried, each failure
+          # shown; the run then finds it in storage.
+          builder=quay.io/centos-bootc/bootc-image-builder:latest
+          for attempt in 1 2 3 4 5; do
+            sudo podman pull "$builder" && break
+            [ "$attempt" = 5 ] && { echo "pulling $builder failed 5 times" >&2; exit 1; }
+            sleep $((attempt * 20))
+          done
           sudo podman run --rm --privileged --security-opt label=type:unconfined_t \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             -v "$PWD/host/ci/config.toml:/config.toml:ro" \
             -v "$PWD/output:/output" \
-            quay.io/centos-bootc/bootc-image-builder:latest \
+            --pull=never "$builder" \
             --type qcow2 --rootfs xfs "$PACKAGE:$HOST_TAG"
           sudo chown -R "$USER" output
 
