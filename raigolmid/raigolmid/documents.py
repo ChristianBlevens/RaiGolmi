@@ -202,7 +202,11 @@ GROWTH_FLOOR = 4 * 1024
 
 
 def read_header(text: str) -> dict[str, str] | None:
-    """The header's fields, or None when the doc does not open with one."""
+    """The header's fields, or None when the doc does not open with one. A doc that must open
+    with YAML frontmatter — a Claude Code skill, which does not load otherwise — carries its
+    header right after it."""
+    if text.startswith("---\n") and (close := text.find("\n---\n", 4)) >= 0:
+        text = text[close + len("\n---\n"):]
     end = text.find("-->")
     if not text.startswith(_HEADER_OPEN) or end < 0:
         return None

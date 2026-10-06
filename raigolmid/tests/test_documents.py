@@ -71,6 +71,11 @@ def test_a_header_serves_only_whole_and_an_archive_never_grows_into_an_audit():
                                     15000)[0].startswith("grown since its audit: from 10000")
     assert documents.header_reasons(head.format(shape="archive", audited="1 2026-10-02"),
                                     10 ** 6) == []
+    skill = "---\nname: s\ndescription: d\n---\n"
+    assert documents.header_reasons(skill + head.format(shape="bounded", audited="100 2026-10-05"),
+                                    100) == [], "a skill's header follows its frontmatter"
+    assert documents.header_reasons(skill + "# Title\n", 40) == [
+        "header: it does not open with its purpose header"]
 
 
 def test_a_slash_alone_is_no_claim_and_the_daemons_lock_is_named_before_it_exists(tmp_path):
