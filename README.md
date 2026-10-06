@@ -35,9 +35,12 @@ hasn't met many others yet, so if something goes wrong, see
 
 You need 64-bit Windows 10 or 11 on an Intel or AMD PC with virtualization turned on in its
 BIOS/UEFI (most ship with it on, and setup tells you if yours doesn't), 16 GB of RAM (the VM
-takes 8), some disk space that grows as you use it (up to 60 GB), and a paid Claude plan
-(Pro or Max; Team and Enterprise work too). Setup asks for administrator rights once, and
-Windows needs a restart the first time it turns on its hypervisor.
+takes 8; setup refuses below 12), a graphics card with Direct3D 11, about 60 GB free for a
+disk that grows as you use it, and a paid Claude plan (Pro or Max; Team and Enterprise work
+too). It doesn't run inside another VM unless that VM passes virtualization through. Windows
+asks for administrator rights for each system part setup installs (up to four times on a
+fresh PC), and needs a restart the first time it turns on its hypervisor. Turning that
+hypervisor on can upset older VirtualBox or VMware versions and some games' anti-cheat.
 
 ```
 git clone https://github.com/ChristianBlevens/RaiGolmi
@@ -55,7 +58,8 @@ missing, then downloads the app and its disk (about 2.5 GB) and starts it. Next 
 `RaiGolmi` shortcut it leaves next to `setup.bat`, and close the window when you're done.
 Closing it shuts the machine down properly.
 
-To update, run `setup.bat` again. It downloads the new app, and your machine downloads its
+To update, get the newest scripts first (`git pull` in the folder, or download the ZIP
+again), then run `setup.bat`. It downloads the new app, and your machine downloads its
 new system and **upgrades in place**: your files, layers and the agents' work all stay. It
 closes and reopens the app to start on the new system. The old one stays in the boot menu
 until the new one has started properly, then it's removed to save space.
@@ -439,6 +443,7 @@ There's no uninstaller yet. To take it all off, close the window, then delete:
   `C:\msys64`. To keep it, remove just the patched packages' `IgnorePkg` lines from
   `C:\msys64\etc\pacman.conf` and the next `pacman -Syu` puts the stock ones back;
 - the .NET 8 Desktop Runtime, from Windows' installed apps, if nothing else needs it;
+- Windows' OpenSSH client, from Settings → Optional features, if nothing else needs it;
 - the Windows Hypervisor Platform, as administrator:
   `dism /online /disable-feature /featurename:HypervisorPlatform`, then restart.
 
@@ -486,7 +491,9 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 
 Open an [issue on GitHub](https://github.com/ChristianBlevens/RaiGolmi/issues) and say what
 you did and what happened. If the machine is running, run `rai diagnose` in the `raigolmi`
-tab's shell and attach the file it makes: it bundles the logs and state. If the window itself
+tab's shell and attach the file it makes, which lands in `Downloads\RaiGolmi`: it bundles the
+logs, the journal and state, with your projects' environment values left out. It's worth a
+read before you post it, since issues are public. If the window itself
 won't start, attach `windows\qemu.log` from the RaiGolmi folder.
 
 ### Privacy
@@ -507,8 +514,10 @@ RaiGolmi itself sends nothing anywhere. What leaves your PC is what the parts it
 - Each agent runs in its own container, with no capabilities and no Docker socket. It sees
   its own work, the layer definitions, `/transfer`, the layer-writing guide, and a control
   socket for its own tab, and nothing else.
-- Containers can't reach the host except through the daemon's credential proxy, and they
-  can't reach your Windows PC at all. They do get the whole internet.
+- Containers can't reach the host except through the daemon's credential proxy, or anything
+  that listens only on your Windows PC itself. They do get the whole internet, and with it
+  your local network, the way any device on it does: what your PC or router shares there,
+  they can reach.
 - Your Claude token and sign-ins never go into a tab. Tabs hold placeholders, and the proxy
   swaps in the real ones on the way out, with GitHub's only ever sent to GitHub.
 
@@ -552,7 +561,8 @@ Run it from the `raigolmi` tab's shell.
   sway is the one that's been built so far.
 - **Windows app:** a .NET 8 launcher that runs QEMU from MSYS2 with virgl GPU acceleration
   and draws it with D3D11.
-- **Agents:** Claude Code, every one of them.
+- **Agents:** Claude Code, every one of them. It comes on the disk, in the agent image, under
+  Anthropic's own terms (see [NOTICE](NOTICE)).
 
 ## License
 

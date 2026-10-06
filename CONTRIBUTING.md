@@ -39,7 +39,7 @@ The daemon's tests run on Linux with Python 3.14, and run one file at a time for
 change touches rather than the whole suite:
 
 ```
-pip install pytest pytest-asyncio pytest-timeout docker mcp==2.2.0 watchfiles brotli pyyaml
+pip install pytest pytest-asyncio pytest-timeout docker mcp==2.2.0 watchfiles brotli cryptography pyyaml
 PYTHONPATH=raigolmid:. python -m pytest -c raigolmid/pyproject.toml raigolmid/tests/<the file>
 ```
 

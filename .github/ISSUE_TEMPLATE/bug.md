@@ -12,7 +12,8 @@ about: RaiGolmi did something it shouldn't, or didn't do something it should
 **Logs**
 
 If the machine is running, run `rai diagnose` in the `raigolmi` tab's shell and attach the file
-it makes. If the window won't start, attach `windows\qemu.log` from the RaiGolmi folder.
+it makes (it lands in `Downloads\RaiGolmi`; read it first, since issues are public). If the
+window won't start, attach `windows\qemu.log` from the RaiGolmi folder.
 
 **Your PC**
 

@@ -36,6 +36,17 @@ function Winget([string]$id) {
     }
 }
 
+# One administrator step. Windows throws when its prompt is declined, which is said as that
+# rather than as PowerShell's error.
+function Elevated([string]$what, [string]$file, [string]$arguments) {
+    try {
+        Start-Process $file -Verb RunAs -Wait -ArgumentList $arguments
+    } catch [System.InvalidOperationException] {
+        Fail ("Windows did not run $what as administrator ($($_.Exception.Message)). Run this " +
+              "again and choose Yes when Windows asks.")
+    }
+}
+
 # Each install changes PATH for new processes only; this session reads it again.
 function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
@@ -256,7 +267,7 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     $memory = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
     if ($memory -lt 12GB) {
         Fail (("This PC has {0:N1} GB of memory. RaiGolmi's machine takes 8 GB of it and Windows " +
-               "needs its own beside that, so it needs 16 GB.") -f ($memory / 1GB))
+               "needs its own beside that, so it needs at least 12 GB, and 16 is what it is made for.") -f ($memory / 1GB))
     }
     if (-not $hypervisor -and $platform) {
         if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
@@ -270,7 +281,7 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     if (-not $hypervisor) {
         $missing += @{ What = 'Windows Hypervisor Platform (QEMU runs the machine on it; needs a restart)'
                        How  = 'As administrator: dism /online /enable-feature /featurename:HypervisorPlatform /all'
-                       Do   = { Start-Process dism.exe -Verb RunAs -Wait -ArgumentList `
+                       Do   = { Elevated 'the Windows Hypervisor Platform install' dism.exe `
                                     '/online /enable-feature /featurename:HypervisorPlatform /all /norestart'
                                 $script:restart = $true } }
     }
@@ -289,7 +300,7 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'))) {
         $missing += @{ What = "Windows' OpenSSH client (upgrades and the clipboard reach the machine through it)"
                        How  = 'As administrator: Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0'
-                       Do   = { Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList `
+                       Do   = { Elevated "the OpenSSH client's install" powershell.exe `
                                     '-NoProfile -Command Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0' } }
     }
 
@@ -303,12 +314,12 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     # on Windows, so the disk image never gives back what the guest frees: both come patched
     # from ChristianBlevens/raigolmi-packages.
     if (-not (Patched-Installed @('virglrenderer') $virglVersion)) {
-        $missing += @{ What = "the patched virglrenderer $virglVersion (without it the boot screen never shows)"
+        $missing += @{ What = "the patched virglrenderer $virglVersion (without it the boot screen never shows; MSYS2 is brought up to date first, as MSYS2 requires)"
                        How  = "$packages/virglrenderer-$virglVersion"
                        Do   = { Install-Patched "virglrenderer-$virglVersion" $virglVersion @('virglrenderer') } }
     }
     if (-not (Patched-Installed @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') $qemuVersion)) {
-        $missing += @{ What = "the patched QEMU $qemuVersion (without it the disk image never shrinks)"
+        $missing += @{ What = "the patched QEMU $qemuVersion (without it the disk image never shrinks; MSYS2 is brought up to date first, as MSYS2 requires)"
                        How  = "$packages/qemu-$qemuVersion"
                        Do   = { Install-Patched "qemu-$qemuVersion" $qemuVersion `
                                     @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') } }
