@@ -26,6 +26,7 @@ import os
 import pty
 import select
 import signal
+import shutil
 import socket
 import socketserver
 import struct
@@ -147,17 +148,27 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def _executable(cmd0: str, env: dict[str, str]) -> str:
+    """The program `cmd0` names, looked up on the request's PATH here rather than in the child:
+    the server forks from a threaded process, so the child does nothing but thin system calls
+    before exec, never take a lock another thread may have held at the fork. One not found is
+    left to the child's exec to fail as it would have."""
+    if "/" in cmd0:
+        return cmd0
+    return shutil.which(cmd0, path=env.get("PATH", os.defpath)) or cmd0
+
+
 def _spawn_pty(req: protocol.StartRequest, env: dict[str, str]) -> tuple[int, int]:
     """fork with a controlling terminal. `pty.fork` does the setsid + TIOCSCTTY dance,
     which is the part that is easy to get subtly wrong by hand."""
+    program = _executable(req.cmd[0], env)
     pid, fd = pty.fork()
     if pid == 0:                       # child
         try:
             os.chdir(req.cwd)
-            os.execvpe(req.cmd[0], list(req.cmd), env)
+            os.execve(program, list(req.cmd), env)
         except BaseException as exc:    # noqa: BLE001 - the child must not return
-            sys.stderr.write(f"launcher: could not exec {req.cmd[0]}: {exc}\n")
-            sys.stderr.flush()
+            os.write(2, f"launcher: could not exec {req.cmd[0]}: {exc}\n".encode())
             os._exit(127)
     _set_winsize(fd, req.rows, req.cols)
     return pid, fd
@@ -171,6 +182,7 @@ def _spawn_piped(req: protocol.StartRequest, env: dict[str, str]
     out_r, out_w = os.pipe()
     err_r, err_w = (None, None) if req.stream else os.pipe()
     in_r, in_w = os.pipe()
+    program = _executable(req.cmd[0], env)
     pid = os.fork()
     if pid == 0:                       # child
         try:
@@ -187,7 +199,7 @@ def _spawn_piped(req: protocol.StartRequest, env: dict[str, str]
                     pass
             os.setsid()
             os.chdir(req.cwd)
-            os.execvpe(req.cmd[0], list(req.cmd), env)
+            os.execve(program, list(req.cmd), env)
         except BaseException as exc:    # noqa: BLE001
             os.write(2, f"launcher: could not exec {req.cmd[0]}: {exc}\n".encode())
             os._exit(127)
