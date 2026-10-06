@@ -22,14 +22,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
       # The csproj sets EnableWindowsTargeting, so the Windows exe builds here.
       - name: Build RaiGolmi.exe
         run: dotnet publish windows/RaiGolmi.csproj -c Release -nologo -o launcher
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: launcher
           path: launcher/RaiGolmi.exe
@@ -42,7 +42,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # A hosted runner has roughly 14 GB free on /, and the disk build needs the source
       # image, the builder's object store and then a second copy of the finished disk when
@@ -127,15 +127,17 @@ jobs:
           rm -rf output
           ls -l release
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: launcher
           path: release
 
       - name: Install oras
         run: |
-          curl -sSL -o "$RUNNER_TEMP/oras.tgz" \
+          curl -sSLf -o "$RUNNER_TEMP/oras.tgz" \
             https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz
+          # oras_1.3.4_checksums.txt's line for this file.
+          echo "f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454  $RUNNER_TEMP/oras.tgz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/oras.tgz" -C "$RUNNER_TEMP" oras
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
