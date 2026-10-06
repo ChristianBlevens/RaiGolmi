@@ -149,6 +149,16 @@ function Apply-Upgrade([string]$image, [string]$archive) {
 $packages = 'https://github.com/ChristianBlevens/raigolmi-packages/releases'
 $qemuVersion = '11.1.1-3.1'
 $virglVersion = '1.3.0-1.1'
+# Each file's SHA-256, from the release's own assets (GitHub lists each asset's digest), so a
+# file replaced on the release, or changed on the way, is refused before pacman installs it
+# unsigned. A new version changes these with the pins above.
+$patchedSha256 = @{
+    'mingw-w64-ucrt-x86_64-qemu-11.1.1-3.1-any.pkg.tar.zst'               = '47549307b46275c7ce75f92b57e20b10c9f32d127e31ec156181fa55ee72c88c'
+    'mingw-w64-ucrt-x86_64-qemu-common-11.1.1-3.1-any.pkg.tar.zst'        = '7681f735c426fb38c8eb7d99b2354072bde30ef59bd5a49e1c594f19c4a01df0'
+    'mingw-w64-ucrt-x86_64-qemu-guest-agent-11.1.1-3.1-any.pkg.tar.zst'   = '952a833c32cc1e96d95fc4d13f7f8425cbf68bd7025ea99a898d523d4454aa31'
+    'mingw-w64-ucrt-x86_64-qemu-image-util-11.1.1-3.1-any.pkg.tar.zst'    = '576ee1f59b7c8c881979ded7fd65db386fd72ce5a98e3ca126e360f5ead97cd1'
+    'mingw-w64-ucrt-x86_64-virglrenderer-1.3.0-1.1-any.pkg.tar.zst'       = '9d79600ca8d8a10eb7fb17e672a6e2e7d968a6eba590ae44efec6fe28d51f0e3'
+}
 
 function Msys([string]$command) {
     & "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 CHERE_INVOKING=1 /usr/bin/bash -lc $command
@@ -184,7 +194,12 @@ function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
     $full = $names | ForEach-Object { "mingw-w64-ucrt-x86_64-$_" }
     foreach ($name in $full) {
         $file = "$name-$version-any.pkg.tar.zst"
+        if (-not $patchedSha256.ContainsKey($file)) { Fail "No SHA-256 is pinned for $file in common.ps1." }
         Invoke-WebRequest "$packages/download/$tag/$file" -OutFile "$dir\$file" -UseBasicParsing
+        $hash = (Get-FileHash "$dir\$file" -Algorithm SHA256).Hash.ToLower()
+        if ($hash -ne $patchedSha256[$file]) {
+            Fail "$file arrived with SHA-256 $hash, not the $($patchedSha256[$file]) pinned in common.ps1; nothing was installed."
+        }
     }
     foreach ($name in $full) {
         Msys ("grep -qx 'IgnorePkg = $name' /etc/pacman.conf || " +
