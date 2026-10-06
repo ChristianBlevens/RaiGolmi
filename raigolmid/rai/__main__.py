@@ -880,11 +880,25 @@ def cmd_mcp(args) -> int:
     return serve(scope=scope)
 
 
+def _redacted_compose(text: str) -> str:
+    """A generated Compose file with each environment value replaced: a body's environment is
+    where its author puts secrets, and the bundle is made to be attached to a public issue."""
+    project = json.loads(text)
+    for service in project.get("services", {}).values():
+        env = service.get("environment")
+        if isinstance(env, dict):
+            service["environment"] = {k: "<redacted>" for k in env}
+    return json.dumps(project, indent=2)
+
+
 def cmd_diagnose(args) -> int:
     """Bundle logs, state, generated Compose files and compositor state into one file the
-    user can send back."""
+    user can send back. Written to `~/Transfer/out` where there is one, so on Windows it
+    arrives in `Downloads\\RaiGolmi`."""
     paths = Paths.from_env()
-    out = Path(args.output or f"raigolmi-diagnose-{int(time.time())}.tar.gz")
+    name = f"raigolmi-diagnose-{int(time.time())}.tar.gz"
+    outbox = Path.home() / "Transfer" / "out"
+    out = Path(args.output) if args.output else (outbox / name if outbox.is_dir() else Path(name))
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / "diagnose"
         staging.mkdir()
@@ -906,20 +920,26 @@ def cmd_diagnose(args) -> int:
         capture("swaymsg-tree.json", lambda: subprocess.run(
             ["swaymsg", "-t", "get_tree"], capture_output=True, text=True,
             timeout=10).stdout)
-        capture("hyprctl-clients.json", lambda: subprocess.run(
-            ["hyprctl", "-j", "clients"], capture_output=True, text=True,
-            timeout=10).stdout)
+        capture("journal.txt", lambda: subprocess.run(
+            ["journalctl", "--user", "-b", "--no-pager", "-n", "5000"],
+            capture_output=True, text=True, timeout=30).stdout)
 
         for source in (paths.events, paths.intent):
             if source.exists():
                 shutil.copy2(source, staging / source.name)
         projects = paths.state / "projects"
-        if projects.is_dir():
-            shutil.copytree(projects, staging / "projects")
+        for compose in sorted(projects.glob("*/compose.yaml")) if projects.is_dir() else ():
+            target = staging / "projects" / compose.parent.name / compose.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            capture(str(target.relative_to(staging)),
+                    lambda c=compose: _redacted_compose(c.read_text(encoding="utf-8")))
 
         with tarfile.open(out, "w:gz") as tar:
             tar.add(staging, arcname="raigolmi-diagnose")
     print(out)
+    print("It holds the event log, the journal and your projects' generated Compose files "
+          "(environment values removed). Read it before attaching it anywhere public.",
+          file=sys.stderr)
     return 0
 
 
