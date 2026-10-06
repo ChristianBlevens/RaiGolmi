@@ -356,16 +356,24 @@ def _await_a_shell(where: str, reason: str, ready) -> bool:
     `ready()` holds; False on Ctrl-D."""
     import select
 
-    print(f"\r\nrai terminal: {reason}\r\n"
-          f"Enter opens a shell in {where}; Ctrl-D closes this window.",
+    print("\r\n" + _wrapped(f"rai terminal: {reason}") + "\r\n"
+          + _wrapped(f"Enter opens a shell in {where}; Ctrl-D closes this window."),
           file=sys.stderr)
     while True:
         readable, _, _ = select.select([sys.stdin], [], [], FOCUS_POLL)
         if readable:
             return sys.stdin.readline() != ""
         if ready():
-            print("rai terminal: its toolbelt is up; opening a shell", file=sys.stderr)
+            print(_wrapped("rai terminal: its toolbelt is up; opening a shell"), file=sys.stderr)
             return True
+
+
+def _wrapped(text: str) -> str:
+    """`text` broken between words at the window's width, which a terminal breaks mid-word."""
+    import textwrap
+
+    width = shutil.get_terminal_size().columns
+    return "\r\n".join(textwrap.wrap(text, width, break_on_hyphens=False)) or text
 
 
 class _ViewEnded(Exception):
@@ -881,13 +889,17 @@ def cmd_mcp(args) -> int:
 
 
 def _redacted_compose(text: str) -> str:
-    """A generated Compose file with each environment value replaced: a body's environment is
-    where its author puts secrets, and the bundle is made to be attached to a public issue."""
+    """A generated Compose file with each environment value and command argument replaced: those
+    are where a body's author puts secrets, and the bundle is made to be attached to a public
+    issue. A command keeps its program, which is what a diagnosis reads."""
     project = json.loads(text)
     for service in project.get("services", {}).values():
         env = service.get("environment")
         if isinstance(env, dict):
             service["environment"] = {k: "<redacted>" for k in env}
+        command = service.get("command")
+        if isinstance(command, list) and command:
+            service["command"] = [command[0], *("<redacted>" for _ in command[1:])]
     return json.dumps(project, indent=2)
 
 
@@ -898,6 +910,9 @@ def cmd_diagnose(args) -> int:
     paths = Paths.from_env()
     name = f"raigolmi-diagnose-{int(time.time())}.tar.gz"
     outbox = Path.home() / "Transfer" / "out"
+    if outbox.is_symlink():
+        raise SystemExit(f"rai diagnose: {outbox} is a link, not the outbox, so the bundle is not "
+                         "written through it. Remove the link, or name a file with --output.")
     out = Path(args.output) if args.output else (outbox / name if outbox.is_dir() else Path(name))
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / "diagnose"
@@ -938,7 +953,8 @@ def cmd_diagnose(args) -> int:
             tar.add(staging, arcname="raigolmi-diagnose")
     print(out)
     print("It holds the event log, the journal and your projects' generated Compose files "
-          "(environment values removed). Read it before attaching it anywhere public.",
+          "(environment values and command arguments removed). The event log carries what "
+          "tabs said to each other. Read it before attaching it anywhere public.",
           file=sys.stderr)
     return 0
 

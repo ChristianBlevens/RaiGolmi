@@ -429,9 +429,13 @@ class Body:
 def _working_copy(value: str, private: tuple[Path, ...], path: Path) -> Path:
     """The user's project, which may be anywhere they keep one, but never where the machine
     keeps its credentials, state and sockets, nor a directory another user owns: the body and
-    its tab both mount it, and the body runs as its owner."""
+    its tab both mount it, and the body runs as its owner. A hidden directory or `/run` is the
+    machine's too: sway, systemd and the shell run what is written there as the user."""
     working_copy = Path(os.path.expandvars(value)).expanduser()
     real = working_copy.resolve()
+    if real.is_relative_to("/run") or any(part.startswith(".") for part in real.parts):
+        raise DefinitionError(f"{path}: working_copy '{value}' is in a hidden directory or "
+                              "/run, which is the machine's own and is never a body's project")
     for own in private:
         own = own.resolve()
         if real.is_relative_to(own) or own.is_relative_to(real):

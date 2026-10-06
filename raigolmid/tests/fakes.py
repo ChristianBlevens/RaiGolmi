@@ -123,7 +123,9 @@ class FakeCompose:
         # The working copy is what /work is, and nothing else mounts it. The fake
         # runtime does not model mounts, so this is the only place the emitter's volume is
         # checked at all — without it, a body with no /work starts clean in every test.
-        if not any(str(v).endswith(":/work") for v in service.get("volumes", [])):
+        if not any(isinstance(v, dict) and v.get("target") == "/work"
+                   and v.get("bind", {}).get("create_host_path") is False
+                   for v in service.get("volumes", [])):
             raise ComposeError(
                 f"the generated project at {file} mounts no working copy at /work")
         return service

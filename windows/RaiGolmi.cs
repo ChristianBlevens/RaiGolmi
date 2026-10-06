@@ -1046,7 +1046,7 @@ class Ssh
             "    ServerAliveInterval 15",
             "    ServerAliveCountMax 3",
             "    LogLevel ERROR",
-            "" }), Encoding.ASCII);
+            "" }), new UTF8Encoding(false));
         return s;
     }
 
@@ -1178,11 +1178,14 @@ echo 'the launcher closed the channel' >&2
     // sent: no atime or ctime, no process id in the extended header names.
     const string Pack = "tar --sort=name --format=pax " +
         "--pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime -cf - -- \"$1\"";
+    // Every tab can write ~/Transfer, so `out` is entered only when it is the directory itself:
+    // a link put in its place would have its target emptied into Downloads.
+    const string IntoOut = "mkdir -p ~/Transfer/out && cd -P ~/Transfer/out || exit\n" +
+        "[ \"$(pwd)\" = \"$(cd -P ~ && pwd)/Transfer/out\" ] || " +
+        "{ echo \"~/Transfer/out is a link, not a directory, so nothing is taken from it\" >&2; exit 5; }\n";
     // Everything in ~/Transfer/out that has not changed since the last look, as
     // `<fingerprint> <base64 name>` lines ended by a blank line, printed when that set changes.
-    const string Outbox = @"
-export LC_ALL=C.UTF-8
-mkdir -p ~/Transfer/out && cd ~/Transfer/out || exit
+    const string Outbox = "export LC_ALL=C.UTF-8\n" + IntoOut + @"
 shopt -s nullglob dotglob
 declare -A last now
 shown=none
@@ -1190,7 +1193,7 @@ while :; do
     now=()
     listing=
     for e in *; do
-        h=$(find ""$e"" -printf '%P\t%y\t%s\t%T@\n' | sort | sha256sum)
+        h=$(find ""./$e"" -printf '%P\t%y\t%s\t%T@\n' | sort | sha256sum)
         now[$e]=${h%% *}
         [ ""${last[$e]-}"" = ""${now[$e]}"" ] && listing+=""${now[$e]} $(printf %s ""$e"" | base64 -w0)""$'\n'
     done
@@ -1200,9 +1203,9 @@ while :; do
     sleep 2
 done
 ";
-    const string Send = "export LC_ALL=C.UTF-8\ncd ~/Transfer/out || exit\nexec " + Pack + "\n";
+    const string Send = "export LC_ALL=C.UTF-8\n" + IntoOut + "exec " + Pack + "\n";
     // Removes an entry from out only if it is still exactly what the launcher received.
-    const string Remove = "export LC_ALL=C.UTF-8\nset -o pipefail\ncd ~/Transfer/out || exit\n" +
+    const string Remove = "export LC_ALL=C.UTF-8\nset -o pipefail\n" + IntoOut +
         "h=$(" + Pack + @" | sha256sum) || exit
 h=${h%% *}
 if [ ""$h"" != ""$2"" ]; then
@@ -1230,7 +1233,7 @@ for e in ""$t""/*; do
     case $b in ?*.*) stem=${b%.*} ext=.${b##*.} ;; esac
     d=""$HOME/Transfer/$b""
     while [ -e ""$d"" ] || [ -L ""$d"" ]; do d=""$HOME/Transfer/$stem ($i)$ext""; i=$((i + 1)); done
-    mv -- ""$e"" ""$d""
+    mv -nT -- ""$e"" ""$d""
     echo ""${d##*/}""
 done
 ";
@@ -1556,6 +1559,7 @@ done
             string unpacked = Path.Combine(partial, name);
             if (!File.Exists(unpacked) && !Directory.Exists(unpacked))
                 throw new IOException("tar.exe unpacked something other than " + name);
+            FromElsewhere(unpacked);
             string target = Unique(downloads, name);
             if (Directory.Exists(unpacked)) Directory.Move(unpacked, target);
             else File.Move(unpacked, target);
@@ -1576,13 +1580,31 @@ done
         }
     }
 
-    static readonly Regex Device = new Regex(@"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$",
-                                             RegexOptions.IgnoreCase);
+    // Windows' device names, which it reads as the device with any extension and before
+    // trailing spaces.
+    static readonly Regex Device = new Regex(
+        @"^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³]) *(\..*)?$",
+        RegexOptions.IgnoreCase);
 
+    // Windows drops a name's trailing dots and spaces, so `...` or `a.` would name another file.
     static bool PlainName(string name)
     {
-        return name.Length > 0 && name != "." && name != ".." &&
-               name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && !Device.IsMatch(name);
+        return name.Length > 0 && name.Length <= 255 && !name.EndsWith(".") &&
+               !name.EndsWith(" ") && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
+               !Device.IsMatch(name);
+    }
+
+    // Marked as from the internet, as a browser marks a download: a tab wrote it, so Windows
+    // asks before running it. Links are left alone, so no mark lands outside Downloads.
+    static void FromElsewhere(string path)
+    {
+        var files = Directory.Exists(path)
+            ? Directory.EnumerateFiles(path, "*", new EnumerationOptions {
+                  RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint })
+            : new[] { path };
+        foreach (string file in files)
+            if (!File.GetAttributes(file).HasFlag(FileAttributes.ReparsePoint))
+                File.WriteAllText(file + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n");
     }
 
     static string Unique(string dir, string name)

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -291,6 +292,17 @@ class ToolbeltResolver:
         self.check_view_packages(toolbelt)
         lock = self.read_lock(toolbelt)
         if lock is not None and lock.package_digest == toolbelt.package_digest:
+            # A lock arrives with a downloaded toolbelt and every tab can write one, and a view
+            # starts its image as root with mount powers: it may name only what its packages
+            # resolve to on Nixery, or a flake image this machine builds itself.
+            named = (lock.image.startswith(flakes.IMAGE_PREFIX) if lock.method == "flake"
+                     else re.fullmatch(re.escape(nixery_reference(toolbelt.packages, self.registry))
+                                       + r"(@sha256:[0-9a-f]{64})?", lock.image) is not None)
+            if not named:
+                raise ToolbeltError(
+                    f"toolbelt '{toolbelt.id}': its toolbelt.lock names the image "
+                    f"'{lock.image}', which is not what its packages resolve to. Delete the lock "
+                    "and it is resolved again.")
             return Closure(image=lock.image, method=lock.method,
                            packages=tuple(lock.packages),
                            package_digest=lock.package_digest,

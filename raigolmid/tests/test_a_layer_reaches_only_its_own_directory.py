@@ -41,6 +41,12 @@ def test_a_working_copy_overlapping_the_machines_own_is_refused(tmp_path, where)
         load_body(_body(tmp_path, f'working_copy = "{tmp_path / where}"\n'), (own,))
 
 
+@pytest.mark.parametrize("where", ["home/.config/systemd/user", "home/.ssh", "/run/raigolmid"])
+def test_a_working_copy_where_the_machine_runs_things_is_refused(tmp_path, where):
+    with pytest.raises(DefinitionError, match="machine's own"):
+        load_body(_body(tmp_path, f'working_copy = "{tmp_path / where}"\n'), ())
+
+
 def test_a_project_elsewhere_is_a_working_copy(tmp_path):
     own = tmp_path / "home" / ".config" / "raigolmi"
     own.mkdir(parents=True)

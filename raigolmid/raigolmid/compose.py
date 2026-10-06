@@ -63,7 +63,10 @@ def render(body: Body, placement: BodyPlacement, epoch: int,
         "pid": placement.namespace_ref,
         "network_mode": placement.namespace_ref,
         "labels": service_labels,
-        "volumes": [f"{placement.working_copy}:/work",
+        # The long form, so a working copy that is not there fails the start rather than
+        # being made, as root, wherever the definition named.
+        "volumes": [{"type": "bind", "source": str(placement.working_copy), "target": "/work",
+                     "bind": {"create_host_path": False}},
                     *(f"{m.source}:{m.target}:ro" for m in localtime.mounts(localtime.LOCALTIME))],
         "working_dir": "/work",
         "user": placement.user,
