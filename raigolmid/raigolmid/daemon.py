@@ -21,7 +21,8 @@ import time
 import traceback
 from pathlib import Path
 
-from . import claude_login, credential, hostsurfaces, keyboard, labels, look, naming, settings
+from . import (claude_login, credential, documents, hostsurfaces, keyboard, labels, look,
+               naming, settings)
 from .api import ApiServer, build_methods
 from .definitions import SearchPaths
 from .events import EventLog
@@ -521,12 +522,13 @@ class Daemon:
                     if login_set and not login_was_set:
                         self.events.emit("claude_login.stored")
                     login_was_set = login_set
-                    if any(c.is_relative_to(d) for c in changed for d in definitions):
+                    defined = _definition_changes(changed, definitions)
+                    if defined:
                         # Emitted after the catalogue is re-read: maintenance sweeps on this
                         # event, and a stale catalogue sends it to document a deleted layer.
                         self.session.rediscover()
                         self.events.emit("definitions.changed",
-                                         files=[str(p) for p in sorted(changed)])
+                                         files=[str(p) for p in defined])
                     watched = self.session.watched_paths()
                     for instance, paths in watched.items():
                         if changed & set(paths):
@@ -593,3 +595,21 @@ class Daemon:
         finally:
             self.stop()
         return 1 if dead else 0
+
+
+def _definition_changes(changed: set[Path], roots: list[Path]) -> list[Path]:
+    """The changes that are a layer's: its directory appearing or going, or a file
+    `documents.of_the_layer` counts as the layer. A project's build output, in a body whose
+    working copy is its definition directory, is neither."""
+    defined: list[Path] = []
+    for root in roots:
+        layers: dict[Path, list[Path]] = {}
+        for path in changed:
+            if path != root and path.is_relative_to(root):
+                layers.setdefault(root / path.relative_to(root).parts[0], []).append(path)
+        for layer, paths in layers.items():
+            if layer in paths or not layer.is_dir():
+                defined.extend(paths)
+            else:
+                defined.extend(documents.of_the_layer(layer, paths))
+    return sorted(defined)

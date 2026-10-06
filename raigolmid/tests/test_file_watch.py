@@ -119,6 +119,39 @@ def test_a_definition_written_while_the_daemon_runs_is_discovered(tmp_path):
         daemon._stop.set()
 
 
+def test_a_projects_own_output_is_not_a_definition_change(tmp_path):
+    """A body with no `working_copy` is its own working copy, so its project builds inside
+    the definition root; what its git ignores is output, not the layer, and an edit to its
+    `body.toml` still is."""
+    import subprocess
+    bodies = tmp_path / "bodies"
+    body = bodies / "game"
+    (body / "target").mkdir(parents=True)
+    (body / "body.toml").write_text('id = "game"\n')
+    (body / ".gitignore").write_text("target/\n")
+    subprocess.run(["git", "init", "-q", str(body)], check=True)
+    session = _Session({}, definitions=[bodies])
+    seen: list[list[str]] = []
+    daemon = _daemon(tmp_path, session)
+    daemon.events.emit = lambda type_, **data: (
+        seen.append(data["files"]) if type_ == "definitions.changed" else None)
+    thread = threading.Thread(target=daemon._watch_files, daemon=True)
+    thread.start()
+    try:
+        threading.Event().wait(1.0)
+        for n in range(20):
+            (body / "target" / f"run-{n}.log").write_text("built\n")
+        (body / ".git" / "touched").write_text("x")
+        threading.Event().wait(1.5)
+        assert not session.rediscovered.is_set(), seen
+        (body / "body.toml").write_text('id = "game"\nname = "Game"\n')
+        assert session.rediscovered.wait(15), "an edit to body.toml was never discovered"
+        threading.Event().wait(0.5)
+        assert seen == [[str(body / "body.toml")]], seen
+    finally:
+        daemon._stop.set()
+
+
 def test_a_credential_stored_while_the_daemon_runs_is_said(tmp_path):
     """The janitor holds a fresh machine's failures until a credential exists, and its
     directory does not exist until the first one is stored."""

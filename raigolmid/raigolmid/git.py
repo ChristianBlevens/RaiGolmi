@@ -150,7 +150,7 @@ def _submodule_git_dirs(modules: Path) -> list[Path]:
 
 
 def run(args: list[str], repo: Path, check: bool = True,
-        timeout: int = 120) -> subprocess.CompletedProcess[str]:
+        timeout: int = 120, input: str | None = None) -> subprocess.CompletedProcess[str]:
     """`git <args>` on the repository whose root is `repo`, named outright rather than
     discovered: a `.git` planted below it, or in a directory above it, is never consulted."""
     cmd = [*SAFE_GIT, *args]
@@ -158,7 +158,7 @@ def run(args: list[str], repo: Path, check: bool = True,
            "GIT_CEILING_DIRECTORIES": str(repo.parent)}
     try:
         proc = subprocess.run(cmd, cwd=str(repo), env=env, capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, input=input)
     except FileNotFoundError as exc:
         raise GitError(f"git is not installed: {exc}") from exc
     except subprocess.TimeoutExpired as exc:

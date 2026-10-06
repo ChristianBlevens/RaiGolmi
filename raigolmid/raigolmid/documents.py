@@ -66,6 +66,25 @@ def _layer_files(directory: Path) -> list[Path]:
     return files
 
 
+def of_the_layer(directory: Path, paths: list[Path]) -> list[Path]:
+    """Which of `paths`, under `directory`, are the layer's by `_layer_files`' answer — existing
+    or just removed, so a deletion counts as a change to the layer too."""
+    if git.is_repo(directory):
+        candidates = [p for p in paths if p.relative_to(directory).parts[0] != ".git"]
+        if not candidates:
+            return []
+        proc = git.run(["check-ignore", "-z", "--stdin"], directory, check=False,
+                       input="\0".join(str(p.relative_to(directory)) for p in candidates))
+        # 0: some are ignored, 1: none is; anything else is git failing.
+        if proc.returncode not in (0, 1):
+            raise git.GitError(f"git check-ignore in {directory} exited {proc.returncode}: "
+                               f"{proc.stderr.strip()}")
+        ignored = {directory / name for name in proc.stdout.split("\0") if name}
+        return [p for p in candidates if p not in ignored]
+    return [p for p in paths
+            if not any(part.startswith(".") for part in p.relative_to(directory).parts)]
+
+
 def markdown(directory: Path) -> list[Path]:
     """Every document in a layer or working copy, by the same answer as its files."""
     return sorted(f for f in _layer_files(directory) if f.suffix == ".md" and f.is_file())
