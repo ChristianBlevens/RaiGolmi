@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import logging
 import os
 import re
 import shlex
@@ -30,6 +31,8 @@ from typing import Any
 
 from ui import theme
 from ui.theme import SPINNER
+
+logger = logging.getLogger(__name__)
 
 SESSION = "raigolmi-ai"
 # The window that is no tab's: the first start's sign-ins, then a shell, under the machine's
@@ -423,11 +426,23 @@ def follow(client, tab: str) -> int:
             subscribed, ended = threading.Event(), threading.Event()
             threading.Thread(target=acknowledged, args=(subscribed, ended),
                              name="follow-acknowledged", daemon=True).start()
-            try:
-                for event in client.subscribe(subscribed):
+            stream = client.subscribe(subscribed)
+            while True:
+                try:
+                    event = next(stream)
+                except StopIteration:
+                    logger.warning("the daemon closed the event stream; following it again")
+                    break
+                except (ApiError, OSError) as exc:
+                    logger.warning("the daemon's event stream ended: %s; following it again "
+                                   "in %.0fs", exc, RECONNECT_SECONDS)
+                    break
+                try:
                     on(event)
-            except (ApiError, OSError):
-                pass
+                except (ApiError, OSError) as exc:
+                    # The daemon going away mid-event; the stream ending says the rest.
+                    logger.warning("%s's window could not act on %s: %s",
+                                   tab, event.get("type"), exc)
             ended.set()
             subscribed.set()
             time.sleep(RECONNECT_SECONDS)
