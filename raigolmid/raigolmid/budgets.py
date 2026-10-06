@@ -17,11 +17,11 @@ no tab to check it (`budget.untended`). Neither ever changes a project's files f
 """
 from __future__ import annotations
 
-import json
 import threading
 from typing import TYPE_CHECKING, Any
 
 from .events import EventLog
+from .intent import load_json, save_json
 
 if TYPE_CHECKING:
     from .session import Session
@@ -71,16 +71,11 @@ class Budgets:
         if definition is None or definition.budget is not None or tab is None:
             return
         with self._lock:
-            try:
-                asked = set(json.loads(self.path.read_text()))
-            except FileNotFoundError:
-                asked = set()
+            asked = set(load_json(self.path, "the projects asked for a budget") or [])
             if body in asked:
                 return
             asked.add(body)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(sorted(asked)))
-            tmp.replace(self.path)
+            save_json(self.path, sorted(asked))
         self.events.emit("budget.unset", tab=tab.tab_id, body=body, held=held, deliver={
             "content": unset_message(body, held), "meta": {"from": "daemon"}})
 
