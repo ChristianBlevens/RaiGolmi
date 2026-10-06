@@ -56,7 +56,7 @@ function Install-Missing($missing, [string]$entry) {
         Refresh-Path
     }
     if ($script:restart) {
-        Fail "Windows Hypervisor Platform is enabled from the next start. Restart Windows, then run $entry again."
+        Fail "Windows Hypervisor Platform is enabled from the next start. Restart Windows, then run this again."
     }
     if ($script:finishWsl) {
         Fail "Finish $distro's setup (a user name and password) in the window that opened, then run $entry again."
@@ -180,6 +180,13 @@ function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
               "sed -i '/^\[options\]$/a IgnorePkg = $name' /etc/pacman.conf; " +
               "grep -qx 'IgnorePkg = $name' /etc/pacman.conf")
     }
+    # The patched packages' dependencies resolve from the sync databases, and a fresh MSYS2's
+    # are as old as its installer. MSYS2 supports only a whole-system upgrade, never -Sy alone,
+    # and one that updates its core closes every MSYS2 process, this shell included, so the
+    # first run may end early and the second finishes it (as msys2/setup-msys2 does). The
+    # IgnorePkg pins above keep it off the patched packages.
+    & "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 CHERE_INVOKING=1 /usr/bin/bash -lc 'pacman -Syu --noconfirm'
+    Msys 'pacman -Syu --noconfirm'
     Msys 'pacman -U --noconfirm /tmp/raigolmi-packages/*.pkg.tar.zst'
     Remove-Item -Recurse -Force $dir
 }
@@ -197,6 +204,7 @@ function Run-Prerequisites {
 public static extern int WHvGetCapability(int code, out int present, uint size, out uint written);
 '@
     $hypervisor = $false
+    $platform = $true
     $present = 0; $written = 0
     try {
         $hypervisor = ([RaiGolmi.Whp]::WHvGetCapability(0, [ref]$present, 4, [ref]$written) -eq 0) -and
@@ -206,6 +214,25 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
         $cause = $_.Exception
         while ($cause.InnerException) { $cause = $cause.InnerException }
         if ($cause -isnot [System.DllNotFoundException]) { throw }
+        $platform = $false
+    }
+    # With no hypervisor running, Windows reports what the firmware did with the CPU's
+    # virtualization; while one runs it reads false, so it is asked only then. Firmware that
+    # turned it off leaves the platform enabled and never running, whatever is installed.
+    if (-not $hypervisor -and -not (Get-CimInstance Win32_ComputerSystem).HypervisorPresent -and
+        (Get-CimInstance Win32_Processor | Where-Object { -not $_.VirtualizationFirmwareEnabled })) {
+        Fail ("Virtualization is turned off in this PC's firmware, so no virtual machine can run. " +
+              "Turn on Intel VT-x (sometimes 'Intel Virtualization Technology') or AMD SVM " +
+              "in your BIOS/UEFI settings, start Windows again, then run this again.")
+    }
+    if (-not $hypervisor -and $platform) {
+        if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+            Fail "Windows has changes waiting for a restart. Restart Windows, then run this again."
+        }
+        Fail ("Windows Hypervisor Platform is installed but its hypervisor is not running. " +
+              "Restart Windows; if this still shows after a restart, Windows is set not to start " +
+              "its hypervisor: as administrator run 'bcdedit /set hypervisorlaunchtype auto', " +
+              "restart, then run this again.")
     }
     if (-not $hypervisor) {
         $missing += @{ What = 'Windows Hypervisor Platform (QEMU runs the machine on it; needs a restart)'

@@ -23,8 +23,11 @@ its own drive and boot on a real PC.
 
 ### Install it (Windows)
 
-You need Windows 10 or 11, 16 GB of RAM (the VM takes 8), some disk space that grows as you
-use it (up to 60 GB), and a Claude account.
+You need 64-bit Windows 10 or 11 on an Intel or AMD PC with virtualization turned on in its
+BIOS/UEFI (most ship with it on, and setup tells you if yours doesn't), 16 GB of RAM (the VM
+takes 8), some disk space that grows as you use it (up to 60 GB), and a paid Claude plan
+(Pro or Max; Team and Enterprise work too). Setup asks for administrator rights once, and
+Windows needs a restart the first time it turns on its hypervisor.
 
 ```
 git clone https://github.com/ChristianBlevens/RaiGolmi
@@ -32,10 +35,13 @@ cd RaiGolmi
 setup.bat
 ```
 
-(Or download the repository as a ZIP from GitHub, unzip it and double-click `setup.bat`.)
+(Or download the repository as a ZIP from GitHub, right-click it and choose *Extract All*,
+then double-click `setup.bat` in the extracted folder. Run from inside the ZIP, it can't find
+the files next to it. If Windows says it protected your PC, choose *More info*, then *Run
+anyway*: the scripts aren't signed.)
 
 `setup.bat` checks for what it needs and asks once before installing anything that's
-missing, then downloads the app and its disk (about 2 GB) and starts it. Next time, open the
+missing, then downloads the app and its disk (about 2.5 GB) and starts it. Next time, open the
 `RaiGolmi` shortcut it leaves next to `setup.bat`, and close the window when you're done.
 Closing it shuts the machine down properly.
 
@@ -48,8 +54,9 @@ until the new one has started properly, then it's removed to save space.
 
 The terminal at the bottom of the screen asks you for three things, in order:
 
-1. **Your Claude Code token.** Run `claude setup-token` somewhere, then paste it in with a
-   right-click. This is the only one you have to give it.
+1. **Your Claude Code token.** Run `claude setup-token` on any computer with Claude Code
+   (on Windows, `winget install Anthropic.ClaudeCode` in a terminal gets it), then paste
+   the token in with a right-click. This is the only one you have to give it.
 2. **A GitHub sign-in**, so agents can push to your repos and you can share things in the
    catalog.
 3. **A claude.ai sign-in**, so you can answer agents from your phone when they're working
