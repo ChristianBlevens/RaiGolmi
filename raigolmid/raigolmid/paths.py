@@ -110,10 +110,10 @@ class Paths:
         return self.state / "viewing.json"
 
     @property
-    def manager_documents(self) -> Path:
-        """The manager's incidents and this machine's failure patterns
-        (`documents.py`), mounted at /manager in the manager's container and no other."""
-        return self.state / "manager"
+    def janitor_documents(self) -> Path:
+        """The janitor's incidents and this machine's failure patterns
+        (`documents.py`), mounted at /janitor in the janitor's container and no other."""
+        return self.state / "janitor"
 
     @property
     def preferences(self) -> Path:
@@ -141,7 +141,7 @@ class Paths:
     @property
     def crashes(self) -> Path:
         """The exit code and output of each container that exited on its own, kept past the
-        restart that removes it (`supervisor.py`): what the manager diagnoses from."""
+        restart that removes it (`supervisor.py`): what the janitor diagnoses from."""
         return self.data / "crashes"
 
     @property

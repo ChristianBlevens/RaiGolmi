@@ -39,12 +39,12 @@ def log(tmp_path):
 
 
 @pytest.mark.parametrize("event, data, says", [
-    ("manager.unfixable", {"failure": "container.unfixable", "message": "Direct a session at it."},
+    ("janitor.unfixable", {"failure": "container.unfixable", "message": "Direct a session at it."},
      "Direct a session at it."),
     ("channel.unheard", {"seq": 3, "cause": "x", "pushes": 3, "message": "Restart it."},
      "Restart it."),
-    ("manager.open_failed", {"error": "AgentError: no credential"},
-     "The manager tab could not open: AgentError: no credential"),
+    ("janitor.open_failed", {"error": "AgentError: no credential"},
+     "The janitor tab could not open: AgentError: no credential"),
     ("judge.failed", {"id": "q1", "stage": "learn", "error": "exited 1"},
      "The preferences judge failed on q1; your answer was sent without the preferences "
      "learning it: exited 1"),
@@ -59,14 +59,14 @@ def test_the_failures_that_are_the_users_are_notices(log, event, data, says):
 
 
 def test_a_notice_whose_failure_is_over_settles_itself(log):
-    """The manager that could not open has opened."""
+    """The janitor that could not open has opened."""
     events, history = log
-    events.emit("manager.open_failed", error="CredentialError: no credential")
+    events.emit("janitor.open_failed", error="CredentialError: no credential")
     events.emit("channel.unheard", seq=1, cause="x", pushes=3, message="Restart it.")
-    events.emit("manager.opened")
+    events.emit("janitor.opened")
     heard(history)
     assert [(e["kind"], e["over"]) for e in history.entries()] == [
-        ("manager.open_failed", "manager.opened"), ("channel.unheard", None)]
+        ("janitor.open_failed", "janitor.opened"), ("channel.unheard", None)]
 
 
 def test_a_new_entry_lights_the_handle_until_the_open_menu_has_shown_it(tmp_path, log):

@@ -68,7 +68,7 @@ def test_every_image_raigolmid_builds_does_so_from_the_shipped_tree():
 
 def test_what_the_disk_leaves_out_is_what_is_machine_local():
     """The launcher's keys and logs and the dev container's caches stay off the disk; the
-    source the manager reads stays on it."""
+    source the janitor reads stays on it."""
     for local in ("windows/authorized_keys", "windows/qemu.log", "windows/screen.ppm",
                   "windows/RaiGolmi.pdb", "windows/obj/project.assets.json",
                   "windows/bin/Release/x.dll", "windows/screen.ppm.partial", ".git", "raigolmid/raigolmid/__pycache__/x.pyc"):

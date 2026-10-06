@@ -1,13 +1,13 @@
 """Document maintenance on facts.
 
-Documents are sent to the manager for maintenance when a fact about them says so — no purpose
+Documents are sent to the janitor for maintenance when a fact about them says so — no purpose
 header, grown past its last audit, over its kind's size budget, a layer doc older than its
 layer's files, a path or symbol it names that no longer exists, or a layer with no doc at all —
 never on a count or a schedule. The facts are read again whenever something a document describes
 may have moved: the daemon's start, a definition written, a watched file changed, a tab closed or
 gone idle.
 
-Every `.md` the manager can reach is swept: each layer's and each working copy's under the
+Every `.md` the janitor can reach is swept: each layer's and each working copy's under the
 definitions, and its own `patterns.md`. A working copy elsewhere is its own tab's to keep, and is
 not checked rather than reported as current. Incident docs are not swept. What a doc names is
 checked only in a layer doc and a working copy's `SESSION-START.md`, the two written to cite
@@ -18,15 +18,15 @@ A document is judged when the tab that owns it is not in the middle of changing 
 docs are its tab's and are judged while that tab is idle, since a tab declares every doc it read
 before its turn ends; every other definition is the machine tab's, and is judged while the
 machine tab is not working. A layer with no doc counts only while no tab is working: a layer is
-written file by file, and the tab making it may be about to write its doc, so the manager takes
+written file by file, and the tab making it may be about to write its doc, so the janitor takes
 up what a tab left undone rather than racing it.
 
-One job covers one owner — a body, a face or toolbelt, or the manager's own documents — and names
+One job covers one owner — a body, a face or toolbelt, or the janitor's own documents — and names
 each of its documents with new facts, so a project with many docs is one fresh session, not one
-per doc. A job is sent as the `documents.maintenance` event, which the manager takes
-(`manager.py`); this module never calls it. A doc's facts are sent again only when they change —
+per doc. A job is sent as the `documents.maintenance` event, which the janitor takes
+(`janitor.py`); this module never calls it. A doc's facts are sent again only when they change —
 a stale doc is one fact whichever files moved, a growing one one fact however far it grew — so
-the same facts never page the manager twice. Like the manager's queue, what was sent is held in
+the same facts never page the janitor twice. Like the janitor's queue, what was sent is held in
 memory: a restarted daemon says every standing fact once more.
 """
 from __future__ import annotations
@@ -59,23 +59,23 @@ class Maintenance:
                 try:
                     self.sweep()
                 except Exception as exc:               # noqa: BLE001
-                    # The manager takes this too: a sweep that cannot run keeps every doc
+                    # The janitor takes this too: a sweep that cannot run keeps every doc
                     # unchecked, which is not the same as every doc current.
                     self.events.emit("documents.maintenance_failed",
                                      error=f"{type(exc).__name__}: {exc}")
 
     def sweep(self) -> None:
         definitions = self.session.definitions_root()
-        root = self.session.paths.manager_documents
-        # Where the manager finds each doc, so the job names what it can open.
-        as_manager_sees = ((root, "/manager"), (definitions, "/definitions"))
+        root = self.session.paths.janitor_documents
+        # Where the janitor finds each doc, so the job names what it can open.
+        as_janitor_sees = ((root, "/janitor"), (definitions, "/definitions"))
 
         def seen(path: Path) -> str:
-            host, inside = next((h, i) for h, i in as_manager_sees if path.is_relative_to(h))
+            host, inside = next((h, i) for h, i in as_janitor_sees if path.is_relative_to(h))
             under = path.relative_to(host)
             return inside if under == Path(".") else f"{inside}/{under}"
 
-        tabs = [tab for tab in self.session.intent.tabs.values() if not tab.manager]
+        tabs = [tab for tab in self.session.intent.tabs.values() if not tab.janitor]
         working = any(tab.busy for tab in tabs)
         machine = self.session.intent.machine_tab()
         machine_working = machine is not None and machine.busy
@@ -111,7 +111,7 @@ class Maintenance:
                         "need maintenance")
 
     def _documents(self, definitions: Path, root: Path):
-        """Each doc the manager keeps: the owner its job is grouped under, its path, its kind's
+        """Each doc the janitor keeps: the owner its job is grouped under, its path, its kind's
         budget if it has one, the container paths it may cite, the layer it describes if it is
         a layer doc, and the body it belongs to if any."""
         cites = {"/definitions": definitions}

@@ -6,7 +6,7 @@ is never a parameter — the socket a call arrived on is the tab — and the san
 on is resolved here at call time, since a tab opens and closes its sandbox as it works.
 So nothing in a container can name another tab, reach
 another sandbox, or read another tab's question. Every socket also carries its tab's channel
-(`channel.py`). The manager's socket answers the machine table instead.
+(`channel.py`). The janitor's socket answers the machine table instead.
 
 A face has a socket of its own too (`FaceSockets`): the machine's state
 read-only, asking the host to show the AI terminal, and any sandbox's launcher by name — the
@@ -28,14 +28,14 @@ from .api import ApiServer
 from .channel import Channels
 from . import coordinator
 from .events import EventLog
-from .intent import MANAGER
+from .intent import JANITOR
 from .paths import Paths
 from .questions import Questions
 from .session import Session, SessionError
 
 SOCKET = "raigolmid.sock"
 
-# Of the full table, what the manager's machine scope reaches: the machine's state
+# Of the full table, what the janitor's machine scope reaches: the machine's state
 # read-only, its channel, and the repairs the daemon already has — never a shell in a sandbox.
 MACHINE = ("version", "status", "list_items", "events", "container_logs", "journal",
            "crash_logs", "restart_agent", "repair", "reconcile", "rediscover", "unstick",
@@ -93,7 +93,7 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
         "definition_errors": full.get("definition_errors", []),
         "builds": full.get("builds", {}),
     }
-    if tab_id != MANAGER:
+    if tab_id != JANITOR:
         out["toolbelts"] = session.toolbelts_for(tab_id)
     tab = session.intent.tabs.get(tab_id)
     if tab is not None and tab.machine:
@@ -197,7 +197,7 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
         "history": lambda n=50: session.history(here(), n),
         "logs": lambda tail=100: api._logs(session, here(), tail),
         "search_packages": lambda query, limit=20: session.search_packages(query, limit),
-        # Tabs message each other; the manager does not (`messages.py`).
+        # Tabs message each other; the janitor does not (`messages.py`).
         "message": lambda to, content: channels.messages.send(tab_id, to, content),
         "reply": lambda message, content: channels.messages.reply(tab_id, message, content),
         # The machine tab's, refused to every other.
@@ -211,11 +211,11 @@ def build_machine_methods(full: dict[str, Callable[..., Any]], session: Session,
                           channels: Channels) -> dict[str, Callable[..., Any]]:
     return {**{name: full[name] for name in MACHINE},
             "index": session.machine_index,
-            # Any sandbox's body, which is the manager's to repair too.
+            # Any sandbox's body, which is the janitor's to repair too.
             "restart_body": lambda instance: session.restart_body(instance),
             "rebuild_body": lambda instance: session.rebuild_body(
-                instance, why="the manager's request").to_dict(),
-            **_talking(session, questions, channels, MANAGER)}
+                instance, why="the janitor's request").to_dict(),
+            **_talking(session, questions, channels, JANITOR)}
 
 
 class AgentSockets:
@@ -261,7 +261,7 @@ class AgentSockets:
                 directory.chmod(0o700)
                 methods = (build_machine_methods(self.full, self.session, self.questions,
                                                  self.channels)
-                           if tab_id == MANAGER
+                           if tab_id == JANITOR
                            else build_tab_methods(self.session, self.questions,
                                                   self.channels, tab_id))
                 server = ApiServer(directory / SOCKET, methods, self.events, ready=self.ready,
@@ -280,9 +280,9 @@ class AgentSockets:
         server, _ = served
         server.shutdown()
         server.server_close()
-        # The manager's directory stays: its id is fixed, and a manager opened under it at
+        # The janitor's directory stays: its id is fixed, and a janitor opened under it at
         # once has already bind-mounted it. Every other tab's id is never reused.
-        if tab_id != MANAGER:
+        if tab_id != JANITOR:
             shutil.rmtree(self.paths.agent_socket_dir(tab_id))
 
     def close_all(self) -> None:
@@ -340,8 +340,8 @@ def build_face_methods(full: dict[str, Callable[..., Any]], events: EventLog,
             if tab is not None:
                 raise SessionError(f"no tab {tab}; the tabs are {sorted(scopes)}")
             target = next(t for t, scope in scopes.items() if scope == "machine")
-        if scopes[target] == "manager":
-            raise SessionError("the manager tab takes the machine's failures, not the user's words")
+        if scopes[target] == "janitor":
+            raise SessionError("the janitor tab takes the machine's failures, not the user's words")
         events.emit("face.asked", tab=target, deliver={
             "content": f"From the user's face:\n\n{content}", "meta": {"from": "face"}})
         return {"tab": target, "status": "queued",

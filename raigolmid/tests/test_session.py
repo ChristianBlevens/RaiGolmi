@@ -155,7 +155,7 @@ def test_an_unlabelled_body_stays_selectable_with_the_uncertainty_said_out_loud(
 def test_ensure_tabs_opens_the_machine_tab_and_the_selected_bodys(h):
     h.session.ensure_tabs()
     machine = h.session.intent.machine_tab()
-    assert machine is not None and machine.body is None and not machine.manager
+    assert machine is not None and machine.body is None and not machine.janitor
     assert [t.tab_id for t in h.session.intent.tabs.values()] == [machine.tab_id]
 
     h.session.select("body", "myapi")
@@ -213,12 +213,12 @@ def test_the_face_follows_the_selected_bodys_tab_and_the_machine_tabs_work(h):
         h.session.intent.focused_instance = myapi
 
 
-def test_the_manager_selects_nothing(h):
-    h.session.open_manager()
-    with pytest.raises(SessionError, match="manager changes no layer"):
-        h.session.select("body", "myapi", by_tab="manager")
-    with pytest.raises(SessionError, match="manager changes no layer"):
-        h.session.deselect("face", by_tab="manager")
+def test_the_janitor_selects_nothing(h):
+    h.session.open_janitor()
+    with pytest.raises(SessionError, match="janitor changes no layer"):
+        h.session.select("body", "myapi", by_tab="janitor")
+    with pytest.raises(SessionError, match="janitor changes no layer"):
+        h.session.deselect("face", by_tab="janitor")
     assert h.session.intent.selection.body is None
 
 
@@ -258,10 +258,10 @@ def test_closing_a_body_tab_that_is_not_selected_opens_nothing(h):
     assert len(h.session.intent.tabs) == 2
 
 
-def test_the_manager_tab_is_not_closed_by_the_user(h):
-    h.session.open_manager()
-    with pytest.raises(SessionError, match="the manager tab is the daemon's"):
-        h.session.close_tab("manager")
+def test_the_janitor_tab_is_not_closed_by_the_user(h):
+    h.session.open_janitor()
+    with pytest.raises(SessionError, match="the janitor tab is the daemon's"):
+        h.session.close_tab("janitor")
 
 
 # --- intent survives a restart ----------------------------------------------------
@@ -436,15 +436,15 @@ def test_a_new_tab_refuses_a_home_an_earlier_tab_left(h):
 
 def test_a_home_the_intent_no_longer_names_is_archived_at_reconcile(h):
     """A tab lost with its intent is closed: its conversation goes to the archive,
-    and the manager's home, which is not a numbered tab, is left alone."""
+    and the janitor's home, which is not a numbered tab, is left alone."""
     lost = h.session.agents.home("tab-40")
     converse(lost)
-    (h.session.agents.home("manager") / ".claude").mkdir(parents=True, exist_ok=True)
+    (h.session.agents.home("janitor") / ".claude").mkdir(parents=True, exist_ok=True)
     h.session.reconcile()
     assert not lost.exists()
     (archived,) = h.paths.agent_archive.glob("tab-40-*[0-9]")
     assert list((archived / ".claude" / "projects" / "-work").glob("*.jsonl"))
-    assert h.session.agents.home("manager").exists()
+    assert h.session.agents.home("janitor").exists()
 
 
 def test_a_restarted_agent_keeps_its_home(h):

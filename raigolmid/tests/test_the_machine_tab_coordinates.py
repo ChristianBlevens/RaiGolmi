@@ -11,7 +11,7 @@ from raigolmid import naming
 from raigolmid.api import with_marks, with_tab_states
 from raigolmid.channel import Channels
 from raigolmid.coordinator import Coordinator
-from raigolmid.manager import TAKEN
+from raigolmid.janitor import TAKEN
 from raigolmid.questions import Questions
 from raigolmid.scopes import build_tab_methods
 from raigolmid.session import SessionError
@@ -281,7 +281,7 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_hands_on_to_
     assert "`ready_to_restart`" in m.queued(MACHINE)[-1]["content"]
 
     # A turn that heard the ask and did not say ready is the tab failing: said once, for the
-    # manager, and not asked again however often it goes idle.
+    # janitor, and not asked again however often it goes idle.
     _hear(m, MACHINE)
     for _ in range(3):
         m.tab(MACHINE)["agent_activity"](busy=True)

@@ -301,14 +301,14 @@ def test_a_question_or_permission_is_marked_until_settled_even_in_view(api):
     assert _marks(api)[0]["tab-2"]
 
 
-def test_the_manager_lights_the_collapsed_tab_only_while_it_asks(tmp_path):
-    """The user answers the manager in its terminal tab, as any tab; its idle ends each job."""
+def test_the_janitor_lights_the_collapsed_tab_only_while_it_asks(tmp_path):
+    """The user answers the janitor in its terminal tab, as any tab; its idle ends each job."""
     events = EventLog(tmp_path / "events.jsonl", epoch=1)
     viewing = Viewing(events, tmp_path / "viewing.json")
-    events.emit("agent.idle", tab="manager", done=True)
+    events.emit("agent.idle", tab="janitor", done=True)
     _heard(viewing)
     for state, lit in (("asking", True), ("idle", False)):
-        status = {"agents": [{"tab": "manager", "state": state, "managed": False, "hands_off": False},
+        status = {"agents": [{"tab": "janitor", "state": state, "managed": False, "hands_off": False},
                              {"tab": "tab-1", "state": "working", "managed": False, "hands_off": False}]}
         out = with_marks(status, viewing)
         assert [a["marked"] for a in out["agents"]] == [True, False]

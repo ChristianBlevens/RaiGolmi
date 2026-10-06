@@ -28,7 +28,7 @@ from .events import EventLog
 from .history import History
 from .hostkeys import HostKeyError, HostKeys
 from .maintenance import Maintenance
-from .manager import Manager
+from .janitor import Janitor
 from .channel import Channels
 from .clipboard import ClipboardBridge
 from .coordinator import Coordinator
@@ -129,8 +129,8 @@ class Daemon:
             directory.mkdir(parents=True, exist_ok=True)
         self.events = EventLog(paths.events, epoch=self.epoch)
         self.session = Session(runtime, paths, search, self.events, self.epoch)
-        # Before anything in `start` can fail: the manager hears the daemon's own start.
-        self.manager = Manager(self.session, self.events)
+        # Before anything in `start` can fail: the janitor hears the daemon's own start.
+        self.janitor = Janitor(self.session, self.events)
         self.history = History(self.events, paths)
         self.maintenance = Maintenance(self.session, self.events)
         self.questions = Questions(self.events, paths)
@@ -203,7 +203,7 @@ class Daemon:
         _notify_ready()
         self._bring_up_host_surfaces()
 
-        for target, name in ((lambda: self.manager.run(self._stop), "manager"),
+        for target, name in ((lambda: self.janitor.run(self._stop), "janitor"),
                              (lambda: self.maintenance.run(self._stop), "maintenance"),
                              (lambda: self.session.presence.run(self._stop), "presence"),
                              (lambda: self.questions.run(self._stop), "questions"),
@@ -470,7 +470,7 @@ class Daemon:
         directories are watched too, so a face, toolbelt or body written while the daemon
         runs — by the user or by an agent asked for one — reaches the selector. The
         credential's directory is watched so a credential stored while the daemon runs is
-        said (`credential.stored`): the manager waits on it. The claude.ai sign-in beside it
+        said (`credential.stored`): the janitor waits on it. The claude.ai sign-in beside it
         is said the same way when it is given (`claude_login.stored`)."""
         try:
             from watchfiles import watch

@@ -1,7 +1,7 @@
 """The credential never enters a tab: raigolmid holds it, and a proxy
 here swaps it in for the placeholder each agent is given.
 
-Every agent container — each tab, the manager, the preferences judge's one-shot — gets a
+Every agent container — each tab, the janitor, the preferences judge's one-shot — gets a
 placeholder in place of the credential and `HTTPS_PROXY` naming this proxy, on the
 host's address on the containers' default network (`ContainerRuntime.bridge_gateway`). Any
 container on the machine can reach that address, a body's included, so the proxy forwards only

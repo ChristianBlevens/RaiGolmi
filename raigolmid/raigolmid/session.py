@@ -41,7 +41,7 @@ from .faces import FaceError, Faces
 from .facemounts import FaceMounts, FaceMountError
 from .instances import Instance, Instances, RebuildResult
 from .jobs import Jobs
-from .intent import MANAGER, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent
+from .intent import JANITOR, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent
 from .launcher import LauncherError, LauncherOutputHeld, LauncherUnreachable
 from .paths import Paths
 from .presence import Presence, PresenceError
@@ -279,10 +279,10 @@ class Session:
         return {**found, "layers": layers}
 
     def machine_index(self) -> dict[str, Any]:
-        """The manager's router — its incidents, open and fixed, this
+        """The janitor's router — its incidents, open and fixed, this
         machine's failure patterns, and every layer."""
         layers = self.list_items()
-        return {**documents.manager_index(self.paths.manager_documents,
+        return {**documents.janitor_index(self.paths.janitor_documents,
                                           self._layers_of(layers)), "layers": layers}
 
     @staticmethod
@@ -362,14 +362,14 @@ class Session:
 
     def _may_select(self, by_tab: str | None) -> None:
         """Any tab the user works in selects for them, and stays the tab it was; the
-        manager selects nothing."""
+        janitor selects nothing."""
         if by_tab is None:
             return
         tab = self.intent.tabs.get(by_tab)
         if tab is None:
             raise SessionError(f"no tab {by_tab}")
-        if tab.manager:
-            raise SessionError("the manager changes no layer: it repairs the machine")
+        if tab.janitor:
+            raise SessionError("the janitor changes no layer: it repairs the machine")
 
     @staticmethod
     def _row(kind: labels.Kind) -> str:
@@ -753,8 +753,8 @@ class Session:
         tab = self.intent.tabs.get(tab_id)
         if tab is None:
             raise SessionError(f"tab '{tab_id}' is not open")
-        if tab.manager:
-            raise SessionError("the manager tab is scoped to the machine and opens no "
+        if tab.janitor:
+            raise SessionError("the janitor tab is scoped to the machine and opens no "
                                "sandbox")
         return tab
 
@@ -796,7 +796,7 @@ class Session:
         return want is not None and naming.tab_ref(tab_id) in want.refs
 
     def _open_sandbox_of(self, tab: TabIntent) -> str | None:
-        return None if tab.manager else self.intent.sandbox_of(tab.tab_id)
+        return None if tab.janitor else self.intent.sandbox_of(tab.tab_id)
 
     def ensure_tabs(self, by: str = "daemon") -> dict[str, Any]:
         """The tabs that always exist: the machine tab, and the selected body's. None
@@ -834,21 +834,21 @@ class Session:
             raise
         return tab
 
-    def open_manager(self) -> bool:
-        """The manager tab, opened for the first failure it takes. False when it is
+    def open_janitor(self) -> bool:
+        """The janitor tab, opened for the first failure it takes. False when it is
         already open — a crashed one reopens on its own path and is not replaced."""
         with self._lock:
-            if MANAGER in self.intent.tabs:
+            if JANITOR in self.intent.tabs:
                 return False
-            tab = TabIntent(tab_id=MANAGER)
-            self.intent.tabs[MANAGER] = tab
+            tab = TabIntent(tab_id=JANITOR)
+            self.intent.tabs[JANITOR] = tab
             self.store.save(self.intent)
-            self.events.emit("tab.opened", tab=MANAGER, instance=None)
+            self.events.emit("tab.opened", tab=JANITOR, instance=None)
             try:
                 self.agents.start(self._agent_spec(tab), fresh_home=True)
             except Exception:
-                del self.intent.tabs[MANAGER]
-                self.events.emit("tab.closed", tab=MANAGER, reason="agent did not start")
+                del self.intent.tabs[JANITOR]
+                self.events.emit("tab.closed", tab=JANITOR, reason="agent did not start")
                 raise
             finally:
                 self.store.save(self.intent)
@@ -889,11 +889,11 @@ class Session:
     def _agent_spec(self, tab: TabIntent) -> AgentSpec:
         """The container a tab's agent runs in: its working copy at `/work`, whether or not
         its sandbox is open — the sandbox is reached through the tab's socket, not mounted.
-        The manager's `/work` is the definitions. Only the machine tab edits faces,
+        The janitor's `/work` is the definitions. Only the machine tab edits faces,
         so a body tab has them read-only."""
         definitions = self.definitions_root()
         repos = self._definition_repos(definitions)
-        if tab.manager:
+        if tab.janitor:
             return AgentSpec(tab=tab, instance_id="", working_copy=definitions,
                              definitions=definitions, definition_repos=repos)
         place = self._place(tab)
@@ -914,7 +914,7 @@ class Session:
                             if (p == definitions or definitions in p.parents) and git.is_repo(p)))
 
     def restart_agent(self, tab_id: str, resume: bool = True) -> dict[str, Any]:
-        """A crashed tab's reopen, the user's Restart, and the manager's fresh restart."""
+        """A crashed tab's reopen, the user's Restart, and the janitor's fresh restart."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
@@ -958,7 +958,7 @@ class Session:
 
     # --- containers that exit on their own (`supervisor.py`) --------------------------
     def on_exit(self, unit: Unit, container_id: str) -> str:
-        """A supervised container's `die`, on `unit.queue`: restarted once, or the manager's."""
+        """A supervised container's `die`, on `unit.queue`: restarted once, or the janitor's."""
         if unit.kind == labels.Role.AGENT:
             return self.on_agent_exit(unit.name, container_id)
         if unit.kind in SANDBOX_PARTS:
@@ -996,7 +996,7 @@ class Session:
             if exit.container.exit_code == 0:
                 # Claude Code exits 0 only when told to quit (`agent-session.sh` execs it):
                 # the user's Ctrl+C twice or `/exit`. That is their act, not a crash, so it spends
-                # no restart and calls no manager; the tab reopens on their conversation.
+                # no restart and calls no janitor; the tab reopens on their conversation.
                 self.events.emit("agent.quit", tab=tab_id, container=exit.container.name)
                 try:
                     self._restart_or_crash(tab_id, "quit and did not reopen")
@@ -1035,7 +1035,7 @@ class Session:
 
     def _restart_or_crash(self, tab_id: str, failed: str) -> None:
         """A reopen with no exit of its own to answer for — the machine shut it down, or its
-        container is gone. Its failure goes to the manager, as a restart's would."""
+        container is gone. Its failure goes to the janitor, as a restart's would."""
         try:
             self._reopen(tab_id)
         except Exception as exc:                       # noqa: BLE001 - said as unfixable
@@ -1175,8 +1175,8 @@ class Session:
         tab = self.intent.tabs.get(tab_id)
         if tab is None:
             raise SessionError(f"no tab {tab_id}")
-        if tab.manager:
-            raise SessionError("the manager tab is the daemon's; it closes nothing the "
+        if tab.janitor:
+            raise SessionError("the janitor tab is the daemon's; it closes nothing the "
                                "user works in")
         return tab
 
@@ -1279,14 +1279,14 @@ class Session:
 
     def _watched_rebuild(self, instance_id: str) -> None:
         """No caller waits on a watched file's rebuild, so its end is said as an event: a
-        refusal as one, and any other failure as the watch's, for the manager."""
+        refusal as one, and any other failure as the watch's, for the janitor."""
         why = "a watched file"
         try:
             self.rebuild_body(instance_id, why)
         except SessionError as exc:
             self.events.emit("rebuild.refused", instance=instance_id, why=why,
                              error=str(exc))
-        except Exception as exc:                       # noqa: BLE001 - said, for the manager
+        except Exception as exc:                       # noqa: BLE001 - said, for the janitor
             self.events.emit("watch.failed", instance=instance_id,
                              error=f"{type(exc).__name__}: {exc}",
                              traceback=traceback.format_exc()[-4000:])
@@ -1869,7 +1869,7 @@ class Session:
                 "queues": self.queues.depths(),
                 "agents": [
                     {"tab": t.tab_id,
-                     "scope": "manager" if t.manager else "machine" if t.machine
+                     "scope": "janitor" if t.janitor else "machine" if t.machine
                      else {"body": t.body},
                      "sandbox": self._open_sandbox_of(t),
                      "status": t.status, "busy": t.busy, "managed": t.managed,

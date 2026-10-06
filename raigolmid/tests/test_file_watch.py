@@ -94,7 +94,7 @@ def test_a_definition_written_while_the_daemon_runs_is_discovered(tmp_path):
     """Asking the agent for a new face, toolbelt or body is part of choosing one, so what
     it writes has to reach the selector without restarting raigolmid. `definitions.changed`
     follows the re-read: maintenance sweeps the catalogue on it, and a stale one sends the
-    manager to document a layer that was just deleted."""
+    janitor to document a layer that was just deleted."""
     faces = tmp_path / "faces"
     faces.mkdir()
     session = _Session({}, definitions=[faces])
@@ -120,7 +120,7 @@ def test_a_definition_written_while_the_daemon_runs_is_discovered(tmp_path):
 
 
 def test_a_credential_stored_while_the_daemon_runs_is_said(tmp_path):
-    """The manager holds a fresh machine's failures until a credential exists, and its
+    """The janitor holds a fresh machine's failures until a credential exists, and its
     directory does not exist until the first one is stored."""
     faces = tmp_path / "faces"
     faces.mkdir()

@@ -14,7 +14,7 @@ import pytest
 from raigolmid.api import build_methods
 from raigolmid.channel import Channels
 from raigolmid.client import ApiClient, ApiError
-from raigolmid.intent import MANAGER
+from raigolmid.intent import JANITOR
 from raigolmid.paths import Paths
 from raigolmid.questions import Questions
 from raigolmid.history import History
@@ -84,21 +84,21 @@ def test_a_tab_opening_gets_its_socket_and_closing_takes_it(world):
     assert not directory.exists(), "a tab id is never reused, so its directory goes with it"
 
 
-def test_the_manager_reopened_at_once_gets_its_socket_in_the_directory_its_container_mounted(
+def test_the_janitor_reopened_at_once_gets_its_socket_in_the_directory_its_container_mounted(
         world):
-    """The manager's id is fixed, and its container binds the directory before the close
+    """The janitor's id is fixed, and its container binds the directory before the close
     reaches this thread. A held descriptor stands in for that bind mount: both pin the
     directory's inode."""
     _, paths, sockets, _ = world
-    sockets.open(MANAGER)
-    mounted = os.open(paths.agent_socket_dir(MANAGER), os.O_RDONLY | os.O_DIRECTORY)
+    sockets.open(JANITOR)
+    mounted = os.open(paths.agent_socket_dir(JANITOR), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        sockets.close(MANAGER)
-        sockets.open(MANAGER)
+        sockets.close(JANITOR)
+        sockets.open(JANITOR)
         assert os.listdir(mounted) == [SOCKET]
     finally:
         os.close(mounted)
-        sockets.close(MANAGER)
+        sockets.close(JANITOR)
 
 
 def test_a_tab_socket_serves_neither_the_event_stream_nor_the_hosts_methods(world):
@@ -110,12 +110,12 @@ def test_a_tab_socket_serves_neither_the_event_stream_nor_the_hosts_methods(worl
             client.call(method)
 
 
-def test_the_managers_socket_answers_the_machine(world):
+def test_the_janitors_socket_answers_the_machine(world):
     h, paths, sockets, stop = world
     running(sockets, stop)
-    h.session.open_manager()
-    client = answers(paths, MANAGER)
-    assert "agents" in client.call("status"), "the manager reads the whole machine"
+    h.session.open_janitor()
+    client = answers(paths, JANITOR)
+    assert "agents" in client.call("status"), "the janitor reads the whole machine"
     client.call("events", n=5)
     with pytest.raises(ApiError, match="unknown method"):
         client.call("exec", cmd=["true"])

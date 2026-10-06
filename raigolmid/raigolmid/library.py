@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import documents, hostimages, settings
-from .agents import DEFAULT_TEMPLATE, GUIDE, MANAGER_TEMPLATE, AgentError, render_template
+from .agents import DEFAULT_TEMPLATE, GUIDE, JANITOR_TEMPLATE, AgentError, render_template
 from . import docwrite
 from .docwrite import DocumentError
 from .paths import Paths
@@ -67,7 +67,7 @@ class Library:
                      True, absent=self.absent_permissions, check=self.check_permissions))
 
         for name, default, title in (("claude.md", DEFAULT_TEMPLATE, "Tab primer"),
-                                     ("manager.md", MANAGER_TEMPLATE, "Manager primer")):
+                                     ("janitor.md", JANITOR_TEMPLATE, "Janitor primer")):
             path = p.agent_templates / name
 
             def check_template(text: str, path: Path = path) -> None:
@@ -97,15 +97,15 @@ class Library:
                              f"{body_id} — {documents.SESSION_START}",
                              body.source_root / documents.SESSION_START, True))
 
-        root = p.manager_documents
-        add(Document("manager/patterns", "Manager", documents.PATTERNS,
+        root = p.janitor_documents
+        add(Document("janitor/patterns", "Janitor", documents.PATTERNS,
                      root / documents.PATTERNS, True))
         incidents = root / documents.INCIDENTS
         for path in sorted(incidents.glob("*.md")):
-            add(Document(f"manager/incident/{path.name}", "Manager", f"Open: {path.stem}",
+            add(Document(f"janitor/incident/{path.name}", "Janitor", f"Open: {path.stem}",
                          path, True))
         for path in sorted((incidents / documents.FIXED).glob("*.md")):
-            add(Document(f"manager/fixed/{path.name}", "Manager", f"Fixed: {path.stem}",
+            add(Document(f"janitor/fixed/{path.name}", "Janitor", f"Fixed: {path.stem}",
                          path, True))
 
         # A run's report and record are what happened while the user was away, kept as written.
@@ -129,7 +129,7 @@ class Library:
         for path in _md_files(guide):
             rel = path.relative_to(guide)
             add(Document(f"guide/{rel}", "Shipped", f"Guide: {rel}", path, False))
-        add(Document("index", "Shipped", "The manager's index (generated)", None, False,
+        add(Document("index", "Shipped", "The janitor's index (generated)", None, False,
                      generate=lambda: json.dumps(self.session.machine_index(), indent=2)))
         return docs
 

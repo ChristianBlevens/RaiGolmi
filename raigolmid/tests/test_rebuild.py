@@ -253,7 +253,7 @@ def test_a_body_that_exits_on_its_own_is_recovered_in_place(h):
     assert h.events_of("container.restarted")[-1].data["kind"] == "body"
 
 
-def test_a_body_restart_that_fails_is_the_managers_and_leaves_the_sandbox_degraded(h):
+def test_a_body_restart_that_fails_is_the_janitors_and_leaves_the_sandbox_degraded(h):
     list(h.runtime.events())
     h.runtime.kill(naming.body_container(SANDBOX))
     h.compose.fail_next_up = True

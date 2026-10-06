@@ -44,7 +44,7 @@ PERMISSION_KEY = "a"
 # Tabs as a browser draws them: a click on one selects it, its
 # `×` closes it, and a line divides it from the next. The `×` is a user range naming the tab
 # (`CLOSE_RANGE`), answered by the status click (`STATUS_CLICK`); the base window and the
-# manager have none, since neither is a tab the user closes. A tab that needs them is marked
+# janitor have none, since neither is a tab the user closes. A tab that needs them is marked
 # `●` and a tab the machine tab manages `◇`, from the `@marked` and `@managed`
 # its own window's `follow` keeps (`_keep`).
 # ⚠ tmux ends a range one cell past its last character (format-draw.c `fr->end = cx + 1`) and
@@ -271,10 +271,10 @@ def ensure_session() -> None:
 
 
 def window_name(tab: str, scope: Any) -> str:
-    """`tab-3 machine`, a body's tab by its body — `tab-5 notes-api` — and the manager marked
+    """`tab-3 machine`, a body's tab by its body — `tab-5 notes-api` — and the janitor marked
     as the machine's, not a tab the user works in. A tab's scope never changes, so
     neither does its name."""
-    if scope == "manager":
+    if scope == "janitor":
         return f"{tab} ⚙"
     if scope == "machine":
         return f"{tab} machine"
@@ -480,7 +480,7 @@ def _in_view(pane: str) -> bool:
 
 def _follow_the_daemon(client, event: dict) -> None:
     """A tab the daemon opened gets its window — a body's tab opened by a selection, the
-    machine tab reopened after the user closed it, the manager opened for a failure — and a
+    machine tab reopened after the user closed it, the janitor opened for a failure — and a
     body they selected brings its tab into view. An agent's selection moves nothing here:
     the agent is not the user."""
     with _one_at_a_time():
@@ -855,7 +855,7 @@ def _ready(client, has_credential: bool) -> None:
     try:
         status = while_it_opens("Opening the tabs.", lambda: client.call("ensure_tabs"))
         sync_windows(client)
-        # The manager is not a tab the user works in, so it is never the one landed on —
+        # The janitor is not a tab the user works in, so it is never the one landed on —
         # but one they are looking at is not moved off.
         current = next((w.tab for w in list_windows() if w.active), None)
         if current not in {a["tab"] for a in status["agents"]}:
@@ -904,13 +904,13 @@ def sync_windows(client) -> None:
 
 
 def _rank(window: Window, scopes: dict[str, Any], body: str | None) -> tuple:
-    """The tab bar's order (the owner, 2026-09-29): the base window, then the manager, the
+    """The tab bar's order (the owner, 2026-09-29): the base window, then the janitor, the
     machine tab, the selected body's tab, and the other bodies' tabs as they were opened.
     A window that is no tab goes last."""
     if window.name == BASE or window.tab == NO_AGENT:
         return (0,)
     scope = scopes.get(window.tab)
-    if scope == "manager":
+    if scope == "janitor":
         return (1,)
     if scope == "machine":
         return (2,)

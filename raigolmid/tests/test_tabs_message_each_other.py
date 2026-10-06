@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from raigolmid.channel import Channels
-from raigolmid.intent import MANAGER
+from raigolmid.intent import JANITOR
 from raigolmid.messages import MessageError
 from raigolmid.questions import Questions
 from raigolmid.scopes import build_tab_methods
@@ -99,10 +99,10 @@ def test_a_closed_recipient_is_said_and_a_closed_sender_withdraws(h, c):
     assert first["message"] != second["message"]
 
 
-def test_the_manager_takes_no_messages_and_a_tab_cannot_answer_for_another(h, c):
+def test_the_janitor_takes_no_messages_and_a_tab_cannot_answer_for_another(h, c):
     body = _tab(h, c, BODY)
-    with pytest.raises(MessageError, match="manager"):
-        body["message"](to=MANAGER, content="help")
+    with pytest.raises(MessageError, match="janitor"):
+        body["message"](to=JANITOR, content="help")
     with pytest.raises(MessageError, match="this tab"):
         body["message"](to=BODY, content="me")
     sent = body["message"](to="machine", content="q")

@@ -20,7 +20,7 @@ The rules are applied **per instance, in this order**, and the order is the poin
    rule and it applies identically after a restart.
 6. An agent container whose tab is gone is stopped; a tab whose agent is gone is marked
    crashed, said, and reopened, unless its dead container is the one the daemon's
-   own restart started, which is the manager's (`supervisor.py`) — or unless the daemon saw
+   own restart started, which is the janitor's (`supervisor.py`) — or unless the daemon saw
    it running as it stopped and the machine has booted since: the shutdown ended it, and it
    resumes without a crash.
 

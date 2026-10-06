@@ -1,7 +1,7 @@
-"""A tab working and getting nothing done is put in front of the manager, whatever the cause
+"""A tab working and getting nothing done is put in front of the janitor, whatever the cause
 (`stalls.py`): stalled when its conversation stands still, spinning when it moves and its
 working copy does not; said once per episode, with the evidence; and `unstick` ends the turn and
-starts the next on the manager's note."""
+starts the next on the janitor's note."""
 from __future__ import annotations
 
 import json
@@ -10,8 +10,8 @@ import pytest
 
 from raigolmid import naming
 from raigolmid.channel import Channels
-from raigolmid.intent import MANAGER
-from raigolmid.manager import TAKEN
+from raigolmid.intent import JANITOR
+from raigolmid.janitor import TAKEN
 from raigolmid.stalls import SPIN_SECONDS, STALL_SECONDS, Stalls, unstick
 
 from tests.harness import Harness, converse
@@ -124,7 +124,7 @@ def test_a_tab_whose_conversation_moves_and_whose_work_does_not_is_spinning(h, s
     assert not h.events_of("tab.stalled")
 
 
-def test_unstick_ends_the_turn_and_starts_the_next_on_the_managers_note(h, s):
+def test_unstick_ends_the_turn_and_starts_the_next_on_the_janitors_note(h, s):
     channels = Channels(h.session, h.events)
     _transcript(h)
     h.session.agent_session_started(TAB)
@@ -139,13 +139,13 @@ def test_unstick_ends_the_turn_and_starts_the_next_on_the_managers_note(h, s):
         unstick(h.session, h.events, TAB, " ")
 
 
-def test_the_managers_own_stall_is_unstuck_without_anyone(h, s):
-    h.session.open_manager()
-    _transcript(h, MANAGER)
-    h.session.agent_activity(MANAGER, True)
+def test_the_janitors_own_stall_is_unstuck_without_anyone(h, s):
+    h.session.open_janitor()
+    _transcript(h, JANITOR)
+    h.session.agent_activity(JANITOR, True)
     s.tick(0.0)
     s.tick(STALL_SECONDS)
-    assert h.events_of("tab.stalled")[-1].tab == MANAGER
-    assert h.events_of("agent.restarted")[-1].tab == MANAGER
+    assert h.events_of("tab.stalled")[-1].tab == JANITOR
+    assert h.events_of("agent.restarted")[-1].tab == JANITOR
     (unstuck,) = h.events_of("tab.unstuck")
     assert "incident doc" in unstuck.data["deliver"]["content"]

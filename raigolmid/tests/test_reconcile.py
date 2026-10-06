@@ -282,7 +282,7 @@ def test_what_an_agent_last_said_is_read_back_at_the_start_not_the_intent(h):
 
 def test_the_one_restart_is_spent_across_a_daemon_restart(h):
     """The budget is the container id, kept on disk (`supervisor.py`): the agent its restart
-    started, exiting on its own while the daemon is down, is the manager's at the next
+    started, exiting on its own while the daemon is down, is the janitor's at the next
     start, not reopened — and stays crashed at the one after."""
     list(h.runtime.events())
     h.runtime.kill(naming.agent(TAB), exit_code=1)

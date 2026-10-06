@@ -2,7 +2,7 @@
 
 Every tab's MCP server is also its **channel**: it polls `take` on its tab's socket and pushes what it is handed as
 `notifications/claude/channel`, which starts a turn in an idle session. Three things travel
-on it: a failure the manager takes (`manager.py`), the outcome of a question a tab put to the
+on it: a failure the janitor takes (`janitor.py`), the outcome of a question a tab put to the
 user (`questions.py`), and a message between tabs or its answer (`messages.py`, held here as
 `messages`). No producer calls this module: an event whose data carries `deliver`
 (`{"content", "meta"}`) is queued on the channel of the tab it names.
@@ -21,16 +21,16 @@ Its callers read it synchronously — a turn ending asks whether a message is on
 the tab is closed as done — so every read first catches up on the events already emitted, and
 an answer given a moment before cannot be missed.
 
-**The manager takes each failure in a fresh conversation**: its memory is its documents,
-and every failure it is handed is whole. So a failure due into a manager session that has
-already heard one is held, and `manager.fresh_conversation` asks for a new session
-(`manager.py`), into which it is pushed once that session is up. Not while a question the
-manager asked is unanswered: the answer belongs to the conversation that asked. A failure whose
-incident already has a message waiting is not queued again: that message sends the manager to
+**The janitor takes each failure in a fresh conversation**: its memory is its documents,
+and every failure it is handed is whole. So a failure due into a janitor session that has
+already heard one is held, and `janitor.fresh_conversation` asks for a new session
+(`janitor.py`), into which it is pushed once that session is up. Not while a question the
+janitor asked is unanswered: the answer belongs to the conversation that asked. A failure whose
+incident already has a message waiting is not queued again: that message sends the janitor to
 the incident's doc, which holds every occurrence (`documents.record_incident`).
 
 **What is on its way outlives a daemon restart**, as the tabs' sessions do: each tab's
-queue, its push not yet heard, and the manager's open questions are written to
+queue, its push not yet heard, and the janitor's open questions are written to
 `Paths.channels` on every change and read back at the start. A push the old daemon had not
 heard is pushed again marked `redelivered`: its turn may have started while nothing was
 listening for the hook that says so, and the agent is the one that can tell a repeat.
@@ -54,8 +54,8 @@ if TYPE_CHECKING:
 # A delivered push starts its turn within a second, so these only set how soon a lost push is
 # repeated and how soon a deaf channel is said; neither decides whether delivery works.
 REPUSH_SECONDS = 10.0
-# The event that queues a failure for the manager (`manager.py`).
-FAILURE = "manager.queued"
+# The event that queues a failure for the janitor (`janitor.py`).
+FAILURE = "janitor.queued"
 PUSHES_BEFORE_DEAF = 3
 # The channel asks every second, so this only sets how soon a poller that stopped is said.
 SILENT_SECONDS = 30.0
@@ -86,7 +86,7 @@ class Tab:
     # `notifications/initialized`, which Claude Code answers before it registers the channel,
     # so a push made on that alone lands before anything listens.
     session_up: bool = False
-    # The manager's: whether this session has heard a failure, the questions it asked still
+    # The janitor's: whether this session has heard a failure, the questions it asked still
     # unanswered, and whether a fresh session has been asked for.
     took_failure: bool = False
     open_questions: set[str] = field(default_factory=set)
@@ -320,7 +320,7 @@ class Channels:
                 if not tab.fresh_asked:
                     tab.fresh_asked = True
                     self._save()
-                    self.events.emit("manager.fresh_conversation", tab=tab_id,
+                    self.events.emit("janitor.fresh_conversation", tab=tab_id,
                                      failure=tab.queue[0].meta.get("failure"))
                 return None
             self._seq += 1

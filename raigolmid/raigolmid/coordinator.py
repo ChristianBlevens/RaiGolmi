@@ -464,7 +464,7 @@ class Coordinator:
         """The machine tab's own handover, only while the user is away (`Intent.hands_off`):
         asked at its budget and restarted after the turn that said ready. A turn that heard it
         and ended without saying so is the tab failing, not a reason to ask again (the owner,
-        2026-09-29): it is said as `coordinator.unanswered`, which the manager takes, and
+        2026-09-29): it is said as `coordinator.unanswered`, which the janitor takes, and
         nothing more is asked until it says ready."""
         if not self.session.intent.hands_off(tab_id):
             if handover is not None:
@@ -484,7 +484,7 @@ class Coordinator:
                 "content": machine_restart_message(tab_id), "meta": {"from": "daemon"}})
             return
         if handover in ("asked", "unanswered"):
-            return          # its push is on its way, or the manager has it
+            return          # its push is on its way, or the janitor has it
         if handover == "heard":
             self.session.hand_over(tab_id, "unanswered")
             reply = transcript_tail(self.session.agents.home(tab_id), 1)

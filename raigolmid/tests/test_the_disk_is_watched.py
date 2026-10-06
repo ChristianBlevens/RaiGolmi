@@ -1,4 +1,4 @@
-"""The disk is read by holder, and its growth and shortage go to the manager (`disk.py`):
+"""The disk is read by holder, and its growth and shortage go to the janitor (`disk.py`):
 growth past the mark is said once with what grew, a body's ignored output named with its
 tab; freed space lowers the mark; a shortage is said once per episode; a holder that cannot
 be read is reported unread, never as empty."""
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from raigolmid import disk
-from raigolmid.manager import TAKEN
+from raigolmid.janitor import TAKEN
 from raigolmid.runtime.base import DiskUsage
 
 from tests.harness import Harness
@@ -42,6 +42,12 @@ def _body_output(h, mib: int) -> None:
     (root / ".git" / "info").mkdir(exist_ok=True)
     (root / ".git" / "info" / "exclude").write_text("target/\n")
     (root / "target").mkdir(exist_ok=True)
+    (root / "target" / "CACHEDIR.TAG").write_text(
+        "Signature: 8a477f597d28d172789f06886806bc55\n"
+        "# This file is a cache directory tag created by cargo.\n")
+    (root / "target" / "inner").mkdir(exist_ok=True)
+    (root / "target" / "inner" / "CACHEDIR.TAG").write_text(
+        "Signature: 8a477f597d28d172789f06886806bc55\n")
     with open(root / "target" / f"out{mib}", "wb") as f:
         f.write(os.urandom(mib * 1024 * 1024))
 
@@ -62,6 +68,10 @@ def test_growth_past_the_mark_is_said_once_naming_the_body_and_its_tab(h, monkey
     assert body["ignored"] >= 3 * 1024 * 1024
     assert body["largest_ignored"][0]["path"] == "target/"
     assert grown.data["changes"]["body:myapi"] >= 3 * 1024 * 1024
+    [cache] = body["caches"]
+    assert (cache["path"], cache["tool"]) == ("target", "cargo")
+    assert cache["largest"][0] == {"entry": "out3", "bytes": cache["largest"][0]["bytes"]}
+    assert cache["largest"][0]["bytes"] >= 3 * 1024 * 1024
 
     watch.tick()
     assert len(h.events_of("disk.grown")) == 1

@@ -141,10 +141,10 @@ def test_an_agent_that_exits_on_its_own_is_announced_and_reopened(h):
     assert set(h.session.intent.tabs) == {h.tab(None), tab}
 
 
-def test_the_reopened_agent_exiting_on_its_own_goes_to_the_manager(h):
-    """One restart, then the manager: reopening the container the reopen started
+def test_the_reopened_agent_exiting_on_its_own_goes_to_the_janitor(h):
+    """One restart, then the janitor: reopening the container the reopen started
     would only repeat the crash, so the tab stays crashed and the evidence goes to an AI."""
-    from raigolmid.manager import TAKEN
+    from raigolmid.janitor import TAKEN
     tab = h.tab("myapi")
     list(h.runtime.events())
     h.runtime.kill(naming.agent(tab), exit_code=1)
@@ -167,7 +167,7 @@ def test_the_reopened_agent_exiting_on_its_own_goes_to_the_manager(h):
 
 def test_his_quit_is_not_a_crash_and_resumes_however_often(h):
     """Claude Code exits 0 only when the user quits it: no crash, no restart spent, no
-    manager, and the tab reopens on their conversation each time."""
+    janitor, and the tab reopens on their conversation each time."""
     tab = h.tab("myapi")
     converse(h.session.agents.home(tab))
     list(h.runtime.events())
@@ -528,8 +528,8 @@ def test_a_repository_among_the_definitions_is_protected_in_every_agent(h):
     """A body whose working copy is its definition directory keeps its `.git` under the
     definitions, which every agent mounts writable; its hooks and config are read-only
     there too, or any tab could plant what the owner's git runs."""
-    h.session.open_manager()
-    spec = h.runtime._containers[naming.agent("manager")]["spec"]
+    h.session.open_janitor()
+    spec = h.runtime._containers[naming.agent("janitor")]["spec"]
     targets = {m.target: m for m in spec.mounts}
 
     for place in ("/definitions", "/work"):
@@ -542,14 +542,14 @@ def test_a_repository_made_while_agents_run_is_protected_once_a_turn_ends(h):
     """Binds are made with a container, so a `git init` among the definitions leaves every
     running agent able to write its hooks until that agent is made again; a turn's end
     restarts each idle agent made before it."""
-    h.session.open_manager()
+    h.session.open_janitor()
     subprocess.run(["git", "init", "-q", str(h.search.toolbelts[0] / "no-lsp")], check=True)
-    h.session.agent_activity("manager", busy=False)
+    h.session.agent_activity("janitor", busy=False)
 
     target = "/definitions/toolbelts/no-lsp/.git/hooks"
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        mounts = {m.target: m for m in h.runtime._containers[naming.agent("manager")]["spec"].mounts}
+        mounts = {m.target: m for m in h.runtime._containers[naming.agent("janitor")]["spec"].mounts}
         if target in mounts:
             break
         time.sleep(0.05)

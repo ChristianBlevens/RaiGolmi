@@ -24,15 +24,15 @@ from .compatibility import Selection
 
 AgentStatus = Literal["running", "crashed", "exited", "starting"]
 
-# The manager tab: scoped to the machine rather than a sandbox, so it is neither the
+# The janitor tab: scoped to the machine rather than a sandbox, so it is neither the
 # machine tab nor a body's, and never one of the tabs the user works in.
-MANAGER = "manager"
+JANITOR = "janitor"
 
 
 @dataclass(slots=True)
 class TabIntent:
     """One AI-terminal tab. `body` is the body a body tab is equipped to until it
-    closes; None is the machine tab (and the manager, told apart by its id)."""
+    closes; None is the machine tab (and the janitor, told apart by its id)."""
     tab_id: str
     body: str | None = None
     status: AgentStatus = "starting"
@@ -61,12 +61,12 @@ class TabIntent:
     continues: str | None = None
 
     @property
-    def manager(self) -> bool:
-        return self.tab_id == MANAGER
+    def janitor(self) -> bool:
+        return self.tab_id == JANITOR
 
     @property
     def machine(self) -> bool:
-        return self.body is None and not self.manager
+        return self.body is None and not self.janitor
 
 
 @dataclass(slots=True)

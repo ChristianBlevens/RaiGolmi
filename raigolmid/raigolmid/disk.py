@@ -5,16 +5,18 @@ when the guest frees it (the ten-minute trim, `host/systemd/fstrim-*.conf`). So 
 large as what is live here, and every live byte has a holder: the container images, their build
 cache and the containers' own layers, the nix closures, the archives of closed tabs and the
 crash logs, the agents' and the user's homes, the journal, and each body's directory — what its
-git tracks, and what it ignores (build and run output, which nothing else on the machine sees).
+git tracks, what it ignores (build and run output, which nothing else on the machine sees), and
+its caches: directories tagged `CACHEDIR.TAG` (every cargo `target/`), whose tool recreates all
+they hold and which grow with every build until something empties them.
 A reading names each holder and sets their total against what the filesystem reports used; the
 rest is **unnamed**: the OS's deployments and anything nothing here accounts for, which is
 where a leak shows.
 
 The used bytes rising past the last reported reading by `GROWTH_BYTES` is said as
 `disk.grown`, and free space under `SHORT_FRACTION` of the filesystem as `disk.short`, once
-per episode; the manager takes both (`manager.py`) with each holder's change since that
-reading. What is the machine's the manager repairs; what a body holds is the project's to
-judge, so the manager `tell`s that body's tab what it holds and never deletes it from here.
+per episode; the janitor takes both (`janitor.py`) with each holder's change since that
+reading. What is the machine's the janitor repairs; what a body holds is the project's to
+judge, so the janitor `tell`s that body's tab what it holds and never deletes it from here.
 
 A holder that cannot be read is reported as unread, never as empty. The last reported reading
 is kept in `Paths.disk`, and lowered whenever less is held, so growth across a daemon restart
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import threading
 import time
@@ -38,21 +41,27 @@ if TYPE_CHECKING:
     from .session import Session
 
 # How far the used bytes rise past the last reported reading, and how little may be free,
-# before the manager looks. Both set how soon disk use is looked at, never whether.
+# before the janitor looks. Both set how soon disk use is looked at, never whether.
 GROWTH_BYTES = 2 * 1024 ** 3
 SHORT_FRACTION = 0.15
 # Sizing walks every file a body holds, so it is read this often rather than continuously.
 TICK_SECONDS = 600.0
-# The system journal, bounded by `host/systemd/journald-raigolmi.conf`.
+# The system journal, bounded by `host/systemd/journald.conf`.
 JOURNAL = Path("/var/log/journal")
-# How many of a body's largest ignored paths a reading names.
+# How many of a body's largest ignored paths, and of a cache's largest entries, a reading names.
 LARGEST = 8
+# A cache directory says it is one with this file, starting with this line
+# (https://bford.info/cachedir/): everything in it is its tool's to recreate. Cargo tags
+# every `target/`.
+CACHE_TAG = "CACHEDIR.TAG"
+CACHE_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55"
 
 
-def tree_bytes(root: Path, seen: set[tuple[int, int]], unread: list[str]) -> int:
+def tree_bytes(root: Path, seen: set[tuple[int, int]], unread: list[str],
+               caches: list[Path] | None = None) -> int:
     """The bytes allocated under `root`, each inode once across one reading (`seen`), on
     `root`'s own filesystem, never following a link. A directory that cannot be read is
-    added to `unread`."""
+    added to `unread`; each cache directory met is added to `caches` when it is given."""
     try:
         top = root.lstat()
     except FileNotFoundError:
@@ -86,27 +95,60 @@ def tree_bytes(root: Path, seen: set[tuple[int, int]], unread: list[str]) -> int
             total += st.st_blocks * 512
             if stat.S_ISDIR(st.st_mode):
                 stack.append(Path(entry.path))
+            elif caches is not None and entry.name == CACHE_TAG and _is_cache_tag(entry.path):
+                caches.append(Path(directory))
     return total
+
+
+def _is_cache_tag(path: str) -> bool:
+    try:
+        with open(path, "rb") as tag:
+            return tag.read(len(CACHE_SIGNATURE)) == CACHE_SIGNATURE
+    except OSError:
+        return False
+
+
+def cache_reading(directory: Path, cache: Path, unread: list[str]) -> dict[str, Any]:
+    """A cache in a body: its size, the tool its tag names, and its largest entries — where
+    what the project put in it, which its tool cannot recreate, shows."""
+    try:
+        said = (cache / CACHE_TAG).read_text(errors="replace")
+    except OSError as exc:
+        unread.append(f"{cache / CACHE_TAG}: {exc.strerror}")
+        said = ""
+    found = re.search(r"created by (\S+?)\.?\s*$", said, re.MULTILINE)
+    own: set[tuple[int, int]] = set()
+    entries = sorted(((e.name, tree_bytes(Path(e.path), own, unread))
+                      for e in os.scandir(cache)), key=lambda x: -x[1])
+    return {"path": str(cache.relative_to(directory)), "tool": found[1] if found else None,
+            "bytes": sum(b for _, b in entries),
+            "largest": [{"entry": n, "bytes": b} for n, b in entries[:LARGEST]]}
 
 
 def body_reading(directory: Path, seen: set[tuple[int, int]],
                  unread: list[str]) -> dict[str, Any]:
-    """A body's directory: everything, what git ignores in it, and the largest of those."""
-    total = tree_bytes(directory, seen, unread)
+    """A body's directory: everything, what git ignores in it and the largest of those, and
+    its build caches."""
+    found: list[Path] = []
+    total = tree_bytes(directory, seen, unread, found)
+    # A cache inside another is part of it.
+    caches = [cache_reading(directory, c, unread) for c in found
+              if not any(o != c and c.is_relative_to(o) for o in found)]
     if not git.is_repo(directory):
-        return {"bytes": total, "ignored": None, "largest_ignored": []}
+        return {"bytes": total, "ignored": None, "largest_ignored": [], "caches": caches}
     try:
         listed = git.run(["ls-files", "--others", "--ignored", "--exclude-standard",
                           "--directory", "-z"], directory).stdout
     except git.GitError as exc:
         unread.append(f"{directory} (what git ignores): {exc}")
-        return {"bytes": total, "ignored": None, "largest_ignored": []}
+        return {"bytes": total, "ignored": None, "largest_ignored": [], "caches": caches}
     # Sized again with a reading of its own: `seen` already holds every inode under it.
     own: set[tuple[int, int]] = set()
     sizes = sorted(((p, tree_bytes(directory / p, own, unread))
                     for p in listed.split("\0") if p), key=lambda x: -x[1])
     return {"bytes": total, "ignored": sum(b for _, b in sizes),
-            "largest_ignored": [{"path": p, "bytes": b} for p, b in sizes[:LARGEST]]}
+            "largest_ignored": [{"path": p, "bytes": b} for p, b in sizes[:LARGEST]],
+            "caches": caches}
 
 
 def reading(session: "Session") -> dict[str, Any]:
@@ -156,7 +198,7 @@ def changes(now: dict[str, Any], then: dict[str, Any] | None) -> dict[str, int]:
 
 
 class Disk:
-    """Reads the disk every `TICK_SECONDS` and says growth and shortage to the manager."""
+    """Reads the disk every `TICK_SECONDS` and says growth and shortage to the janitor."""
 
     def __init__(self, session: "Session", events: EventLog) -> None:
         self.session = session
@@ -202,7 +244,7 @@ class Disk:
 
 
 def accounted(session: "Session") -> dict[str, Any]:
-    """The manager's `disk`: the reading now, and each holder's change since the mark."""
+    """The janitor's `disk`: the reading now, and each holder's change since the mark."""
     now = reading(session)
     try:
         then = json.loads(session.paths.disk.read_text())

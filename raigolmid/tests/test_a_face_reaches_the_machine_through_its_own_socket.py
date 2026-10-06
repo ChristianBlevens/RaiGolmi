@@ -127,7 +127,7 @@ def _the_users(scopes, viewing=None):
 def test_the_users_words_from_a_face_reach_the_tab_they_view_else_the_machine_tab(rig):
     """A face's ask: delivered as `direct` delivers, from the user's face."""
     _, _, events = rig
-    scopes = {"tab-1": "machine", "tab-2": {"body": "app"}, "manager": "manager"}
+    scopes = {"tab-1": "machine", "tab-2": {"body": "app"}, "janitor": "janitor"}
     ask = build_face_methods(_the_users(scopes, viewing="tab-2"), events, trial=False)["ask"]
     assert ask("what failed?")["tab"] == "tab-2"
     ask = build_face_methods(_the_users(scopes, viewing="raigolmi"), events, trial=False)["ask"]
@@ -136,8 +136,8 @@ def test_the_users_words_from_a_face_reach_the_tab_they_view_else_the_machine_ta
     assert [e.tab for e in asked] == ["tab-2", "tab-1"]
     assert asked[0].data["deliver"] == {"content": "From the user's face:\n\nwhat failed?",
                                         "meta": {"from": "face"}}
-    with pytest.raises(SessionError, match="manager"):
-        ask("x", tab="manager")
+    with pytest.raises(SessionError, match="janitor"):
+        ask("x", tab="janitor")
 
 
 def test_a_trial_reaches_neither_the_users_tabs_nor_their_selection(rig):

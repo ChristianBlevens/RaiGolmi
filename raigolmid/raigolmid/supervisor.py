@@ -1,15 +1,15 @@
-"""One restart, then the manager, for every container the daemon keeps running but the host.
+"""One restart, then the janitor, for every container the daemon keeps running but the host.
 
 A supervised container that exits on its own is restarted once, by its kind's restarter. If
 the container that restart started exits on its own too, it is not restarted: its evidence
-is written down and it goes to the manager as `container.unfixable`, because restarting it
+is written down and it goes to the janitor as `container.unfixable`, because restarting it
 again would repeat the exit. A restart that fails goes there the same way.
 
 **The budget is the container id.** Per unit — an agent's tab, a host surface's role, a
 sandbox's body, view or anchor, the user's face, the door — this records the id of the
 container its restart started, in `Paths.supervisor`, so a daemon restart keeps it. A dead
 container with that id is spent. Any other was started by someone else — the user's restart,
-the manager's repairs, a rebuild, a swap, a selection, reconcile — and gets its one restart, so
+the janitor's repairs, a rebuild, a swap, a selection, reconcile — and gets its one restart, so
 nothing resets the budget.
 
 **Exited on its own** is the runtime's answer, not the event's: every stop or replacement the
@@ -130,7 +130,7 @@ class Supervisor:
         return Exit(unit, info, evidence)
 
     def settle(self, exit: Exit, restart: Callable[[], str | None]) -> str:
-        """The exit's one restart, or the manager. `restart` starts the unit again and returns
+        """The exit's one restart, or the janitor. `restart` starts the unit again and returns
         its new container's id, or None when the unit is no longer wanted; it raises when it
         cannot. Its failure is said here, since nobody waits on an exit to raise to."""
         name = exit.container.name
@@ -168,7 +168,7 @@ class Supervisor:
 
     def unfixable(self, unit: Unit, container: str, message: str,
                   **evidence: Any) -> None:
-        """A unit the daemon could not bring back, for the manager (`manager.TAKEN`)."""
+        """A unit the daemon could not bring back, for the janitor (`janitor.TAKEN`)."""
         self.events.emit("container.unfixable", **unit.scope(), kind=unit.kind,
                          unit=unit.name, container=container, **evidence, message=message)
 

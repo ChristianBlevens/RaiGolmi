@@ -394,16 +394,16 @@ class _Windows:
         return [n for _, n in self.windows]
 
 
-def test_the_tabs_are_in_order_manager_machine_selected_body_then_the_rest(monkeypatch):
+def test_the_tabs_are_in_order_janitor_machine_selected_body_then_the_rest(monkeypatch):
     tmux = _Windows(monkeypatch, ["raigolmi", "tab-12 notes", "tab-3 api", "tab-11 machine",
-                                  "manager ⚙", "tab-7 web"], current="tab-3 api")
+                                  "janitor ⚙", "tab-7 web"], current="tab-3 api")
     terminal.arrange_windows({
-        "agents": [{"tab": "manager", "scope": "manager"}, {"tab": "tab-11", "scope": "machine"},
+        "agents": [{"tab": "janitor", "scope": "janitor"}, {"tab": "tab-11", "scope": "machine"},
                    {"tab": "tab-3", "scope": {"body": "api"}},
                    {"tab": "tab-7", "scope": {"body": "web"}},
                    {"tab": "tab-12", "scope": {"body": "notes"}}],
         "session": {"body": "notes"}})
-    assert tmux.names() == ["raigolmi", "manager ⚙", "tab-11 machine", "tab-12 notes",
+    assert tmux.names() == ["raigolmi", "janitor ⚙", "tab-11 machine", "tab-12 notes",
                             "tab-3 api", "tab-7 web"]
     assert tmux.names()[tmux.current] == "tab-3 api", "the window in view stays in view"
 
@@ -513,7 +513,7 @@ def test_a_base_window_running_a_command_is_left_to_the_user(monkeypatch):
 def test_the_tab_menu_lists_every_tab_in_the_bars_order_and_selects_it(monkeypatch):
     """The bar is cut at the terminal's right edge; the `≡` menu reaches every tab."""
     # As `_keep` writes the marks: "1" or "0"; the base window, which it never reaches, has none.
-    rows = ["@0\traigolmi\t0\t\t", "@4\tmanager ⚙\t0\t0\t0", "@2\ttab-11 machine\t1\t0\t0",
+    rows = ["@0\traigolmi\t0\t\t", "@4\tjanitor ⚙\t0\t0\t0", "@2\ttab-11 machine\t1\t0\t0",
             "@7\ttab-10 letthemrise\t0\t1\t1"]
 
     def tmux(*args, **_kwargs):
@@ -530,6 +530,6 @@ def test_the_tab_menu_lists_every_tab_in_the_bars_order_and_selects_it(monkeypat
     items = command[command.index("--") + 1:]
     assert [tuple(items[i:i + 3]) for i in range(0, len(items), 3)] == [
         ("  raigolmi", "1", "select-window -t @0"),
-        ("  manager ⚙", "2", "select-window -t @4"),
+        ("  janitor ⚙", "2", "select-window -t @4"),
         ("▸ tab-11 machine", "3", "select-window -t @2"),
         ("  ● ◇ tab-10 letthemrise", "4", "select-window -t @7")]

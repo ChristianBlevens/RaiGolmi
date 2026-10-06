@@ -11,9 +11,9 @@ rebuild the last failure to read instead of guessing, and `search_packages` lets
 it find a package name in the nixpkgs index before writing it into a toolbelt.
 Both are things it cannot reconstruct from the repository.
 
-`--scope machine` is the manager tab's: the machine's state read-only and only the
+`--scope machine` is the janitor tab's: the machine's state read-only and only the
 repairs the daemon already has. Either scope is also its tab's **channel**: it pushes what
-`raigolmid` hands it — a failure for the manager, a question's outcome for any tab — into the
+`raigolmid` hands it — a failure for the janitor, a question's outcome for any tab — into the
 session (`channel.py`).
 """
 from __future__ import annotations
@@ -126,7 +126,7 @@ def container_mounts() -> list[tuple[str, str]]:
 
 
 def register_declare(server) -> None:
-    """The stop hook's question answered (`agent_stop`): every tab and the manager read
+    """The stop hook's question answered (`agent_stop`): every tab and the janitor read
     documents, so both servers carry it. It is answered in the conversation's transcript, which
     the hook reads, so the daemon is not asked."""
     @tool(server, description="Declare the documents (`.md`) you read: `current` when "

@@ -81,7 +81,7 @@ up yourself.
 
 The first time you boot it there's nothing on the screen but the three tabs. You open the
 terminal and tell the machine tab you want a dark tiling desktop with Firefox, a file
-manager, and a clock in the corner. It writes the desktop, builds it, and a few minutes
+janitor, and a clock in the corner. It writes the desktop, builds it, and a few minutes
 later it shows up in the selector. You pick it and you're in.
 
 The bar is too tall, so you say so, and it fixes it. You'd like the windows to have gaps
@@ -128,7 +128,7 @@ tab writes its report on the run. You read it in the catalog, under Documents, R
 ### When something breaks
 
 You're working, and your desktop's editor window crashes, or a container keeps dying. You
-don't have to do anything. A **⚙** tab shows up at the bottom. This is the manager. It
+don't have to do anything. A **⚙** tab shows up at the bottom. This is the janitor. It
 reads the logs and the machine's state, works out what went wrong, fixes it, and tells you
 in its tab what it found and what it did.
 
@@ -262,7 +262,7 @@ that part well.
   instructions the other agents start with.
 - **A body's tab** is for that one project. It works only on that project's code, its
   sandbox and its toolbelt. It opens when you select the body.
-- **`⚙` the manager** is for fixing the machine when something breaks. It opens by itself,
+- **`⚙` the janitor** is for fixing the machine when something breaks. It opens by itself,
   and you don't work in it (see below).
 
 The **`≡`** at the left of the bar lists every tab. A **●** on a tab means it wants you,
@@ -284,9 +284,9 @@ Drag to select text: it's copied right away and stays selected where it is. The 
 scrolls with it, and a key or a click ends it. Right-click to paste, and press Ctrl+Enter for
 a new line.
 
-### The manager, in more detail
+### The janitor, in more detail
 
-The manager takes any failure that gets in the way of using the machine: a container that
+The janitor takes any failure that gets in the way of using the machine: a container that
 dies again after its one automatic restart, a desktop or editor that won't start, one of the
 host's own screens failing, the clipboard bridge dropping, or another tab that stops
 responding. It also catches a tab that's stuck: one working for ten minutes with nothing in its
@@ -295,7 +295,8 @@ what the tab was running, leaves a real long wait alone, and otherwise stops the
 tells it what went wrong. It watches the disk too: when the machine holds a couple of GB more
 than when it last looked, or free space runs low, it works out what grew. The machine's own
 leftovers piling up it treats as a failure and fixes; a project's build or run output it points
-out to that project's tab, which knows what it still needs. A turn that fails on something waiting won't fix, like a tab
+out to that project's tab, which knows what it still needs — including build caches like Rust's
+`target/`, which only ever grow. A turn that fails on something waiting won't fix, like a tab
 that lost its sign-in, comes to it as well. It also keeps the agents' documents in shape: one that's grown past its size,
 names something that no longer exists, or describes a layer that has since changed. The point is that you're never the one who has to take a failure to an AI.
 
@@ -317,7 +318,7 @@ a tab to stop for you, a number of hours, or both. From then on:
 - when a tab's conversation reaches its budget, it's handed to a new tab that starts from
   the project's `SESSION-START.md`, and the machine tab does the same for itself;
 - a tab cut off by a usage limit or an API error is resumed;
-- every tab, the machine tab and the manager included, is a Claude Code Remote Control
+- every tab, the machine tab and the janitor included, is a Claude Code Remote Control
   session named after its project, so you can follow any of them from your phone;
 - a tab that reaches your stop is held for you, and typing in the tab takes it back;
 - when the time runs out, each tab finishes up and is given back;
@@ -344,7 +345,7 @@ your answer, and your preferences are updated with it.
 Open the catalog from the selector. It lists your faces, bodies and toolbelts, plus
 **Documents** you can edit: your settings, your preferences, the permissions you answered
 "always" (edit it to take one back), the instructions every tab starts with, each
-project's `SESSION-START.md`, each layer's doc, the manager's incidents, and run reports.
+project's `SESSION-START.md`, each layer's doc, the janitor's incidents, and run reports.
 **Thoughts** has the agents' thought docs, to read. Turn on **Server** to see what other people have shared. Use
 **Download** and **Install** to get something, **Upload** to share something you made, and
 **Delete** to remove it.

@@ -119,7 +119,7 @@ def start_at_rest(runtime: ContainerRuntime, paths: Paths, role: labels.Role) ->
 def restore_resident(runtime: ContainerRuntime, paths: Paths,
                      failed: Callable[[str, str], None]) -> dict[str, str]:
     """Bring back each resident surface that is not running, as the machine keeps it at rest
-    (the manager's reconcile is how a surface that exited comes back). One already
+    (the janitor's reconcile is how a surface that exited comes back). One already
     running is left as it is. A surface that will not start is handed to `failed` with its
     role and reason, and the others are still tried."""
     if not os.environ.get("WAYLAND_DISPLAY"):

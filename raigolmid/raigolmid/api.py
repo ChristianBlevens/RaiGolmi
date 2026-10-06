@@ -28,7 +28,7 @@ from typing import Any, Callable
 from . import disk, stalls
 from .events import EventLog
 from .channel import Channels
-from .intent import MANAGER
+from .intent import JANITOR
 from .catalog import CatalogError
 from .history import History, HistoryError
 from .messages import MessageError
@@ -92,7 +92,7 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "rediscover": lambda: {"errors": session.rediscover().errors},
         "logs": lambda instance_id, tail=100: _logs(session, instance_id, tail),
         "events": lambda n=50: [json.loads(e.to_json()) for e in events.tail(n)],
-        # The manager's machine scope: what it reads to diagnose.
+        # The janitor's machine scope: what it reads to diagnose.
         "container_logs": lambda container, tail=100: _container_logs(session, container,
                                                                       tail),
         "journal": lambda n=200: _journal(n),
@@ -150,7 +150,7 @@ def with_items(entries: list[dict[str, Any]], questions: Questions,
 def with_marks(status: dict[str, Any], viewing: Viewing) -> dict[str, Any]:
     """A tab is marked while it needs the user — an idle one until they have viewed it, a
     question or permission until it is settled — and the terminal's collapsed tab is lit
-    while any is marked, the manager only while it asks: its idle ends each job and is
+    while any is marked, the janitor only while it asks: its idle ends each job and is
     shown in the history. A tab the user handed over, and the machine tab while it manages
     any, never needs them (`Intent.hands_off`). Asked of `with_tab_states`' answer."""
     for agent in status["agents"]:
@@ -158,7 +158,7 @@ def with_marks(status: dict[str, Any], viewing: Viewing) -> dict[str, Any]:
         agent["marked"] = not agent["hands_off"] and (
             state in ("asking", "permission") or state == "idle" and viewing.unseen(agent["tab"]))
     status["terminal"] = {"viewing": viewing.viewed(),
-                          "lit": any(a["marked"] and (a["tab"] != MANAGER or
+                          "lit": any(a["marked"] and (a["tab"] != JANITOR or
                                                       a["state"] in ("asking", "permission"))
                                      for a in status["agents"])}
     return status
@@ -185,7 +185,7 @@ def _logs(session: Session, instance_id: str, tail: int) -> dict[str, Any]:
 
 
 def _container_logs(session: Session, container: str, tail: int) -> dict[str, Any]:
-    """Any container raigolmid manages, and only those: the manager diagnoses the machine's
+    """Any container raigolmid manages, and only those: the janitor diagnoses the machine's
     parts, not whatever else runs on the host."""
     from . import labels
     info = session.runtime.inspect(container)
@@ -198,14 +198,14 @@ def _container_logs(session: Session, container: str, tail: int) -> dict[str, An
 
 
 def _tell(session: Session, events: EventLog, tab_id: str, note: str) -> dict[str, Any]:
-    """The manager's word to a tab, without stopping it: queued on its channel and pushed
+    """The janitor's word to a tab, without stopping it: queued on its channel and pushed
     when the tab is next idle (`channel.py`)."""
     if tab_id not in session.intent.tabs:
         raise SessionError(f"no tab {tab_id!r}")
     if not note.strip():
         raise SessionError("tell says something")
-    events.emit("manager.told", tab=tab_id, deliver={
-        "content": note, "meta": {"from": "manager"}})
+    events.emit("janitor.told", tab=tab_id, deliver={
+        "content": note, "meta": {"from": "janitor"}})
     return {"tab": tab_id, "note": "queued for when it is next idle"}
 
 

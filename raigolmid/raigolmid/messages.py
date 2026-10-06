@@ -2,7 +2,7 @@
 
 A tab messages another for what needs that agent's judgement — a body tab asking the machine
 tab for a change to a face, which only the machine tab edits — and the answer returns to the
-tab that asked. The machine tab and body tabs message each other; the manager does neither,
+tab that asked. The machine tab and body tabs message each other; the janitor does neither,
 since it takes failures and asks the user. A tab is addressed as `machine`, by the body it
 works on, or by its id; the first two outlive a closed tab's id.
 
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from .events import Event, EventLog
-from .intent import MANAGER, BrokenState, load_json, save_json
+from .intent import JANITOR, BrokenState, load_json, save_json
 
 if TYPE_CHECKING:
     from .session import Session
@@ -131,7 +131,7 @@ class Messages:
             if m is None or m.to != tab:
                 raise MessageError(
                     f"no message {id} was sent to this tab. `reply` answers a tab's `message`; "
-                    "a direction from the machine tab, the manager or the user is answered in "
+                    "a direction from the machine tab, the janitor or the user is answered in "
                     "your turn's own text, which its sender reads when the turn ends")
             if m.state == "withdrawn":
                 raise MessageError(f"tab {m.sender} closed; nobody is waiting on {id}")
@@ -169,8 +169,8 @@ class Messages:
         if tab is None:
             raise MessageError(f"no open tab is {to!r}: name `machine`, a body with a tab, or "
                                "a tab id; `status` lists the tabs")
-        if tab.tab_id == MANAGER:
-            raise MessageError("the manager takes the machine's failures, not messages")
+        if tab.tab_id == JANITOR:
+            raise MessageError("the janitor takes the machine's failures, not messages")
         return tab.tab_id
 
     def _open(self) -> list[Message]:

@@ -39,7 +39,7 @@ def test_anything_new_lights_the_handle_until_the_menu_is_opened():
 def test_only_a_standing_notice_arrives():
     """Anything new lights the handle; a failure that is the user's is also shown in full."""
     m = MenuModel()
-    m.take([entry("h1"), notice("h2", over="manager.opened"), notice("h3")], now=0)
+    m.take([entry("h1"), notice("h2", over="janitor.opened"), notice("h3")], now=0)
     assert m.shape == ARRIVAL and m.arrivals == ["h3"]
 
 
@@ -75,13 +75,13 @@ def test_an_arrival_does_not_fold_under_the_pointer_or_while_holding_the_keyboar
 def test_an_arrival_whose_failure_is_over_folds_at_once():
     m = MenuModel()
     m.take([notice("h1")], now=0)
-    m.take([notice("h1", over="manager.opened")], now=1)
+    m.take([notice("h1", over="janitor.opened")], now=1)
     assert m.shape == HANDLE
 
 
 def test_hover_opens_the_menu_with_everything_and_leaving_folds_it():
     m = MenuModel()
-    history = [entry("h1"), notice("h2", over="manager.opened")]
+    history = [entry("h1"), notice("h2", over="janitor.opened")]
     m.take(history, now=0)
     m.enter()
     assert m.shape == MENU and m.shown() == history[::-1], "newest first"

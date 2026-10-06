@@ -30,7 +30,7 @@ from typing import Any
 from . import (claude_login, credential, credproxy, documents, git, hostimages, labels, localtime,
                naming, settings)
 from .events import EventLog
-from .intent import MANAGER, TabIntent
+from .intent import JANITOR, TabIntent
 from .paths import Paths
 from .runtime import ContainerRuntime, ContainerSpec, Mount
 
@@ -50,10 +50,10 @@ TRANSFER = "/transfer"
 # (`Agents._link_archived`).
 ARCHIVED = "-archived-"
 
-MANAGER_TEMPLATE = """\
-# The manager tab
+JANITOR_TEMPLATE = """\
+# The janitor tab
 
-You are the manager tab of a RaiGolmi machine. You are scoped to the machine, not to a
+You are the janitor tab of a RaiGolmi machine. You are scoped to the machine, not to a
 sandbox: `/work` is every face, toolbelt and body definition, and so is `/definitions`.
 `/source` is this machine's own source, read-only: the daemon, the agent image and the host
 image as they run, each module's docstring saying what it does and why — read it to
@@ -91,7 +91,9 @@ the journal — or in the unnamed rest is a failure of the machine to clear up a
 find why from `/source` and the events and repair it, or put it to the user. Growth in a
 body is its project's: `tell` that body's tab what it holds, the largest paths its git
 ignores and how much each is, and ask it to remove what it no longer needs; never remove a
-project's files yourself. Growth that is the work going as it should is left, said in the
+project's files yourself. A cache the reading names (a build tool's, cargo's `target/`) is all
+its tool's to recreate: ask the tab to empty it with that tool, and to move out anything of the
+project's that its largest entries show kept there. Growth that is the work going as it should is left, said in the
 incident.
 
 A fix that includes a choice about how the user uses the machine is theirs: put it to them with
@@ -111,10 +113,10 @@ They are the machine's and outlive this session; `index` lists them. Each failur
 first is handed to a fresh session, which knows only these documents: an incident doc carries
 what you found, what you did and what is still open.
 
-- `/manager/incidents/`: one doc per incident, opened by raigolmid when it hands you the failure.
-  Write your diagnosis and repair in it as you go, and move it to `/manager/incidents/fixed/`
+- `/janitor/incidents/`: one doc per incident, opened by raigolmid when it hands you the failure.
+  Write your diagnosis and repair in it as you go, and move it to `/janitor/incidents/fixed/`
   when it is repaired. A failure that recurs while its doc is open is added to that doc.
-- `/manager/patterns.md`: the failures this machine has shown and what fixed them. Read it
+- `/janitor/patterns.md`: the failures this machine has shown and what fixed them. Read it
   before diagnosing, and add the pattern when an incident is fixed.
 - `LAYER.md` in a layer's directory: its design and how it is built. Bring it up to date when a
   repair changes the layer.
@@ -187,10 +189,10 @@ to another tab, tell the user which one and how to reach it, and do not do it he
 - **The machine tab** works on the machine: faces, toolbelts and bodies as layers, the plugins
   and templates, and the body tabs it manages, which it steers with `direct`. The project work
   inside a body is that body's tab's.
-- **The manager** repairs the machine's failures; nobody works in it.
+- **The janitor** repairs the machine's failures; nobody works in it.
 
 The user reaches a tab in this terminal, by its tab in the bar or by the `≡` at the bar's left,
-which lists every tab. After the terminal's shell they stand in one order: the manager, the
+which lists every tab. After the terminal's shell they stand in one order: the janitor, the
 machine tab, then the bodies' tabs, the selected body's first. A body with no tab gets one when
 it is selected in the selector.
 
@@ -213,8 +215,8 @@ tab is marked in this terminal until they look at it.
 
 - `index`: the documents for this tab — those that exist and those expected but unwritten —
   and every layer with its definition directory and whether it can be selected. Start here.
-- `/guide`: how a face, a toolbelt and a body are written, and what each can reach. Read the
-  part for a layer before you write or change one.
+- `/guide`: how a face, a toolbelt and a body are written, and what each can reach. The
+  `write-a-layer` skill sends you to the part for a layer before you write or change one.
 - `/transfer`: the user's Windows transfer folder. A file they drop on the RaiGolmi window
   lands here; a file you write to `/transfer/out` is moved to their Windows
   `Downloads\\RaiGolmi`. It is how a file reaches them or comes from them.
@@ -237,7 +239,7 @@ tab is marked in this terminal until they look at it.
   date when you change the layer: `index` names the files changed since.
 
 A document cites a path relative to its own directory, or under `/definitions`, and never under
-`/work`: the manager keeps your documents too, and its `/work` is not yours.
+`/work`: the janitor keeps your documents too, and its `/work` is not yours.
 
 {header}
 
@@ -288,7 +290,10 @@ error cut off — the usage limit included — is resumed by the daemon once it 
 started with `job_start` and waited on with `job_wait`, which ends when it exits, crashes or is
 gone, and hands back how it ended — never a background `&` and a loop on a file, which a
 timed-out call kills and a crashed run never ends. Run one heavy build at a time: `jobs` shows
-what is still running. A tab working with nothing changing is handed to the manager tab, which
+what is still running. A build tool's cache (a directory holding `CACHEDIR.TAG`, as cargo's
+`target/` does) only grows: empty it with its tool (`cargo clean`) when it holds far more than a
+fresh build would, and keep nothing the project needs in it — runs, snapshots and scripts go
+in a directory of their own. A tab working with nothing changing is handed to the janitor tab, which
 may stop its turn and say why.
 
 **Ending a conversation.** A fresh conversation is a new tab, and it starts from
@@ -297,48 +302,10 @@ stands, what comes next and what to read — as short as it can be and with noth
 `~/thoughts.md` is finished as this conversation's record; what outlives this work is in the
 permanent doc it belongs to; and what should be committed is.
 
-**The machine tab** marks a tab the user hands it with `manage` — with `stop_when`, their words
-for where it stops for them, when they give one — and is told when each turn it manages ends.
-At that stop it `hold`s the tab, which then puts the situation to the user, who reaches every
-tab from their phone through Remote Control; unsure whether the stop is reached, it goes on, and has the tab note the
-doubt in its thought doc and commit, so the user can return to that point. It sees those tabs
-with `managed` and `managed_tab`, steers them with `direct`, and answers their questions with
-`answer_question`. Whenever it manages a tab or resumes a run, it loads the `orchestrate` skill:
-how a run is kept, what each turn's end asks of it, and the limits that keep a run honest.
-
-**The machine tab is the user while they are away.** Every decision they did not keep for
-themselves with `stop_when` is its own, design questions included; a project document that
-leaves a question to the user leaves it to the machine tab. It decides from the user's stated
-preferences and the project's documents, never leaves one waiting for their return, and records
-each in `/work/run.md` and wherever the project keeps the user's rulings, marked as its own, so
-they can overturn it. The rest of a managed tab's rules — its test budget, how it works — bind
-the machine tab's directions as they would the user's.
-
-It keeps each tab on track as the user would, reading every turn against the tab's
-`SESSION-START.md` and the conversations before it: a tab sees only its own conversation, so a
-pattern across several — a measure drifting, the same explanation each time — is the machine
-tab's to see and put to the tab. Its direction reaches a tab as the user's does: `direct` within
-a conversation, and what should outlast it written by the tab into its `SESSION-START.md`, which
-is all a new conversation starts from — a rule the machine tab has had to enforce twice included.
-
-At the budget, `restart_fresh` first has the tab make its documents ready for its next
-conversation; once told that turn has ended, it reads its `SESSION-START.md` with `managed_tab`
-and either `direct`s the tab to fix what is stale or calls `restart_fresh` again, which closes it
-and hands its work to a new tab, still managed, that starts from `SESSION-START.md`. A tab whose
-turn already left its documents ready is handed on in one call, with `documents_ready`. At its
-own budget while it manages tabs, the daemon asks it to make its own `/work/SESSION-START.md`
-ready — every tab it manages, what each is working toward, the last direction it gave each and
-what is on its way — and to say so with `ready_to_restart`, handing over its progress report on
-its stretch of the run; a new machine tab then takes over from that document.
-
-**A run and its report.** From the first tab handed over until its report, the machine tab keeps
-`/work/run.md`, the record of its stretch of the run: what it directed, decided and saw, as it
-happens. Each machine-tab handover is a checkpoint that files the progress report with that
-record and the daemon's own, so a run of any length keeps all of it and the next machine tab
-starts a new `run.md`. When the user gives a tab `hours`, the daemon has it make its documents ready at
-that time and gives it back. Once the last tab is given back — by the time, or by the machine
-tab when the user says stop — the daemon asks for the user's report, and `report_run` files it in
-their catalog.
+**The machine tab manages the body tabs the user hands it** (`manage`), and while it does it
+is the user while they are away. Whenever it manages a tab, is told a managed turn ended, or
+resumes a run, it loads the `orchestrate` skill: how it decides for the user, steers each tab,
+hands tabs on at their budget and at its own, and keeps and reports the run.
 
 <!-- Generated by raigolmid. A template at {template} replaces this. -->
 """
@@ -346,7 +313,7 @@ their catalog.
 
 def remote_control_name(tab: TabIntent) -> str:
     """The tab's Remote Control session as the user's phone lists it."""
-    kind = "manager" if tab.manager else "machine tab" if tab.machine else tab.body
+    kind = "janitor" if tab.janitor else "machine tab" if tab.machine else tab.body
     return f"{kind} ({tab.tab_id})"
 
 
@@ -372,7 +339,7 @@ class AgentSpec:
 
 def _definition_git_binds(spec: AgentSpec) -> list[Mount]:
     """Each definition repository's git protections, wherever the definitions are in the
-    container: `/definitions`, and `/work` too where that is the definitions (the manager)."""
+    container: `/definitions`, and `/work` too where that is the definitions (the janitor)."""
     if spec.definitions is None:
         return []
     places = [(spec.definitions, "/definitions")]
@@ -410,7 +377,7 @@ HEADER = (
     "(old entries, never trimmed); `audited` is the size in bytes and the date its last audit "
     "left it at. Write the header when you make a document and keep to it: what its not-here "
     "names goes to the doc it names. A doc with no header, or grown a quarter past `audited`, "
-    "is audited against its header by the manager.")
+    "is audited against its header by the janitor.")
 
 
 def render_template(template: str, path: Path, budget_tokens: int) -> str:
@@ -444,17 +411,17 @@ class Agents:
         return self.paths.agent_templates / "claude.md"
 
     @property
-    def manager_template_path(self) -> Path:
-        return self.paths.agent_templates / "manager.md"
+    def janitor_template_path(self) -> Path:
+        return self.paths.agent_templates / "janitor.md"
 
     def render_context(self, spec: AgentSpec) -> str:
-        path, default = ((self.manager_template_path, MANAGER_TEMPLATE) if spec.tab.manager
+        path, default = ((self.janitor_template_path, JANITOR_TEMPLATE) if spec.tab.janitor
                          else (self.template_path, DEFAULT_TEMPLATE))
         template = path.read_text(encoding="utf-8") if path.is_file() else default
         return render_template(template, path, settings.load(self.paths.settings).budget_tokens)
 
-    def _manager_documents(self) -> Path:
-        root = self.paths.manager_documents
+    def _janitor_documents(self) -> Path:
+        root = self.paths.janitor_documents
         (root / documents.INCIDENTS / documents.FIXED).mkdir(parents=True, exist_ok=True)
         return root
 
@@ -496,10 +463,10 @@ class Agents:
             Mount(source=str(spec.working_copy), target="/work"),
             *((Mount(source=str(spec.definitions), target="/definitions"),)
               if spec.definitions else ()),
-            *((Mount(source=str(self._manager_documents()), target="/manager"),
-               # The disk's own source, so the manager understands the whole OS.
+            *((Mount(source=str(self._janitor_documents()), target="/janitor"),
+               # The disk's own source, so the janitor understands the whole OS.
                Mount(source=str(hostimages.source_root()), target="/source", read_only=True))
-              if spec.tab.manager else ()),
+              if spec.tab.janitor else ()),
             # How a layer is written, from the disk's own source.
             Mount(source=str(hostimages.source_root() / GUIDE), target="/guide",
                   read_only=True),
@@ -522,7 +489,7 @@ class Agents:
             # No Docker socket, ever. Its tab's socket is the only way out.
             "RAIGOLMID_SOCKET": "/run/raigolmid/raigolmid.sock",
             # One plugin serves every tab; this picks the machine scope's tools (`rai mcp`).
-            "RAIGOLMI_SCOPE": "machine" if spec.tab.manager else "tab",
+            "RAIGOLMI_SCOPE": "machine" if spec.tab.janitor else "tab",
             # A tab is one foreground session. Sent to the background (← or /bg), its
             # session record outlives the container and blocks `--continue`.
             "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
@@ -679,7 +646,7 @@ class Agents:
 
     def _link_archived(self, tab: TabIntent) -> None:
         """Every archived conversation of this tab's kind — its body's, the machine tab's or
-        the manager's — linked into its home beside its own, so Claude Code's `/resume`
+        the janitor's — linked into its home beside its own, so Claude Code's `/resume`
         lists them under *all projects* (Ctrl+A) and resumes one in place, writing on in the
         archive. Beside `-work`, never in it: `--continue` reads only `-work`, so a reopen
         still resumes the tab's own conversation and a new tab still starts fresh. Hard
@@ -691,7 +658,7 @@ class Agents:
         for record in sorted(self.paths.agent_archive.glob("*.json")):
             kept = json.loads(record.read_text(encoding="utf-8"))
             if (kept.get("body") != tab.body
-                    or (kept.get("tab") == MANAGER) != tab.manager):
+                    or (kept.get("tab") == JANITOR) != tab.janitor):
                 continue
             archived = record.with_suffix("")
             source = (archived if kept.get("fresh_restart")
@@ -730,7 +697,7 @@ class Agents:
 
     def restart(self, spec: AgentSpec, resume: bool = True) -> tuple[str, bool]:
         """A crashed tab's reopen, and the user's **Restart agent** — the prior
-        conversation resumed in a new container — or the manager's fresh restart, which
+        conversation resumed in a new container — or the janitor's fresh restart, which
         archives it. The container, and whether it resumed. Nothing is lost silently."""
         tab = spec.tab
         self.stop(tab.tab_id)

@@ -11,10 +11,10 @@ Every document opens with a header (`HEADER_FORMAT`) naming its purpose, what do
 in it, its shape, and the size its last audit left; a doc without one, or grown well past that
 size, is due an audit against it.
 
-The manager's documents are the machine's, not a tab's, so they live in the daemon's state and
-outlive every manager session (`Paths.manager_documents`, mounted at `/manager`). The daemon
-opens an incident's doc as it hands the manager the failure, so there is one per incident
-whether or not the manager remembers to write it; the manager moves it to `fixed/` when it is
+The janitor's documents are the machine's, not a tab's, so they live in the daemon's state and
+outlive every janitor session (`Paths.janitor_documents`, mounted at `/janitor`). The daemon
+opens an incident's doc as it hands the janitor the failure, so there is one per incident
+whether or not the janitor remembers to write it; the janitor moves it to `fixed/` when it is
 repaired, and keeps `patterns.md`, the failures this machine has shown and what fixed them.
 """
 from __future__ import annotations
@@ -161,7 +161,7 @@ def record_incident(root: Path, event: Event) -> Path:
     return doc
 
 
-def manager_index(root: Path, layers: list[Layer]) -> dict[str, Any]:
+def janitor_index(root: Path, layers: list[Layer]) -> dict[str, Any]:
     incidents = root / INCIDENTS
     expected: list[tuple[Path, Path | None, str]] = [
         *((doc, None, "an open incident: the failure, and your diagnosis and repair as you "
@@ -178,7 +178,7 @@ def manager_index(root: Path, layers: list[Layer]) -> dict[str, Any]:
 
 
 # A document is kept small so it is read whole; its budget says how small for
-# its kind. Past it, the manager is sent to cut it down.
+# its kind. Past it, the janitor is sent to cut it down.
 BUDGET = {LAYER_DOC: 8 * 1024, SESSION_START: 16 * 1024, PATTERNS: 32 * 1024}
 
 # Every document opens with its header: what it is for, what is not, and how it grows. It is an
@@ -196,7 +196,7 @@ _HEADER_OPEN = "<!-- purpose:"
 _AUDITED = re.compile(r"^(\d+) (\d{4}-\d{2}-\d{2})$")
 # A doc is audited again once it has grown by a quarter since the last audit, whatever its size:
 # a design doc and a starting guide drift at the same rate relative to what they hold. Growth of
-# under a few pages is still cheap to read whole, so it never pages the manager.
+# under a few pages is still cheap to read whole, so it never pages the janitor.
 GROWTH = 1.25
 GROWTH_FLOOR = 4 * 1024
 
@@ -262,7 +262,7 @@ def _is_file_reference(path: str, base: Path) -> bool:
     return "/" in path and (base / path.split("/", 1)[0]).exists()
 
 
-# `/work` is the definitions to the manager and a working copy to a tab, so a file under it is a
+# `/work` is the definitions to the janitor and a working copy to a tab, so a file under it is a
 # different file to each reader. A doc cites from its own directory or `/definitions`. `/work`
 # alone names the mount point, which a body's own command may quote, and is no file claim.
 _AMBIGUOUS = "/work"

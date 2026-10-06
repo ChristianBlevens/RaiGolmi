@@ -212,7 +212,7 @@ def test_the_tabs_that_always_exist_are_opened_as_the_surfaces_come_up(daemon):
 
 
 def test_a_surface_that_exited_comes_back_on_reconcile_as_it_rests(daemon):
-    """The manager takes a host surface that exits, and its reconcile is the repair.
+    """The janitor takes a host surface that exits, and its reconcile is the repair.
     The popup has no key to start it again, so without this only a daemon restart would."""
     _bring_up(daemon)
     runtime = daemon.session.runtime

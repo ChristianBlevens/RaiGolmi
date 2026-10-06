@@ -36,7 +36,7 @@ RUN python3 -m venv /usr/lib/raigolmi && \
     rm -rf /src
 
 #  The disk's own source tree (.containerignore drops machine-local files): the host images
-#  build from it in the repository's layout, and the manager reads it to understand the OS.
+#  build from it in the repository's layout, and the janitor reads it to understand the OS.
 #  The images are built by host/ci/bake-host-images.sh and added by Containerfile.images,
 #  since nothing in this build can run a container (raigolmid/hostimages.py).
 COPY . /usr/share/raigolmi/src

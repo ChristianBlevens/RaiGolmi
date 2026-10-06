@@ -108,7 +108,7 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "agent.crashed": lambda e: e.data["message"],
     "tab.stalled": lambda e: e.data["message"],
     "tab.spinning": lambda e: e.data["message"],
-    "tab.unstuck": lambda e: "its turn stopped by the manager, which said why",
+    "tab.unstuck": lambda e: "its turn stopped by the janitor, which said why",
     "tab.managed": lambda e: (None if e.data.get("why") == "continued"
                               else _handed(e) if e.data["on"]
                               else "given back by the daemon: your time for it ran out"
@@ -138,9 +138,9 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
                                 f"your answer to {e.data['id']}: your preferences already "
                                 "said so"),
     # A failure this records itself is said once, not again for being handed on.
-    "manager.queued": lambda e: (None if e.data["failure"] in SAYS.keys() | NOTICED.keys() else
+    "janitor.queued": lambda e: (None if e.data["failure"] in SAYS.keys() | NOTICED.keys() else
                                  f"handed {e.data['failure']}. {e.data['incident']}"),
-    "manager.incident_fixed": lambda e: f"fixed: {e.data['incident']}",
+    "janitor.incident_fixed": lambda e: f"fixed: {e.data['incident']}",
     "body.base_local": lambda e: (f"body {e.data['body']} used the machine's copy of "
                                   f"{e.data['image']}: the registry did not answer "
                                   f"({e.data['reason']})"),
@@ -151,9 +151,9 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "documents.maintenance": lambda e: e.data["message"],
     "disk.grown": lambda e: (f"the disk holds {_gb(e.data['used'])} GB, grown since "
                              f"{time.strftime('%a %H:%M', time.localtime(e.data['since']))}; "
-                             "the manager is looking at what grew"),
+                             "the janitor is looking at what grew"),
     "disk.short": lambda e: (f"the disk has {_gb(e.data['free'])} GB of "
-                             f"{_gb(e.data['size'])} GB free; the manager is looking"),
+                             f"{_gb(e.data['size'])} GB free; the janitor is looking"),
     "account.limited": lambda e: (
         "the account's usage limit was reached; "
         + ("its reset was not said, so a tab is tried again every few minutes"
@@ -171,12 +171,12 @@ NOTICED: dict[str, Callable[[Event], str]] = {
     "keyboard.failed": lambda e: (f"Your keyboard or display settings were not applied: "
                                   f"{e.data['error']}"),
     "look.failed": lambda e: f"Your look settings were not applied: {e.data['error']}",
-    "manager.unfixable": lambda e: e.data["message"],
+    "janitor.unfixable": lambda e: e.data["message"],
     "channel.unheard": lambda e: e.data["message"],
     "coordinator.unanswered": lambda e: e.data["message"],
-    "manager.open_failed": lambda e: f"The manager tab could not open: {e.data['error']}",
+    "janitor.open_failed": lambda e: f"The janitor tab could not open: {e.data['error']}",
     "agent.turn_failed": lambda e: e.data["message"],
-    "stalls.unstick_failed": lambda e: (f"The manager tab was stuck and could not be "
+    "stalls.unstick_failed": lambda e: (f"The janitor tab was stuck and could not be "
                                         f"restarted: {e.data['error']}"),
     "claude_login.lost": lambda e: (
         f"Your claude.ai sign-in has ended ({e.data['error']}): your tabs go on without Remote "
@@ -192,9 +192,9 @@ NOTICED: dict[str, Callable[[Event], str]] = {
         + f": {e.data['error']}"),
 }
 
-# A notice's failure that a later event shows is over: the manager that
+# A notice's failure that a later event shows is over: the janitor that
 # could not open has opened; a setting the compositor refused has since been applied.
-OVER = {"manager.opened": frozenset({"manager.open_failed"}),
+OVER = {"janitor.opened": frozenset({"janitor.open_failed"}),
         "hostkeys.applied": frozenset({"hostkeys.failed"}),
         "keyboard.applied": frozenset({"keyboard.failed"}),
         "look.applied": frozenset({"look.failed"}),
@@ -227,7 +227,7 @@ def _number(id: str) -> int:
 
 
 class History:
-    """Subscribed at construction, like the manager, so a failure of the daemon's own start
+    """Subscribed at construction, like the janitor, so a failure of the daemon's own start
     is in it."""
 
     def __init__(self, events: EventLog, paths: Paths) -> None:

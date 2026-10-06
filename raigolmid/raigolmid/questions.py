@@ -157,7 +157,7 @@ def outcome_message(item: Item, answer: str | None) -> str:
 
 
 class Questions:
-    """Subscribed at construction, like the manager, so no judge's verdict falls between the
+    """Subscribed at construction, like the janitor, so no judge's verdict falls between the
     daemon's start and `run`."""
 
     def __init__(self, events: EventLog, paths: Paths) -> None:

@@ -1,20 +1,20 @@
-"""The manager tab's failures.
+"""The janitor tab's failures.
 
 Every failure that interrupts regular use, with no agent already handling it, is put in front
-of one agent tab, `manager`, so the user is never the one who has to bring it to an AI. This
-module decides which events are such failures, opens the manager for the first one, and holds
-the rest until the manager can take them.
+of one agent tab, `janitor`, so the user is never the one who has to bring it to an AI. This
+module decides which events are such failures, opens the janitor for the first one, and holds
+the rest until the janitor can take them.
 
-Delivery is the manager's channel, the same as every tab's (`channel.py`): a failure is
-queued there by the `manager.queued` event that carries it, and the channel pushes it into the
-manager's session while it is idle, one at a time, and says it when it could not be heard.
-A failure is queued after the manager is opened for it, so a manager that could not open
+Delivery is the janitor's channel, the same as every tab's (`channel.py`): a failure is
+queued there by the `janitor.queued` event that carries it, and the channel pushes it into the
+janitor's session while it is idle, one at a time, and says it when it could not be heard.
+A failure is queued after the janitor is opened for it, so a janitor that could not open
 closes no queue: the failure waits for the next open. That is tried again when a credential is
 stored (`credential.stored`), and not at all while there is none, because no agent can start
-without one. Why the manager cannot open is said once per reason, not once per failure held.
+without one. Why the janitor cannot open is said once per reason, not once per failure held.
 
-An incident is fixed when the manager moves its doc to `incidents/fixed/`, as its template
-says; the end of each of its turns says the ones moved since (`manager.incident_fixed`).
+An incident is fixed when the janitor moves its doc to `incidents/fixed/`, as its template
+says; the end of each of its turns says the ones moved since (`janitor.incident_fixed`).
 
 The queue is in memory: a daemon restart re-derives the machine's state, and a
 failure that still holds is said again by what finds it.
@@ -28,14 +28,14 @@ from typing import TYPE_CHECKING
 
 from . import credential, documents
 from .events import Event, EventLog
-from .intent import MANAGER
+from .intent import JANITOR
 
 if TYPE_CHECKING:
     from .session import Session
 
 logger = logging.getLogger(__name__)
 
-# What the manager takes. Everything else is either development failing back to the
+# What the janitor takes. Everything else is either development failing back to the
 # agent that asked (a build, an API error to its caller) or interrupts nothing.
 TAKEN = frozenset({
     "container.unfixable",        # one restart spent or failed (`supervisor.py`)
@@ -68,14 +68,14 @@ TAKEN = frozenset({
 })
 
 def message(event: Event, incident: str) -> str:
-    """What the manager reads: the failure as the event log has it, and where its incident
-    is written. Its job is its template's (`agents.MANAGER_TEMPLATE`), said once there."""
+    """What the janitor reads: the failure as the event log has it, and where its incident
+    is written. Its job is its template's (`agents.JANITOR_TEMPLATE`), said once there."""
     return (f"RaiGolmi failure `{event.type}` at "
             f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(event.ts))}:\n"
             f"{event.to_json()}\n\n{incident}")
 
 
-class Manager:
+class Janitor:
     """Subscribed at construction, so the failures of the daemon's own start are not missed:
     the reconcile and the host surfaces run before any thread would otherwise be listening."""
 
@@ -83,7 +83,7 @@ class Manager:
         self.session = session
         self.events = events
         self._sub = events.subscribe()
-        # Whether failures are queued for a manager that could not open, and the reason last said.
+        # Whether failures are queued for a janitor that could not open, and the reason last said.
         self._held = False
         self._unopened: str | None = None
         self._fixed = self._fixed_now()
@@ -96,78 +96,78 @@ class Manager:
             if self._sub.dropped:
                 # Events lost here are failures nobody is told about; the loss is itself one.
                 count, self._sub.dropped = self._sub.dropped, 0
-                self.events.emit("manager.events_dropped", count=count)
+                self.events.emit("janitor.events_dropped", count=count)
 
     def on_event(self, event: Event) -> None:
         if event.type == "credential.stored":
             if self._held:
                 self._ensure_open()
             return
-        if event.tab == MANAGER:
-            self._on_manager_event(event)
+        if event.tab == JANITOR:
+            self._on_janitor_event(event)
             return
         if event.type not in TAKEN:
             return
         self._ensure_open()
-        root = self.session.paths.manager_documents
+        root = self.session.paths.janitor_documents
         meta = {"failure": event.type}
         try:
             doc = documents.record_incident(root, event)
-            meta["incident"] = f"/manager/{doc.relative_to(root)}"
+            meta["incident"] = f"/janitor/{doc.relative_to(root)}"
             incident = f"Its incident is {meta['incident']}: write your diagnosis and repair there."
         except OSError as exc:
-            # The failure still reaches the manager; it may be the reason the write failed.
+            # The failure still reaches the janitor; it may be the reason the write failed.
             incident = f"Its incident doc could not be written in {root}: {exc}"
-        self.events.emit("manager.queued", tab=MANAGER, failure=event.type, incident=incident,
+        self.events.emit("janitor.queued", tab=JANITOR, failure=event.type, incident=incident,
                          deliver={"content": message(event, incident), "meta": meta})
 
-    def _on_manager_event(self, event: Event) -> None:
+    def _on_janitor_event(self, event: Event) -> None:
         if event.type == "agent.idle":
             self._say_fixed()
-        if event.type == "manager.fresh_conversation":
+        if event.type == "janitor.fresh_conversation":
             # The channel holds the failure until the new session is up (`channel.py`).
             try:
-                self.session.restart_agent(MANAGER, resume=False)
+                self.session.restart_agent(JANITOR, resume=False)
             except Exception as exc:                   # noqa: BLE001
-                # Reported, and the failure stays held: a manager that cannot restart is
+                # Reported, and the failure stays held: a janitor that cannot restart is
                 # past what it could be handed anyway.
-                self.events.emit("manager.fresh_failed", tab=MANAGER,
+                self.events.emit("janitor.fresh_failed", tab=JANITOR,
                                  error=f"{type(exc).__name__}: {exc}")
         if event.type in ("container.unfixable", "container.exit_failed"):
-            # The manager past its restart is the user's: a manager for the manager
+            # The janitor past its restart is the user's: a janitor for the janitor
             # would loop on the same failure.
             self.events.emit(
-                "manager.unfixable", failure=event.type,
-                message="The manager tab is past reopening. Direct an agent session at it: "
+                "janitor.unfixable", failure=event.type,
+                message="The janitor tab is past reopening. Direct an agent session at it: "
                         f"its evidence is in {self.session.paths.crashes}.")
 
     def _fixed_now(self) -> set[str]:
-        fixed = self.session.paths.manager_documents / documents.INCIDENTS / documents.FIXED
+        fixed = self.session.paths.janitor_documents / documents.INCIDENTS / documents.FIXED
         return {d.name for d in fixed.glob("*.md")}
 
     def _say_fixed(self) -> None:
-        """An incident is fixed when the manager moves its doc to `fixed/` (its template),
+        """An incident is fixed when the janitor moves its doc to `fixed/` (its template),
         which it does in a turn: each turn's end says the ones moved since."""
         now = self._fixed_now()
         for name in sorted(now - self._fixed):
-            self.events.emit("manager.incident_fixed", tab=MANAGER,
-                             incident=f"/manager/{documents.INCIDENTS}/{documents.FIXED}/{name}")
+            self.events.emit("janitor.incident_fixed", tab=JANITOR,
+                             incident=f"/janitor/{documents.INCIDENTS}/{documents.FIXED}/{name}")
         self._fixed = now
 
     def _ensure_open(self) -> None:
         try:
             credential.read(self.session.paths.agent_credentials)
-            opened = self.session.open_manager()
+            opened = self.session.open_janitor()
         except Exception as exc:                       # noqa: BLE001
-            # Not routed back into the queue: the manager failing to open is the one failure
+            # Not routed back into the queue: the janitor failing to open is the one failure
             # it cannot take, and the queue keeps what it would have been given.
             self._held = True
             error = f"{type(exc).__name__}: {exc}"
             if error != self._unopened:
                 self._unopened = error
-                self.events.emit("manager.open_failed", error=error)
-                logger.error("manager tab: %s", exc)
+                self.events.emit("janitor.open_failed", error=error)
+                logger.error("janitor tab: %s", exc)
             return
         self._held, self._unopened = False, None
         if opened:
-            self.events.emit("manager.opened")
+            self.events.emit("janitor.opened")

@@ -2,7 +2,7 @@
 
 Claude Code ends a turn an API error cut off with `StopFailure` rather than `Stop` (`rai
 agent-activity failed`), so the tab is idle with the error on `agent.idle`. The tabs nobody
-sits in front of — the machine tab, the manager, and every tab the machine tab manages — are
+sits in front of — the machine tab, the janitor, and every tab the machine tab manages — are
 told to continue once what cut them off is over:
 
 - **the usage limit** (`rate_limit`) is the account's, not the tab's, since every tab spends the
@@ -148,7 +148,7 @@ class Limits:
 
     def _unattended(self, tab_id: str) -> bool:
         tab = self.session.intent.tabs.get(tab_id)
-        return tab is not None and (tab.machine or tab.manager or tab.managed)
+        return tab is not None and (tab.machine or tab.janitor or tab.managed)
 
     def _continue(self, tab_id: str, error: str) -> None:
         """A tab the user sits in front of is theirs to resume; it stays cut until it works."""

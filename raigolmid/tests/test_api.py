@@ -122,7 +122,7 @@ def test_a_missing_daemon_says_so_and_points_at_the_event_log(tmp_path):
 
 
 def test_reconcile_brings_back_the_resident_surfaces_that_are_not_running(api, monkeypatch):
-    """The manager's repair for a host surface that exited is `reconcile`."""
+    """The janitor's repair for a host surface that exited is `reconcile`."""
     client, _ = api
     started: list = []
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")

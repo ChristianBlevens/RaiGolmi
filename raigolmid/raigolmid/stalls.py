@@ -1,4 +1,4 @@
-"""A tab that is working and getting nothing done goes to the manager, whatever the cause.
+"""A tab that is working and getting nothing done goes to the janitor, whatever the cause.
 
 Every way a tab hangs looks the same from outside: it is busy, and nothing it does changes.
 A turn waiting on a tool that never returns or on a background job that has died, a session
@@ -9,14 +9,14 @@ cause, so a cause nobody has met yet is caught the same way. Only a body tab has
 copy of its own, so only a body tab is read for spinning; a job it runs printing
 (`job.progressed`, `jobs.py`) is its work moving too.
 
-Each is said once per episode as `tab.stalled` or `tab.spinning`, which the manager takes
-(`manager.py`) with the evidence: the transcript's last calls, the background tasks the tab
+Each is said once per episode as `tab.stalled` or `tab.spinning`, which the janitor takes
+(`janitor.py`) with the evidence: the transcript's last calls, the background tasks the tab
 named as waited on (`agent_stop.py`), and the processes in its agent's container and its
-sandbox's toolbelt — read from the host, since the manager has no shell in a sandbox. A wait that is real — a long test the tab is rightly
-waiting on — is said too, and the manager's look leaves it alone: one look is the price of
-never missing a hang. The manager's own stall has nobody to take it, so it is unstuck here.
+sandbox's toolbelt — read from the host, since the janitor has no shell in a sandbox. A wait that is real — a long test the tab is rightly
+waiting on — is said too, and the janitor's look leaves it alone: one look is the price of
+never missing a hang. The janitor's own stall has nobody to take it, so it is unstuck here.
 
-`unstick` is the manager's repair: the tab restarted on its conversation, which ends its turn
+`unstick` is the janitor's repair: the tab restarted on its conversation, which ends its turn
 and every background task in its container, and a note queued on its channel (`channel.py`),
 pushed when the new session comes up, saying what was stopped and what to do instead.
 
@@ -36,7 +36,7 @@ from . import git, naming
 from .agent_stop import Memory
 from .transcript import latest_transcript, main_rows
 from .events import Event, EventLog
-from .intent import MANAGER
+from .intent import JANITOR
 from .runtime.base import RuntimeError_
 from .session import SessionError
 
@@ -49,7 +49,7 @@ STALL_SECONDS = 600.0
 SPIN_SECONDS = 1800.0
 # Reading a working copy runs git, so the readings are taken this often rather than every second.
 TICK_SECONDS = 30.0
-# How much of the transcript the manager is handed.
+# How much of the transcript the janitor is handed.
 LAST_CALLS = 8
 CALL_CHARS = 400
 
@@ -119,18 +119,18 @@ def waited_on(home: Path) -> list[str]:
 
 def stalled_message(tab_id: str, minutes: int) -> str:
     return (f"Tab {tab_id} has been working for {minutes} minutes with nothing in its "
-            "conversation moving; the manager is looking at it.")
+            "conversation moving; the janitor is looking at it.")
 
 
 def spinning_message(tab_id: str, minutes: int) -> str:
     return (f"Tab {tab_id}'s conversation has moved for {minutes} minutes without anything in "
-            "its working copy changing; the manager is looking at it.")
+            "its working copy changing; the janitor is looking at it.")
 
 
 def unstuck_message(note: str) -> str:
-    return ("Your last turn was stopped by the manager tab: it had gone on without getting "
+    return ("Your last turn was stopped by the janitor tab: it had gone on without getting "
             "anything done. Every background task in your session was stopped with it. "
-            f"The manager says:\n\n{note}")
+            f"The janitor says:\n\n{note}")
 
 
 class Stalls:
@@ -198,7 +198,7 @@ class Stalls:
             message = stalled_message(tab_id, int((now - watch.moved_at) // 60))
             evidence = self._evidence(body, tab_id, home, watch.moved_at)
             self.events.emit("tab.stalled", tab=tab_id, message=message, **evidence)
-            self._unstick_manager(tab_id, message, evidence)
+            self._unstick_janitor(tab_id, message, evidence)
         elif (not watch.spinning and watch.tree is not None
               and now - watch.moved_at < STALL_SECONDS
               and now - watch.changed_at >= SPIN_SECONDS):
@@ -206,7 +206,7 @@ class Stalls:
             message = spinning_message(tab_id, int((now - watch.changed_at) // 60))
             evidence = self._evidence(body, tab_id, home, watch.changed_at)
             self.events.emit("tab.spinning", tab=tab_id, message=message, **evidence)
-            self._unstick_manager(tab_id, message, evidence)
+            self._unstick_janitor(tab_id, message, evidence)
 
     def _tree(self, tab_id: str) -> tuple | None:
         """Unreadable — a body no longer defined, a git that fails — is reported as unasked:
@@ -224,7 +224,7 @@ class Stalls:
 
     def _evidence(self, body: str | None, tab_id: str, home: Path,
                   since: float) -> dict[str, Any]:
-        """What the manager judges by, read-only: what the tab last called and waits on, and
+        """What the janitor judges by, read-only: what the tab last called and waits on, and
         what runs in its agent's container and its sandbox's toolbelt, where those calls ran."""
         sandbox = None if body is None else naming.instance_id(body, tab_id)
         containers = [naming.agent(tab_id)] + ([] if sandbox is None else [naming.view(sandbox)])
@@ -238,30 +238,30 @@ class Stalls:
         return {"since": since, "sandbox": sandbox, "waiting_on": waited_on(home),
                 "last_calls": last_calls(home), "processes": processes}
 
-    def _unstick_manager(self, tab_id: str, message: str, evidence: dict[str, Any]) -> None:
-        """Nobody takes the manager's own: it is unstuck here, told what it was doing."""
-        if tab_id != MANAGER:
+    def _unstick_janitor(self, tab_id: str, message: str, evidence: dict[str, Any]) -> None:
+        """Nobody takes the janitor's own: it is unstuck here, told what it was doing."""
+        if tab_id != JANITOR:
             return
         calls = "\n".join(f"- {c['tool']} {c['input']} -> {c['result']}"
                           for c in evidence["last_calls"])
         try:
-            unstick(self.session, self.events, MANAGER,
+            unstick(self.session, self.events, JANITOR,
                     f"{message}\nIts last calls:\n{calls}\nStart the failure you were on "
                     "again from its incident doc.")
         except Exception as exc:                       # noqa: BLE001
             # Said rather than raised: this thread ending would end the daemon.
-            self.events.emit("stalls.unstick_failed", tab=MANAGER,
+            self.events.emit("stalls.unstick_failed", tab=JANITOR,
                              error=f"{type(exc).__name__}: {exc}")
 
 
 
 
 def unstick(session: "Session", events: EventLog, tab_id: str, note: str) -> dict[str, Any]:
-    """The manager's repair: end a stuck tab's turn and every background task in its
+    """The janitor's repair: end a stuck tab's turn and every background task in its
     container, and start its next turn on `note` — what had stopped, and what to do instead."""
     if not note.strip():
         raise SessionError("unstick says what had stopped and what to do instead")
     session.restart_agent(tab_id, resume=True)
     events.emit("tab.unstuck", tab=tab_id, deliver={
-        "content": unstuck_message(note), "meta": {"from": "manager"}})
+        "content": unstuck_message(note), "meta": {"from": "janitor"}})
     return {"tab": tab_id, "status": "restarted", "note": "queued for its next session"}

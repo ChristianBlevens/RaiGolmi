@@ -96,7 +96,7 @@ class DockerRuntime(ContainerRuntime):
             kwargs["entrypoint"] = list(spec.entrypoint)
         if spec.mounts:
             # A list, not the SDK's dict keyed by source: one directory bound at two targets
-            # (the manager's /work and /definitions) is two mounts.
+            # (the janitor's /work and /definitions) is two mounts.
             kwargs["volumes"] = [
                 f"{m.source}:{m.target}:{'ro' if m.read_only else 'rw'}"
                 for m in spec.mounts
