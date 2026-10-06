@@ -25,6 +25,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -1539,6 +1540,13 @@ done
     {
         string name = new UTF8Encoding(false).GetString(Convert.FromBase64String(name64));
         string partial = Path.Combine(downloads, ".partial");
+        // The guest names the entry, and a Linux name may hold `C:\` or `\\server`, which
+        // Path.Combine takes as the whole path: only one name Windows can give a file is fetched.
+        if (!PlainName(name))
+        {
+            Tell(name + " stays in ~/Transfer/out: Windows cannot name a file that.");
+            return;
+        }
         try
         {
             if (Directory.Exists(partial))
@@ -1566,6 +1574,15 @@ done
             Tell(name + " stays in ~/Transfer/out: it could not be copied to " + downloads + ": " +
                  e.Message);
         }
+    }
+
+    static readonly Regex Device = new Regex(@"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$",
+                                             RegexOptions.IgnoreCase);
+
+    static bool PlainName(string name)
+    {
+        return name.Length > 0 && name != "." && name != ".." &&
+               name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && !Device.IsMatch(name);
     }
 
     static string Unique(string dir, string name)
