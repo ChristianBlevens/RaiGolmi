@@ -1,15 +1,19 @@
-"""What a project should take, said by its own tab and held to by the janitor.
+"""What a regular run of a project holds, said by its own tab: a tripwire that keeps the tab
+on top of what its project accumulates.
 
-A body's tab knows what its project needs — how large its build caches and its output may
-grow, how much memory its builds and runs take — and nothing else on the machine does. So the
-tab says it, in its body.toml (`[budget]`: `caches`, `output`, `memory`; `definitions.Budget`),
-when its project first holds build caches or output: the daemon asks it once (`budget.unset`).
-The disk and memory readings (`disk.py`, `memory.py`) hold each project to it, and a budget
-passed is the janitor's (`budget.exceeded`): it judges whether the budget should grow to fit
-what the project rightly holds, or the project should clear what it no longer needs, and tells
-the tab which. The janitor never changes a project's files; the tab does.
+A budget is not a ceiling with room to spare. It is the range a regular run of the project
+stays within when nothing is duplicated or stale — this build's caches, the runs and snapshots
+the work still cites, the memory its largest build or run takes — set close to that. Passing it
+is never trusted and never an error: it is the moment the tab looks, and either the excess is
+what the work now regularly needs, so the tab adjusts the budget to the new range, or it is
+leftovers — old builds, superseded runs, copies — and the tab clears back within it.
 
-The bodies asked are kept in `Paths.budget_asks`, so a tab is asked once, not at every start.
+The tab says it in its body.toml (`[budget]`: `caches`, `output`, `memory`;
+`definitions.Budget`) when its project first holds build caches or output: the daemon asks it
+once (`budget.unset`), and the asks are kept in `Paths.budget_asks`. The disk and memory
+readings (`disk.py`, `memory.py`) hold each project to it; a budget passed is delivered to the
+project's own tab to check (`budget.exceeded`), and is the janitor's only when the project has
+no tab to check it (`budget.untended`). Neither ever changes a project's files for it.
 """
 from __future__ import annotations
 
@@ -22,8 +26,8 @@ from .events import EventLog
 if TYPE_CHECKING:
     from .session import Session
 
-KINDS = {"caches": "its build caches", "output": "the other output its git ignores",
-         "memory": "its sandbox's peak working memory"}
+KINDS = {"caches": "build caches", "output": "other git-ignored output",
+         "memory": "peak working memory"}
 
 
 def gb(n: int) -> str:
@@ -33,12 +37,24 @@ def gb(n: int) -> str:
 def unset_message(body: str, held: dict[str, int]) -> str:
     holding = ", ".join(f"{KINDS[k]} {gb(v)}" for k, v in held.items())
     return (f"From the daemon: this project ({body}) now holds {holding}, and its body.toml "
-            "sets no budget. Add a `[budget]` table to "
-            f"/definitions/bodies/{body}/body.toml — `caches`, `output` and `memory`, each a "
-            "size like \"4G\" — with what this project should take as it grows: a fresh build's "
-            "caches with room for its next ones, the runs and snapshots it keeps, the memory "
-            "its largest build or run needs. The janitor holds the project to it, and tells you "
-            "when it is passed whether to clear something or to raise it.")
+            "sets no budget. A budget is the range a regular run of this project stays within "
+            "with nothing duplicated or stale, so you notice when it accumulates — not a "
+            "ceiling with room to spare. Measure what a regular run keeps (this build's caches, "
+            "the runs and snapshots the work still cites, the memory its largest build or run "
+            "takes), clear what is stale first, and set each close to that in a `[budget]` "
+            f"table in /definitions/bodies/{body}/body.toml: `caches`, `output`, `memory`, "
+            "each a size like \"2G\". When one is passed you are told, and check: if the excess "
+            "is what the work now regularly needs, set the budget to that new range; if it is "
+            "leftovers, clear back within it.")
+
+
+def exceeded_message(body: str, kind: str, budget: int, held: int) -> str:
+    return (f"From the daemon: this project's {KINDS[kind]} came to {gb(held)}, past the "
+            f"{gb(budget)} budget set for a regular run. Check what grew: if it is what the work now "
+            f"regularly needs, set `{kind}` in /definitions/bodies/{body}/body.toml to that new "
+            "range; if it is leftovers — old builds, superseded runs, copies — clear them "
+            "back within the budget (a build cache with its own tool, once anything the project "
+            "needs is moved out of it). Say which you did.")
 
 
 class Budgets:
@@ -79,8 +95,15 @@ class Budgets:
 
     def say_over(self, body: str, kind: str, budget: int, held: int,
                  **evidence: Any) -> None:
+        """To the project's tab, which checks it; the janitor's only with no tab to."""
         tab = self.session.intent.body_tab(body)
-        self.events.emit("budget.exceeded", tab=tab.tab_id if tab else None, body=body,
-                         kind=kind, budget=budget, held=held,
-                         message=(f"{body}'s {KINDS[kind]} is {gb(held)}, past the "
-                                  f"{gb(budget)} its tab set"), **evidence)
+        said = f"{body}'s {KINDS[kind]} came to {gb(held)}, past the {gb(budget)} budget"
+        if tab is None:
+            self.events.emit("budget.untended", body=body, kind=kind, budget=budget,
+                             held=held, message=said + ", and it has no tab to check it",
+                             **evidence)
+            return
+        self.events.emit("budget.exceeded", tab=tab.tab_id, body=body, kind=kind,
+                         budget=budget, held=held, message=said, **evidence, deliver={
+                             "content": exceeded_message(body, kind, budget, held),
+                             "meta": {"from": "daemon"}})

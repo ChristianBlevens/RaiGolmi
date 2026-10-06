@@ -233,7 +233,7 @@ ports = [8000]
 path = "requirements.txt"
 action = "rebuild"
 
-[budget]                    # set by the project's tab; the janitor holds it to this
+[budget]                    # set by the project's tab: what a regular run keeps
 caches = "4G"
 output = "2G"
 memory = "3G"
@@ -300,14 +300,18 @@ what the tab was running, leaves a real long wait alone, and otherwise stops the
 tells it what went wrong. A turn that fails in a way retrying won't fix, like a tab that lost
 its sign-in, comes to it too.
 
-It keeps an eye on resources. Each project's tab says how much disk and memory the project
-should take, and the janitor tells the tab when it goes past that, and whether to clean up or
-raise the limit. Build caches like Rust's `target/` only ever grow, so it watches those
-separately from the project's other output. When the whole disk grows by a couple of GB or runs
-low, or the machine runs short of memory, it works out what took it: the machine's own leftovers
-it treats as a failure and fixes, and anything a project holds it puts to that project's tab,
-which knows what it still needs. It never deletes a project's files itself. It also notices a
-tab that has run past its context budget and tells it to wrap up; nothing is ever cut off.
+Each project's tab also keeps a budget: how much disk and memory a regular run of its project
+takes, with nothing stale. It isn't a limit. When the project goes past it, the tab is told and
+checks: either the work really needs more now and the budget moves, or it has piled up
+leftovers and cleans them up.
+
+The janitor keeps an eye on the machine's resources too. When the whole disk grows by a couple
+of GB or runs low, or the machine runs short of memory, it works out what took it, telling build
+caches like Rust's `target/` (which only ever grow) apart from a project's other output. The
+machine's own leftovers it treats as a failure and fixes; anything a project holds it puts to
+that project's tab, which knows what it still needs. It never deletes a project's files itself.
+It also notices a tab that has run past its context budget and tells it to wrap up; nothing is
+ever cut off.
 
 It also keeps the agents' documents in shape: one that's grown past its size, names something
 that no longer exists, or describes a layer that has since changed. The point is that you're

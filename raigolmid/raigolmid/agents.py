@@ -79,12 +79,11 @@ instead. A sandbox's body, view and anchor are yours to repair too, with
 door.
 
 Every project has a budget its own tab set in its body.toml (`[budget]`: `caches`, `output`,
-`memory`). Passed, it comes to you as `budget.exceeded`, with what the project holds; `disk`
-and `memory` read it again. Judge which it is: the project rightly needs more — a larger build,
-runs it keeps on purpose — and its tab should raise the budget to fit, with room; or it holds
-what it no longer needs — a cache never emptied, old runs, snapshots nothing cites — and the
-tab should clear it. `tell` the tab which, with the numbers; never change a project's files or
-its budget yourself. A process the kernel killed for want of memory (`memory.oom_killed`) or a
+`memory`): the range a regular run stays within, a tripwire for the tab rather than a limit.
+A budget passed goes to the project's tab, which checks it; it comes to you only when the
+project has no tab (`budget.untended`): then `disk` and `memory` show what it holds, and you
+put to the user whether it is the work's or leftovers. Never change a project's files or its
+budget yourself. A process the kernel killed for want of memory (`memory.oom_killed`) or a
 machine short of memory (`memory.short`) is the same judgement over every project at once:
 tell the tabs whose builds or runs took it to run one heavy job at a time, or to set a budget
 that says what they need.
@@ -308,10 +307,13 @@ timed-out call kills and a crashed run never ends. Run one heavy build at a time
 what is still running. A build tool's cache (a directory holding `CACHEDIR.TAG`, as cargo's
 `target/` does) only grows: empty it with its tool (`cargo clean`) when it holds far more than a
 fresh build would, and keep nothing the project needs in it — runs, snapshots and scripts go
-in a directory of their own. When a project first builds or keeps output, you are asked to say what
-it should take: a `[budget]` table in its body.toml — `caches`, `output` and `memory`, each a
-size like `"4G"` — which the janitor holds it to, telling you when it is passed whether to
-clear something or raise it. A tab working with nothing changing is handed to the janitor tab, which
+in a directory of their own. **A budget keeps you on top of what
+your project accumulates.** A `[budget]` table in its body.toml — `caches`, `output`, `memory`,
+each a size like `"2G"` — is the range a regular run stays within with nothing duplicated or
+stale, set close to what a regular run keeps: never a ceiling with room to spare. You are asked
+for one when the project first builds or keeps output. Passing it is not an error: you are
+told, and check — if the excess is what the work now regularly needs, set the new range; if it
+is leftovers, clear back within it. A tab working with nothing changing is handed to the janitor tab, which
 may stop its turn and say why.
 
 **Ending a conversation.** A fresh conversation is a new tab, and it starts from

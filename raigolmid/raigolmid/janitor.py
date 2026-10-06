@@ -63,7 +63,7 @@ TAKEN = frozenset({
     "agent.turn_failed",          # a turn cut off by an API error continuing will not fix
     "disk.grown",                 # the disk holding more than when last looked at (`disk.py`)
     "disk.short",                 # little of the disk left free
-    "budget.exceeded",            # a project past the budget its tab set (`budgets.py`)
+    "budget.untended",            # a project past its budget with no tab to check it
     "memory.oom_killed",          # a process killed for want of memory (`memory.py`)
     "memory.short",               # little of the machine's memory available
     "tab.over_budget",            # a conversation past the context budget (`contextwatch.py`)

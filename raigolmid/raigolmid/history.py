@@ -154,7 +154,8 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
                              "the janitor is looking at what grew"),
     "disk.short": lambda e: (f"the disk has {_gb(e.data['free'])} GB of "
                              f"{_gb(e.data['size'])} GB free; the janitor is looking"),
-    "budget.exceeded": lambda e: f"{e.data['message']}; the janitor is looking",
+    "budget.exceeded": lambda e: f"{e.data['message']}; its tab is checking",
+    "budget.untended": lambda e: f"{e.data['message']}; the janitor is looking",
     "memory.oom_killed": lambda e: (f"a process in {e.data['container']} was killed for want "
                                     "of memory; the janitor is looking"),
     "memory.short": lambda e: (f"the machine has {_gb(e.data['available'])} GB of memory "

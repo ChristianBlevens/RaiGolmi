@@ -126,8 +126,8 @@ def test_a_project_holding_output_with_no_budget_has_its_tab_asked_once(h, monke
         "asked once, not at every start"
 
 
-def test_a_budget_passed_goes_to_the_janitor_once_until_it_is_kept_again(h, monkeypatch):
-    assert "budget.exceeded" in TAKEN
+def test_a_budget_passed_goes_to_its_tab_to_check_once_until_it_is_kept_again(h, monkeypatch):
+    assert "budget.exceeded" not in TAKEN and "budget.untended" in TAKEN
     _budget(h, 'caches = "1M"\noutput = "8G"\n')
     watch = disk.Disk(h.session, h.events)
     _filesystem(monkeypatch, 20 * GB)
@@ -137,6 +137,7 @@ def test_a_budget_passed_goes_to_the_janitor_once_until_it_is_kept_again(h, monk
     [over] = h.events_of("budget.exceeded")
     assert (over.data["body"], over.data["kind"]) == ("myapi", "caches")
     assert over.data["caches"][0]["path"] == "target"
+    assert over.tab == h.tab("myapi") and "new range" in over.data["deliver"]["content"]
     assert not h.events_of("budget.unset"), "a project with a budget is not asked for one"
     _budget(h, "")      # an empty table keeps nothing, so nothing is past it
     watch.tick()
@@ -148,3 +149,23 @@ def test_a_budget_passed_goes_to_the_janitor_once_until_it_is_kept_again(h, monk
 def test_a_budget_that_is_not_a_size_is_a_definition_error(h):
     _budget(h, 'memory = "lots"\n')
     assert "myapi" not in h.session.catalogue.bodies
+
+
+def test_a_project_with_no_tab_past_its_budget_is_the_janitors(h, monkeypatch):
+    _budget(h, 'caches = "1M"\n')
+    tab = h.tab("myapi")
+    h.session.deselect("body")
+    h.session.close_tab(tab)
+    assert h.session.intent.body_tab("myapi") is None
+    _filesystem(monkeypatch, 20 * GB)
+    _body_output(h, 2)
+    disk.Disk(h.session, h.events).tick()
+    assert not h.events_of("budget.exceeded")
+    [untended] = h.events_of("budget.untended")
+    assert untended.data["body"] == "myapi"
+
+
+def test_the_ask_says_a_budget_is_a_regular_run_not_a_ceiling():
+    from raigolmid.budgets import unset_message
+    said = unset_message("myapi", {"caches": GB})
+    assert "regular run" in said and "not a" in said and "room to spare" in said

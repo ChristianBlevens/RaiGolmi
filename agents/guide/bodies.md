@@ -30,16 +30,20 @@ action = "rebuild"
 
 Also accepted: `target` and `context` (the Docker build's), `runtime`, `shell`, `read_only`.
 
-`[budget]` says what the project should take, each a size like `"4G"`: `caches` (its build
-tools' caches — every directory holding `CACHEDIR.TAG`, as cargo's `target/` does), `output`
-(the rest of what its git ignores), and `memory` (the peak working memory of its sandbox). Its
-tab sets it when the project first builds or keeps output; the janitor holds the project to it.
+`[budget]` is the range a regular run of the project stays within with nothing duplicated or
+stale, each a size like `"2G"`: `caches` (its build tools' caches — every directory holding
+`CACHEDIR.TAG`, as cargo's `target/` does), `output` (the rest of what its git ignores), and
+`memory` (the peak working memory of its sandbox). It is a tripwire that keeps the tab on top of
+what accumulates, not a ceiling: set it close to what a regular run keeps, after clearing what
+is stale. The tab is asked for it when the project first builds or keeps output, and told each
+time one is passed; then it checks whether the excess is what the work now regularly needs (and
+sets that range) or leftovers (and clears back within it).
 
 ```toml
-[budget]
-caches = "6G"
-output = "4G"
-memory = "5G"
+[budget]            # a regular run: this build's caches, the runs it cites, its largest build
+caches = "2G"
+output = "500M"
+memory = "3G"
 ```
 A `dockerfile` is resolved against the working copy when one is set, otherwise against the
 definition directory.
