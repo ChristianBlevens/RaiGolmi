@@ -1,0 +1,24 @@
+RaiGolmi
+Copyright (c) 2026 Christian Blevens. Its own source is under the MIT License (LICENSE).
+
+The published release carries other people's software, each under its own license:
+
+- The machine's disk and host image (ghcr.io/christianblevens/raigolmi) are Fedora 44
+  (quay.io/fedora/fedora-bootc:44) with packages from Fedora, among them sway, foot, tmux,
+  wl-clipboard, git, OpenSSH, nftables and Python. Each package's license is in its RPM
+  metadata (`rpm -qi <package>` on the machine), and its source is in Fedora's source
+  repositories: https://src.fedoraproject.org.
+- Docker CE (docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin,
+  docker-compose-plugin), installed from download.docker.com. Docker Engine, its CLI, Buildx
+  and Compose are under the Apache License 2.0, and containerd under the Apache License 2.0:
+  https://github.com/moby/moby, https://github.com/docker/cli,
+  https://github.com/docker/buildx, https://github.com/docker/compose,
+  https://github.com/containerd/containerd.
+- The Python packages raigolmid depends on, installed into /usr/lib/raigolmi from PyPI, each
+  under the license in its own distribution metadata there.
+
+`setup.bat` also installs, from their own publishers, MSYS2, the .NET 8 Desktop Runtime and
+a patched QEMU (GPL-2.0) and virglrenderer (MIT) from
+https://github.com/ChristianBlevens/raigolmi-packages, whose releases carry what each is built
+from. Claude Code is installed from npm when the machine builds its agent image, and is not
+part of the release.

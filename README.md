@@ -19,6 +19,10 @@ there's always a way back.
 On Windows it runs in a normal app window, with the whole OS inside a VM. It can also go on
 its own drive and boot on a real PC.
 
+It's a personal project, shared as it is. It works well on the PC it was built on, and it
+hasn't met many others yet, so if something goes wrong, see
+[When it goes wrong for you](#when-it-goes-wrong-for-you).
+
 ## Getting started
 
 ### Install it (Windows)
@@ -69,8 +73,9 @@ Press Ctrl+C to skip either sign-in. They'll be offered again later.
 The screen has three edges with a small tab on each. Put your mouse on a tab and it slides
 open, and move away to close it.
 
-- **Left, the selector.** Pick which desktop (face) you're in and which project (body) you're
-  working on. The catalog opens from here too.
+- **Left, the selector.** Pick which desktop (a *face*) you're in and which project (a
+  *body*: your project, set up to build and run exactly as it would deploy) you're working
+  on. The catalog opens from here too.
 - **Bottom, the AI terminal.** This is where the agents are, one tab each. You'll spend most
   of your time talking to the one called **machine**.
 - **Top, the history.** Everything the agents and the machine have done.
@@ -98,14 +103,15 @@ Your first one never changed. If a new one ever comes out broken, you just pick 
 one.
 
 Each desktop is its own thing, and nothing about it is fixed. It can use any
-wlroots-based compositor (sway, river, labwc and so on), any apps in nixpkgs,
-set up however you like.
+wlroots-based compositor (the program that draws your windows: sway, river, labwc and so
+on), any apps in nixpkgs (Nix's huge package collection), set up however you like.
 
 ### Working on a project with an agent
 
 You've got a Python API you've been meaning to speed up. You ask the machine tab to set it
 up as a body. It writes one that builds and runs the project the same way it would deploy,
-plus a toolbelt with Python and a language server.
+plus a *toolbelt*, the tools the agent and your editor work on it with: here, Python and a
+language server.
 
 You pick the body in the selector, and a new tab opens for it in the terminal. You tell that
 tab the search endpoint is slow. It opens a sandbox, runs the project and its tests, finds
@@ -124,12 +130,14 @@ stop after 4 hours."* Then you go to bed.
 
 The machine tab takes over both tabs, and they get a ◇ in the terminal. When they have
 questions, they ask the machine tab instead of you. It decides everything you didn't keep
-for yourself, and writes each decision down so you can overturn it. When a tab's conversation gets too long, its work is handed to a new tab that starts
-from its `SESSION-START.md`. If the usage limit cuts one off, it resumes once the limit resets.
+for yourself, and writes each decision down so you can overturn it. When a tab's
+conversation gets too long, its work is handed to a new tab that starts from its
+`SESSION-START.md`. If the usage limit cuts one off, it resumes once the limit resets.
 
 At 2am the notes-api tab hits the design question you said was yours. It stops and waits
-for you, and since every tab is a Remote Control session, if you're up you can answer it from your phone.
-Otherwise it's there in the morning. At the 4-hour mark the rest wrap up, and the machine
+for you, and since every tab is a Remote Control session (Claude's way of carrying on a
+session from the Claude app), if you're up you can answer it from your phone. Otherwise
+it's there in the morning. At the 4-hour mark the rest wrap up, and the machine
 tab writes its report on the run. You read it in the catalog, under Documents, Runs.
 
 ### When something breaks
@@ -405,12 +413,28 @@ It checks for and offers to install:
 - MSYS2;
 - a patched QEMU and virglrenderer, downloaded from
   [raigolmi-packages](https://github.com/ChristianBlevens/raigolmi-packages), because the
-  stock ones can't show the boot screen or give disk space back.
+  stock ones can't show the boot screen or give disk space back. Before installing them it
+  brings MSYS2 itself up to date, since MSYS2 only supports updating everything at once.
 
 If you say no, it prints the commands to install each one yourself. The app and disk come
 from [the `raigolmi` package](https://github.com/ChristianBlevens/RaiGolmi/pkgs/container/raigolmi)
 on GitHub's container registry. For a fresh disk, delete `disk\raigolmi.qcow2` and run it
-again.
+again. Keep the RaiGolmi folder out of OneDrive: the disk grows to 60 GB and changes all the
+time, so `setup.bat` won't put one there.
+
+### Removing it
+
+There's no uninstaller yet. To take it all off, close the window, then delete:
+
+- the RaiGolmi folder you cloned or unzipped, which holds the disk;
+- `%LOCALAPPDATA%\RaiGolmi` (the app's settings and keys) and `Downloads\RaiGolmi` (files the
+  machine sent you);
+- MSYS2, if nothing else of yours uses it: uninstall it from Windows' settings, or delete
+  `C:\msys64`. To keep it, remove just the patched packages' `IgnorePkg` lines from
+  `C:\msys64\etc\pacman.conf` and the next `pacman -Syu` puts the stock ones back;
+- the .NET 8 Desktop Runtime, from Windows' installed apps, if nothing else needs it;
+- the Windows Hypervisor Platform, as administrator:
+  `dism /online /disable-feature /featurename:HypervisorPlatform`, then restart.
 
 ### Building it yourself
 
@@ -448,6 +472,27 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
   work either. Firefox does, and so does Chromium with a few flags.
 - The clipboard between Windows and the machine carries text only.
 - Agents commit as `Claude (<tab>)`, and merging is up to you.
+- The app isn't signed, and it watches the keyboard so keys like Super reach the machine.
+  That combination can make antivirus software suspicious of it. It's built by the
+  `publish` workflow from this repository's source, which you can read or build yourself.
+
+### When it goes wrong for you
+
+Open an [issue on GitHub](https://github.com/ChristianBlevens/RaiGolmi/issues) and say what
+you did and what happened. If the machine is running, run `rai diagnose` in the `raigolmi`
+tab's shell and attach the file it makes: it bundles the logs and state. If the window itself
+won't start, attach `windows\qemu.log` from the RaiGolmi folder.
+
+### Privacy
+
+RaiGolmi itself sends nothing anywhere. What leaves your PC is what the parts it runs send:
+
+- the agents are Claude Code, so your code and conversations go to Anthropic, and with the
+  claude.ai sign-in, sessions show up in your Claude app through Remote Control;
+- Claude Code's own usage reporting is left as it ships;
+- toolbelts and a face's apps are downloaded from [Nixery](https://nixery.dev), and the images
+  faces and bodies build on come from their own registries (Fedora's, Docker Hub and so on);
+- updates come from GitHub, and the catalog talks to GitHub when you use it.
 
 ### How it keeps you safe
 
@@ -488,7 +533,7 @@ Run it from the `raigolmi` tab's shell.
 | `rai events [-f]` | The event log, read from disk if the daemon is down; `-f` follows it |
 | `rai ai restart <tab>` / `rai ai kill <tab>` | Restart a tab's agent, or stop it |
 | `rai diagnose` | Bundle the logs and state into one file you can send |
-| `rai credential --set`, `rai registry-token --login`, `rai claude-login --login` | Redo the three first-start steps (`--api-key` with `--set` takes a Console API key instead) |
+| `rai credential --set`, `rai registry-token --login`, `rai claude-login --login` | Redo the three first-start steps (`--api-key` with `--set` takes a Console API key instead, billed per token, and Remote Control doesn't work with one) |
 
 ### What it's made of
 
@@ -505,4 +550,5 @@ Run it from the `raigolmi` tab's shell.
 
 ## License
 
-MIT
+MIT: see [LICENSE](LICENSE). What the published release carries from others is listed in
+[NOTICE](NOTICE).
