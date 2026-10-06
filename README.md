@@ -16,6 +16,12 @@ and procedures. Or you can hand the agents a goal, tell them when to stop, and l
 working on their own. Whatever the agents change, a small core underneath stays put, so
 there's always a way back.
 
+![A desktop built in RaiGolmi: a day page that keeps what you write, with verbs that open a
+browser, an editor, notes, files, a shell or Claude](.github/screenshot.png)
+
+*One desktop someone built from nothing by asking for it, from the catalog. The small tabs at
+the edges are RaiGolmi's own: the selector, the AI terminal and the history.*
+
 On Windows it runs in a normal app window, with the whole OS inside a VM. It can also go on
 its own drive and boot on a real PC.
 
