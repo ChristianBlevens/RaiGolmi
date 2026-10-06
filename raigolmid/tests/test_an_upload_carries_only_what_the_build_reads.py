@@ -107,3 +107,29 @@ def test_what_the_user_unticks_is_left_out_now_and_next_time_but_not_what_a_buil
         layerfiles.choose(face, {"_compositors/sway/entry.sh"})
     layerfiles.choose(face, set())
     assert not (faces / "calm" / layerfiles.UPLOAD_IGNORE).exists()
+
+
+def _calm(faces: Path, extra: dict[str, str]) -> None:
+    _write(faces, {
+        "calm/face.toml": 'id = "calm"\n[desktop]\ncompositor = "sway"\nconfig_dir = "desktop/"\n',
+        "calm/desktop/sway.conf": "",
+        "_compositors/sway/Containerfile": "FROM fedora\n", **extra})
+
+
+def test_a_link_in_a_layer_is_refused_rather_than_followed(tmp_path):
+    """A link to the user's ssh key in a config directory would otherwise send the key."""
+    faces = tmp_path / "faces"
+    _calm(faces, {})
+    (tmp_path / "id_ed25519").write_text("PRIVATE KEY")
+    (faces / "calm" / "desktop" / "key").symlink_to(tmp_path / "id_ed25519")
+    with pytest.raises(layerfiles.LayerFilesError, match="symbolic link"):
+        layerfiles.upload_choice(load_face(faces / "calm"))
+
+
+def test_a_secret_looking_file_starts_unticked_and_stays_ticked_once_chosen(tmp_path):
+    faces = tmp_path / "faces"
+    _calm(faces, {"calm/desktop/.env": "", "calm/desktop/github_token": ""})
+    face = load_face(faces / "calm")
+    assert layerfiles.upload_choice(face)[2] == {"desktop/.env", "desktop/github_token"}
+    layerfiles.choose(face, {"desktop/.env"})
+    assert layerfiles.upload_choice(face)[2] == {"desktop/.env"}

@@ -212,7 +212,34 @@ def _walk(layer: Face | Toolbelt | Body) -> tuple[dict[str, Path], set[str]]:
                     out[p.relative_to(root).as_posix()] = p
                     if p != ignore_file:
                         required.add(p.relative_to(root).as_posix())
+    for name, path in out.items():
+        _not_a_link(path, root, name)
     return out, required
+
+
+def _not_a_link(path: Path, root: Path, name: str) -> None:
+    """An upload sends files, never what a link points at: a link to `~/.ssh/id_ed25519` in a
+    config directory would send the key."""
+    at = path
+    while True:
+        if at.is_symlink():
+            raise LayerFilesError(f"{name} is, or is under, a symbolic link ({at}); an upload "
+                                  "sends files, never what a link points at. Replace it with the "
+                                  "file it should carry, or remove it")
+        if at == root or at == at.parent:
+            return
+        at = at.parent
+
+
+# Names that hold credentials more often than not: left out of an upload unless the user ticks
+# them, and flagged in the list they choose from.
+_SECRET = re.compile(r"(\.env(\..*)?|.*\.pem|.*\.key|.*\.p12|.*\.pfx|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?"
+                     r"|\.credentials\.json|.*token.*|.*secret.*|\.netrc|\.npmrc|\.pypirc)",
+                     re.IGNORECASE)
+
+
+def looks_secret(name: str) -> bool:
+    return bool(_SECRET.fullmatch(posixpath.basename(name)))
 
 
 # The user's choice of what an upload leaves out, kept in the layer and never sent: the files
@@ -226,8 +253,13 @@ def upload_choice(layer: Face | Toolbelt | Body) -> tuple[dict[str, Path], set[s
     leaves out. A saved choice that leaves out what a build reads is refused by name."""
     files, required = _walk(layer)
     saved = layer.directory / UPLOAD_IGNORE
-    ignore = Ignore(saved.read_text(encoding="utf-8")) if saved.is_file() else Ignore()
-    excluded = {name for name in files if ignore.excludes(name)}
+    text = saved.read_text(encoding="utf-8") if saved.is_file() else ""
+    ignore = Ignore(text)
+    # A secret-looking name the user ticked is saved as a re-include (`!name`).
+    ticked = {line[1:] for line in text.splitlines() if line.startswith("!")}
+    excluded = {name for name in files if ignore.excludes(name)} | {
+        name for name in files
+        if looks_secret(name) and name not in ticked and name not in required}
     if excluded & required:
         raise LayerFilesError(f"{saved} leaves out {sorted(excluded & required)}, which its "
                               "build reads; another machine could not build it")
@@ -248,7 +280,10 @@ def choose(layer: Face | Toolbelt | Body, excluded: set[str]) -> None:
         raise LayerFilesError(f"{odd} hold pattern characters, so {UPLOAD_IGNORE} cannot name "
                               "them alone; rename them to leave them out")
     path = layer.directory / UPLOAD_IGNORE
-    if excluded:
-        path.write_text("".join(f"{name}\n" for name in sorted(excluded)), encoding="utf-8")
+    ticked = sorted(name for name in files if looks_secret(name) and name not in excluded
+                    and name not in required and not _GLOB.search(name))
+    lines = [*sorted(excluded), *(f"!{name}" for name in ticked)]
+    if lines:
+        path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
     else:
         path.unlink(missing_ok=True)

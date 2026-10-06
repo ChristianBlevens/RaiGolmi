@@ -388,7 +388,8 @@ class Catalog:
             raise CatalogError(str(exc)) from exc
         return {"kind": kind, "id": layer_id,
                 "files": [{"name": n, "bytes": p.stat().st_size, "required": n in required,
-                           "excluded": n in excluded} for n, p in sorted(files.items())]}
+                           "excluded": n in excluded, "secret": layerfiles.looks_secret(n)}
+                          for n, p in sorted(files.items())]}
 
     def upload(self, kind: str, layer_id: str,
                excluded: list[str] | None = None) -> dict[str, Any]:

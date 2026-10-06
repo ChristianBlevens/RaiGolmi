@@ -55,6 +55,8 @@ def note(entry: dict[str, Any]) -> tuple[str, bool] | None:
         return entry["problem"], True
     if entry.get("in_use"):
         return f"in use: {entry['in_use']}", False
+    if entry["state"] != "installed" and not entry.get("authored"):
+        return "someone else's code: installed, it runs on your machine as yours does", False
     return None
 
 

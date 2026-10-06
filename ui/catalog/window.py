@@ -550,7 +550,8 @@ class CatalogWindow:
             if name in files:
                 f = files[name]
                 text = f"{leaf}  ({f['bytes']} bytes)" + (
-                    "  — its build reads it" if f["required"] else "")
+                    "  — its build reads it" if f["required"] else "") + (
+                    "  — looks like it holds a secret" if f["secret"] else "")
                 locked = f["required"]
             else:
                 text, locked = f"{leaf}/", all(files[n]["required"] for n in under[name])
