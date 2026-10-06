@@ -191,7 +191,7 @@ myself, and I'm sharing it in case other people find it useful too.
 To be upfront about how it was made: my part was almost entirely design and testing. I
 decided what it should be and how it should work, used it, and reported what was wrong. The
 implementation itself was almost all written by AI. Only around 1% of the code is mine, and
-that was minor tweaks. I do not wish to pretend that I have the ability to code this myself in only 2 weeks.
+that was minor tweaks. I do not wish to pretend that I have the ability to code this myself.
 
 The name comes from *raise* a golem. *Golmi* is the unformed stuff it's made from.
 
