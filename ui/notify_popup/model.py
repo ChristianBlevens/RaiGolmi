@@ -55,11 +55,12 @@ class MenuModel:
             return None
         return max((e["id"] for e in self.entries), key=_number)
 
-    def shown(self) -> list[dict]:
-        """The entries drawn in the current shape, newest first."""
-        if self.shape == ARRIVAL:
+    def shown(self, shape: str | None = None) -> list[dict]:
+        """The entries drawn in `shape` (the current one by default), newest first."""
+        shape = shape or self.shape
+        if shape == ARRIVAL:
             return [e for e in reversed(self.entries) if e["id"] in self.arrivals]
-        return list(reversed(self.entries)) if self.shape == MENU else []
+        return list(reversed(self.entries)) if shape == MENU else []
 
     def fail(self, text: str, now: float, *, reading: bool) -> None:
         if text != self.failure and self.shape != MENU:

@@ -128,6 +128,7 @@ class Popup:
         self.drafts: dict[str, str] = {}
         self.failure = ""
         self._drawn: tuple | None = None
+        self._built: tuple | None = None
         self._keyboard = False
         self._said_seen: str | None = None  # the newest entry said seen, so it is said once
 
@@ -176,10 +177,8 @@ class Popup:
         self.handle.set_size_request(look.tab_length, look.tab_depth)
         self.holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.END,
                               vexpand=True)
-        # A panel from the start, waiting past the edge as every surface's does: its first
-        # paint is paid here rather than by the first opening, which it held back 300 ms.
-        self.panel = self._panel()
-        self.holder.append(self.panel)
+        # The panel is built by the first `_draw`, before the window is presented, so its
+        # first paint is paid at start rather than by the first opening.
         room = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         room.set_size_request(width, room_depth)
         room.append(self.holder)
@@ -271,29 +270,46 @@ class Popup:
             self._mark_seen(through)
         # ⚠ The keyboard is not part of what is drawn: the click that takes it is still on
         # its way to a button, and rebuilding the panel under it would lose that click.
-        drawn = (model.shape, model.lit, model.failure,
-                 tuple((e["id"], e["over"], e.get("item", {}).get("state"),
-                        e.get("item", {}).get("by")) for e in model.shown()))
+        # Folded, the panel waiting past the edge is the menu's, so pointing at the tab only
+        # slides it: building every row on the way out is what held the opening back.
+        shape = MENU if model.shape == HANDLE else model.shape
+        content = (shape, model.failure,
+                   tuple((e["id"], e["over"], e.get("item", {}).get("state"),
+                          e.get("item", {}).get("by")) for e in model.shown(shape)))
+        drawn = (model.shape, model.lit, content)
         if drawn == self._drawn:
             return
         focused = next((id for id, e in self.entries.items() if e.has_focus()), None)
-        self.drafts.update({id: e.get_text() for id, e in self.entries.items()})
-        self._drawn, self.entries = drawn, {}
+        self._drawn = drawn
 
         self.handle.set_css_classes(["handle", "lit"] if model.lit else ["handle"])
         if model.shape == HANDLE:
-            self.edge.move(False)
+            # Swapped once it is shut, so a notice sliding away keeps its own rows.
+            self.edge.move(False, lambda _: self._wait(content))
         else:
-            if self.panel is not None:
-                self.holder.remove(self.panel)
-            self.panel = self._panel()
-            self.holder.append(self.panel)
-            self.edge.refit()
+            self._build(content)
             # Pointed at, it is the user's gesture and closes the others; a notice is the
             # machine's.
             self.edge.move(True, gesture=model.shape == MENU)
         if focused in self.entries:
             self.entries[focused].grab_focus()
+
+    def _wait(self, content: tuple) -> None:
+        if self.model.shape == HANDLE and self._drawn[2] == content:
+            self._build(content)
+
+    def _build(self, content: tuple) -> None:
+        """The panel for `content`, unless it is the one already in place."""
+        if content == self._built:
+            return
+        self.drafts.update({id: e.get_text() for id, e in self.entries.items()})
+        self.entries = {}
+        if self.panel is not None:
+            self.holder.remove(self.panel)
+        self.panel = self._panel(content[0])
+        self.holder.append(self.panel)
+        self._built = content
+        self.edge.refit()
 
     def _panel_depth(self) -> int:
         if self.panel is None:
@@ -310,14 +326,14 @@ class Popup:
         self._then(self.model.open if opened else self.model.escape)
         self.edge.move(self.edge.slide.opened, settle)
 
-    def _panel(self) -> Gtk.Widget:
+    def _panel(self, shape: str) -> Gtk.Widget:
         model = self.model
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         panel.add_css_class("panel")
         rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        for entry in model.shown():
+        for entry in model.shown(shape):
             rows.append(self._row(entry))
-        if model.shape == ARRIVAL:
+        if shape == ARRIVAL:
             panel.append(rows)
         else:
             if not model.entries:
