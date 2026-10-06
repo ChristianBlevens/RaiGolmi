@@ -7,8 +7,9 @@ user (`questions.py`), and a message between tabs or its answer (`messages.py`, 
 `messages`). No producer calls this module: an event whose data carries `deliver`
 (`{"content", "meta"}`) is queued on the channel of the tab it names.
 
-A push to a busy session is refused as untrusted, so a tab is handed one message at a time and
-only while idle. A channel Claude Code has not registered drops a push silently, and nothing
+A push to a busy session is refused as untrusted, so a tab is pushed one message at a time and
+only while idle; what a person would type into it reaches a working tab at its next tool call
+instead, through its `PostToolUse` hook (`take_midturn`). A channel Claude Code has not registered drops a push silently, and nothing
 tells the server when it is (a push even 9 ms early is lost). So a push counts as heard
 only on positive evidence: the turn it starts, whose prompt hook reports the push's `seq`
 (`agent.busy` with `channel_seq`). A turn the user typed carries none, so it never hears a
@@ -59,6 +60,12 @@ FAILURE = "janitor.queued"
 PUSHES_BEFORE_DEAF = 3
 # The channel asks every second, so this only sets how soon a poller that stopped is said.
 SILENT_SECONDS = 30.0
+# What reaches a working tab at its next tool call (`take_midturn`): words a person or another
+# tab would type into it — a direction, the janitor's word, a tab's message, the user's words
+# through a face. Everything else needs a turn of its own and waits for the tab to be idle.
+MIDTURN = frozenset({"coordinator.directed", "janitor.told", "message.sent", "face.asked"})
+# Claude Code's limit on what a hook adds to the conversation.
+MIDTURN_CHARS = 10_000
 
 
 @dataclass(slots=True)
@@ -329,6 +336,32 @@ class Channels:
             self.events.emit("channel.pushed", tab=tab_id, seq=self._seq,
                              cause=tab.pushed.message.cause)
             return self._item(tab.pushed)
+
+    def take_midturn(self, tab_id: str) -> list[str]:
+        """What a working tab is handed at its next tool call, by its `PostToolUse` hook,
+        which Claude Code adds to the turn as the harness's own context: a push into a busy
+        session arrives as an untrusted channel event the model does not act on, while what
+        a person types is read at that same boundary. Taken in order, up to `MIDTURN_CHARS`,
+        stopping at the first message that must wait for the tab to be idle."""
+        self._catch_up()
+        agent = self.session.intent.tabs.get(tab_id)
+        if agent is None or not agent.busy or time.time() < self._hold_until:
+            return []
+        taken: list[str] = []
+        with self._lock:
+            tab = self._tabs.get(tab_id)
+            if tab is None:
+                return []
+            while tab.queue and tab.queue[0].cause in MIDTURN:
+                if sum(map(len, taken)) + len(tab.queue[0].content) > MIDTURN_CHARS and taken:
+                    break
+                message = tab.queue.popleft()
+                taken.append(message.content[:MIDTURN_CHARS])
+                self.events.emit("channel.midturn", tab=tab_id, cause=message.cause,
+                                 meta=message.meta)
+            if taken:
+                self._save()
+        return taken
 
     @staticmethod
     def _item(pushed: Pushed) -> dict[str, Any]:

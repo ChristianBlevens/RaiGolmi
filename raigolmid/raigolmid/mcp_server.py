@@ -325,9 +325,9 @@ def build_server(client: ApiClient):
         return call("managed_tab", tab=tab, turns=turns, lines=lines,
                     session_start=session_start)
 
-    @tool(server, description="Machine tab only: tell a tab you manage what to do. It is "
-                             "that tab's next message once its turn ends; nothing comes back "
-                             "but the note that its turn ended.")
+    @tool(server, description="Machine tab only: tell a tab you manage what to do. A working "
+                             "tab reads it at its next tool call, an idle one starts on it; "
+                             "nothing comes back but the note that its turn ended.")
     def direct(tab: str, content: str) -> dict[str, Any]:
         return call("direct", tab=tab, content=content)
 
@@ -501,8 +501,9 @@ def build_machine_server(client: ApiClient):
     def unstick(tab_id: str, note: str) -> dict[str, Any]:
         return call("unstick", tab_id=tab_id, note=note)
 
-    @tool(server, description="Say something to a tab without stopping it: the note starts "
-                             "its next turn once it is idle, marked as from you.")
+    @tool(server, description="Say something to a tab without stopping it, marked as from you: "
+                             "a working tab reads it at its next tool call, an idle one starts "
+                             "on it.")
     def tell(tab_id: str, note: str) -> dict[str, Any]:
         return call("tell", tab_id=tab_id, note=note)
 
@@ -514,6 +515,12 @@ def build_machine_server(client: ApiClient):
                              "last said.")
     def disk() -> dict[str, Any]:
         return call("disk")
+
+    @tool(server, description="Memory by project: each one's peak working memory over the last "
+                             "minute, the budget its tab set, and the machine's total and "
+                             "available memory now.")
+    def memory() -> dict[str, Any]:
+        return call("memory")
 
     @tool(server, description="Recreate a sandbox from its recorded intent: its anchor, body "
                              "and view.")

@@ -44,6 +44,19 @@ _HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?")
 _PORTION_CHARS = 120
 
 
+def context_tokens(home: Path) -> int | None:
+    """The input the latest main-conversation answer took; None before the first answer."""
+    transcript = latest_transcript(home)
+    if transcript is None:
+        return None
+    for row in reversed(main_rows(transcript)):
+        usage = (row.get("message") or {}).get("usage")
+        if row["type"] == "assistant" and usage:
+            return (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
+                    + usage.get("cache_read_input_tokens", 0))
+    return None
+
+
 def _parts(row: dict[str, Any]) -> list[dict[str, Any]]:
     content = row.get("message", {}).get("content")
     return content if isinstance(content, list) else []

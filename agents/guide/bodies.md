@@ -24,6 +24,18 @@ action = "rebuild"
 ```
 
 Also accepted: `target` and `context` (the Docker build's), `runtime`, `shell`, `read_only`.
+
+`[budget]` says what the project should take, each a size like `"4G"`: `caches` (its build
+tools' caches — every directory holding `CACHEDIR.TAG`, as cargo's `target/` does), `output`
+(the rest of what its git ignores), and `memory` (the peak working memory of its sandbox). Its
+tab sets it when the project first builds or keeps output; the janitor holds the project to it.
+
+```toml
+[budget]
+caches = "6G"
+output = "4G"
+memory = "5G"
+```
 A `dockerfile` is resolved against the working copy when one is set, otherwise against the
 definition directory.
 

@@ -36,6 +36,9 @@ from .limits import Limits
 from .remotecontrol import RemoteControl
 from .stalls import Stalls
 from .disk import Disk
+from .garbage import Garbage
+from .memory import Memory
+from .contextwatch import ContextWatch
 from .credproxy import CredentialProxy
 from .permissions import Permissions
 from .judge import Judge
@@ -141,6 +144,9 @@ class Daemon:
         self.limits = Limits(self.session, self.events)
         self.stalls = Stalls(self.session, self.events)
         self.disk = Disk(self.session, self.events)
+        self.garbage = Garbage(self.session, self.events)
+        self.memory = Memory(self.session, self.events)
+        self.context = ContextWatch(self.session, self.events)
         self.remote_control = RemoteControl(self.session, self.events)
         renewal = claude_login.Renewal()
         self.claude_login = claude_login.Refresher(self.paths.claude_login, self.events,
@@ -153,7 +159,7 @@ class Daemon:
         self.permissions = Permissions(self.session, self.events)
         self.viewing = Viewing(self.events, paths.viewing)
         methods = build_methods(self.session, self.events, self.questions, self.channels,
-                                self.viewing, self.history)
+                                self.viewing, self.history, self.memory)
         # No socket answers until the start has re-derived the machine.
         self._reconciled = threading.Event()
         self.api = ApiServer(paths.api_socket, methods, self.events, ready=self._reconciled)
@@ -218,6 +224,9 @@ class Daemon:
                              (lambda: self.remote_control.run(self._stop), "remote-control"),
                              (lambda: self.claude_login.run(self._stop), "claude-login"),
                              (lambda: self.disk.run(self._stop), "disk"),
+                             (lambda: self.garbage.run(self._stop), "garbage"),
+                             (lambda: self.memory.run(self._stop), "memory"),
+                             (lambda: self.context.run(self._stop), "context"),
                              (self.credproxy.serve, "credproxy"),
                              (lambda: self.permissions.run(self._stop), "permissions"),
                              (lambda: self.agent_sockets.run(self._stop), "agent-sockets"),

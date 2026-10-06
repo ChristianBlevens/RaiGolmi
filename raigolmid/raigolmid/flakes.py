@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -115,6 +116,9 @@ def record_of(directory: Path, toolbelt: Toolbelt) -> Built | None:
     return built if built.package_digest == toolbelt.package_digest else None
 
 
+BUILDING = threading.Lock()
+
+
 def build(runtime: ContainerRuntime, directory: Path, toolbelt: Toolbelt,
           nixpkgs: str | None, epoch: int) -> Built:
     """The toolbelt as an image on this machine, from nixpkgs at `nixpkgs`, or at the newest
@@ -138,12 +142,15 @@ def build(runtime: ContainerRuntime, directory: Path, toolbelt: Toolbelt,
     tar.unlink(missing_ok=True)
     _run(runtime, work, f"{NIX} build --no-link --print-out-paths .#default > /src/out "
                         "&& \"$(cat /src/out)\" > /src/image.tar", epoch)
-    loaded = runtime.load(tar)
-    tar.unlink()
-    if image not in loaded:
-        raise FlakeError(f"the flake built {', '.join(loaded) or 'nothing'}, not {image}")
-    built = Built(image=image, nixpkgs=nixpkgs, package_digest=toolbelt.package_digest)
-    (work / "built.json").write_text(json.dumps(built.to_dict()))
+    # From the load until its record names it, the image has a name nothing reads, so garbage
+    # collection waits (`Session.collect_garbage`).
+    with BUILDING:
+        loaded = runtime.load(tar)
+        tar.unlink()
+        if image not in loaded:
+            raise FlakeError(f"the flake built {', '.join(loaded) or 'nothing'}, not {image}")
+        built = Built(image=image, nixpkgs=nixpkgs, package_digest=toolbelt.package_digest)
+        (work / "built.json").write_text(json.dumps(built.to_dict()))
     return built
 
 

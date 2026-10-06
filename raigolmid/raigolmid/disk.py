@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import git
+from .budgets import Budgets
 from .events import EventLog
 from .runtime.base import RuntimeError_
 
@@ -108,7 +109,8 @@ def _is_cache_tag(path: str) -> bool:
         return False
 
 
-def cache_reading(directory: Path, cache: Path, unread: list[str]) -> dict[str, Any]:
+def cache_reading(directory: Path, cache: Path, own: set[tuple[int, int]],
+                  unread: list[str]) -> dict[str, Any]:
     """A cache in a body: its size, the tool its tag names, and its largest entries — where
     what the project put in it, which its tool cannot recreate, shows."""
     try:
@@ -117,7 +119,6 @@ def cache_reading(directory: Path, cache: Path, unread: list[str]) -> dict[str, 
         unread.append(f"{cache / CACHE_TAG}: {exc.strerror}")
         said = ""
     found = re.search(r"created by (\S+?)\.?\s*$", said, re.MULTILINE)
-    own: set[tuple[int, int]] = set()
     entries = sorted(((e.name, tree_bytes(Path(e.path), own, unread))
                       for e in os.scandir(cache)), key=lambda x: -x[1])
     return {"path": str(cache.relative_to(directory)), "tool": found[1] if found else None,
@@ -127,28 +128,29 @@ def cache_reading(directory: Path, cache: Path, unread: list[str]) -> dict[str, 
 
 def body_reading(directory: Path, seen: set[tuple[int, int]],
                  unread: list[str]) -> dict[str, Any]:
-    """A body's directory: everything, what git ignores in it and the largest of those, and
-    its build caches."""
+    """A body's project: everything; its build caches; and its output — what its git ignores
+    outside those caches — with the largest of it."""
     found: list[Path] = []
     total = tree_bytes(directory, seen, unread, found)
-    # A cache inside another is part of it.
-    caches = [cache_reading(directory, c, unread) for c in found
-              if not any(o != c and c.is_relative_to(o) for o in found)]
+    # Sized again with a reading of their own, since `seen` holds every inode already; the
+    # caches first, so the output is what is left.
+    own: set[tuple[int, int]] = set()
+    caches = [cache_reading(directory, c, own, unread) for c in found
+              if not any(o != c and c.is_relative_to(o) for o in found)]   # inside another
+    out = {"bytes": total, "caches": caches, "caches_bytes": sum(c["bytes"] for c in caches),
+           "output": None, "largest_output": []}
     if not git.is_repo(directory):
-        return {"bytes": total, "ignored": None, "largest_ignored": [], "caches": caches}
+        return out
     try:
         listed = git.run(["ls-files", "--others", "--ignored", "--exclude-standard",
                           "--directory", "-z"], directory).stdout
     except git.GitError as exc:
         unread.append(f"{directory} (what git ignores): {exc}")
-        return {"bytes": total, "ignored": None, "largest_ignored": [], "caches": caches}
-    # Sized again with a reading of its own: `seen` already holds every inode under it.
-    own: set[tuple[int, int]] = set()
+        return out
     sizes = sorted(((p, tree_bytes(directory / p, own, unread))
                     for p in listed.split("\0") if p), key=lambda x: -x[1])
-    return {"bytes": total, "ignored": sum(b for _, b in sizes),
-            "largest_ignored": [{"path": p, "bytes": b} for p, b in sizes[:LARGEST]],
-            "caches": caches}
+    return {**out, "output": sum(b for _, b in sizes),
+            "largest_output": [{"path": p, "bytes": b} for p, b in sizes[:LARGEST] if b]}
 
 
 def reading(session: "Session") -> dict[str, Any]:
@@ -175,9 +177,9 @@ def reading(session: "Session") -> dict[str, Any]:
         holders[name] = tree_bytes(root, seen, unread)
     bodies = {}
     for body in session.catalogue.bodies.values():
-        if body.directory is None:
+        if body.source_root is None:
             continue
-        bodies[body.id] = body_reading(body.directory, seen, unread)
+        bodies[body.id] = body_reading(body.source_root, seen, unread)
         tab = session.intent.body_tab(body.id)
         bodies[body.id]["tab"] = tab.tab_id if tab is not None else None
         holders[f"body:{body.id}"] = bodies[body.id]["bytes"]
@@ -204,7 +206,9 @@ class Disk:
         self.session = session
         self.events = events
         self.path = session.paths.disk
+        self.budgets = Budgets(session, events)
         self._short = False
+        self._over: set[tuple[str, str]] = set()       # (body, kind) said this episode
 
     def run(self, stop: threading.Event) -> None:
         while not stop.wait(TICK_SECONDS):
@@ -235,6 +239,22 @@ class Disk:
                              changes=changes(now, then), bodies=now["bodies"],
                              reclaimable=now["reclaimable"], unread=now["unread"])
         self._short = short
+        for body, read in now["bodies"].items():
+            self._hold_to_budget(body, read)
+
+    def _hold_to_budget(self, body: str, read: dict[str, Any]) -> None:
+        held = {"caches": read["caches_bytes"], "output": read["output"] or 0}
+        if any(held.values()):
+            self.budgets.ask_once(body, {k: v for k, v in held.items() if v})
+        over = self.budgets.over(body, held)
+        for kind in held:
+            if kind not in over:
+                self._over.discard((body, kind))
+            elif (body, kind) not in self._over:
+                self._over.add((body, kind))
+                budget, holding = over[kind]
+                self.budgets.say_over(body, kind, budget, holding, caches=read["caches"],
+                                      largest_output=read["largest_output"])
 
     def _report(self, now: dict[str, Any]) -> None:
         """`now` becomes what the next growth is measured from."""

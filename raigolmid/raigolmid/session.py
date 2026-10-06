@@ -160,19 +160,26 @@ class Session:
         self.catalog = Catalog(self)
 
     # --- catalogue -------------------------------------------------------------------
-    def collect_garbage(self) -> None:
+    def collect_garbage(self, bodies: bool = True) -> None:
         """Removes the toolbelt images — Nixery's and flake builds' — and closures nothing
         names: no container, no toolbelt (its lock, its package list now, or its flake build)
         and no face's apps. Each edit to a package list makes a new image and closure, and
         nothing else would ever remove the old ones; the build cache only they held goes too.
-        A body's images go once no body names them — built for a body with no definition any
-        more, or pulled as the image of one that names another now — for an image nothing
-        claims is abandoned; a newer build of a body still defined replaces its older ones as
-        it is built (`superseded.py`).
+        With `bodies`, a body's images go once no body names them — built for a body with no
+        definition any more, or pulled as the image of one that names another now — for an
+        image nothing claims is abandoned; a newer build of a body still defined replaces its
+        older ones as it is built (`superseded.py`).
 
-        ⚠ Only at the daemon's start, before anything can fetch: a fetch holds an image nothing
-        names yet until its view exists (`toolbelt_swap` fetches before it records).
+        Everything at the daemon's start; while it runs, the toolbelts' and closures part
+        (`garbage.py`). A Nixery pull is named by the package list it was pulled for the
+        moment it lands and a closure is copied under the closures' own lock, so the one
+        image with a name nothing reads is a flake build's between its load and its record,
+        which `flakes.BUILDING` holds for this whole collection.
         """
+        with flakes.BUILDING:
+            self._collect_garbage(bodies)
+
+    def _collect_garbage(self, bodies: bool) -> None:
         keep: set[str] = set()
         for container in self.runtime.list(labels.managed_filter()):
             keep.add(container.image_id)
@@ -191,7 +198,7 @@ class Session:
             image = self.runtime.image(reference)
             if image is not None:
                 keep.add(image.id)
-        images = self._collect_body_images(keep)
+        images = self._collect_body_images(keep) if bodies else 0
         for image in self.runtime.list_images():
             names = image.tags or image.repo_digests
             if (image.id in keep or not names

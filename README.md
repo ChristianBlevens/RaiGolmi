@@ -296,7 +296,10 @@ tells it what went wrong. It watches the disk too: when the machine holds a coup
 than when it last looked, or free space runs low, it works out what grew. The machine's own
 leftovers piling up it treats as a failure and fixes; a project's build or run output it points
 out to that project's tab, which knows what it still needs — including build caches like Rust's
-`target/`, which only ever grow. A turn that fails on something waiting won't fix, like a tab
+`target/`, which only ever grow. Each project's tab sets how much disk and memory the project should
+take, and the janitor tells it when it goes past that, whether to clean up or raise the limit. It
+also notices a tab that has run past its context budget and tells it to wrap up — it never cuts
+one off. A turn that fails on something waiting won't fix, like a tab
 that lost its sign-in, comes to it as well. It also keeps the agents' documents in shape: one that's grown past its size,
 names something that no longer exists, or describes a layer that has since changed. The point is that you're never the one who has to take a failure to an AI.
 

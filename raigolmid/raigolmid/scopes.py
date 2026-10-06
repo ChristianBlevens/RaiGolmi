@@ -39,7 +39,7 @@ SOCKET = "raigolmid.sock"
 # read-only, its channel, and the repairs the daemon already has — never a shell in a sandbox.
 MACHINE = ("version", "status", "list_items", "events", "container_logs", "journal",
            "crash_logs", "restart_agent", "repair", "reconcile", "rediscover", "unstick",
-           "tell", "disk")
+           "tell", "disk", "memory")
 
 # Of the full table, what a face reaches: a read-only view of the machine, and every sandbox's
 # toolbelt by name (a face works with every body). Beyond it, what the user does themselves,
@@ -181,6 +181,7 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
         "job_wait": lambda name, timeout=jobs.WAIT_MOST: session.jobs.wait(tab_id, name,
                                                                            timeout),
         "jobs": lambda: session.jobs.list(tab_id),
+        "midturn": lambda: channels.take_midturn(tab_id),
         "rebuild_body": lambda: session.rebuild_body(
             here(), why=f"{tab_id}'s request").to_dict(),
         "restart_body": lambda: session.restart_body(here()),

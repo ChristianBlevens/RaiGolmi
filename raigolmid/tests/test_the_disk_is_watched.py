@@ -65,8 +65,8 @@ def test_growth_past_the_mark_is_said_once_naming_the_body_and_its_tab(h, monkey
     [grown] = h.events_of("disk.grown")
     body = grown.data["bodies"]["myapi"]
     assert body["tab"] == h.tab("myapi")
-    assert body["ignored"] >= 3 * 1024 * 1024
-    assert body["largest_ignored"][0]["path"] == "target/"
+    assert body["caches_bytes"] >= 3 * 1024 * 1024 and body["output"] < 1024 * 1024, \
+        "a cache's bytes are its own, not counted again as output"
     assert grown.data["changes"]["body:myapi"] >= 3 * 1024 * 1024
     [cache] = body["caches"]
     assert (cache["path"], cache["tool"]) == ("target", "cargo")
@@ -106,3 +106,45 @@ def test_a_runtime_that_cannot_answer_is_unread_not_empty(h, monkeypatch):
     reading = disk.accounted(h.session)
     assert "images" not in reading["holders"]
     assert any("container runtime" in u for u in reading["unread"])
+
+
+def _budget(h, text: str) -> None:
+    toml = h.session.catalogue.bodies["myapi"].directory / "body.toml"
+    toml.write_text(toml.read_text().split("\n[budget]\n")[0] + "\n[budget]\n" + text)
+    h.session.rediscover()
+
+
+def test_a_project_holding_output_with_no_budget_has_its_tab_asked_once(h, monkeypatch):
+    watch = disk.Disk(h.session, h.events)
+    _filesystem(monkeypatch, 20 * GB)
+    _body_output(h, 1)
+    watch.tick()
+    watch.tick()
+    [asked] = h.events_of("budget.unset")
+    assert asked.tab == h.tab("myapi") and "[budget]" in asked.data["deliver"]["content"]
+    assert disk.Disk(h.session, h.events).tick() is None and len(h.events_of("budget.unset")) == 1, \
+        "asked once, not at every start"
+
+
+def test_a_budget_passed_goes_to_the_janitor_once_until_it_is_kept_again(h, monkeypatch):
+    assert "budget.exceeded" in TAKEN
+    _budget(h, 'caches = "1M"\noutput = "8G"\n')
+    watch = disk.Disk(h.session, h.events)
+    _filesystem(monkeypatch, 20 * GB)
+    _body_output(h, 2)
+    watch.tick()
+    watch.tick()
+    [over] = h.events_of("budget.exceeded")
+    assert (over.data["body"], over.data["kind"]) == ("myapi", "caches")
+    assert over.data["caches"][0]["path"] == "target"
+    assert not h.events_of("budget.unset"), "a project with a budget is not asked for one"
+    _budget(h, "")      # an empty table keeps nothing, so nothing is past it
+    watch.tick()
+    _budget(h, 'caches = "1M"\n')
+    watch.tick()
+    assert len(h.events_of("budget.exceeded")) == 2
+
+
+def test_a_budget_that_is_not_a_size_is_a_definition_error(h):
+    _budget(h, 'memory = "lots"\n')
+    assert "myapi" not in h.session.catalogue.bodies

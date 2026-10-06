@@ -37,6 +37,7 @@ from .library import Library
 from .questions import PERMISSIONS_ABSENT, QuestionError, Questions, parse_permissions
 from .registry import RegistryError
 from .jobs import JobError
+from .memory import Memory
 from .session import Session, SessionError
 from .viewing import Viewing
 
@@ -55,8 +56,8 @@ class Handoff:
 
 
 def build_methods(session: Session, events: EventLog, questions: Questions,
-                  channels: Channels, viewing: Viewing,
-                  history: History) -> dict[str, Callable[..., Any]]:
+                  channels: Channels, viewing: Viewing, history: History,
+                  memory: "Memory | None" = None) -> dict[str, Callable[..., Any]]:
     """Everything the host's own callers can ask for. What an agent asks, and what
     only an agent reports, is its tab's socket's (`scopes.py`)."""
     library = Library(session.paths, session, parse_permissions, PERMISSIONS_ABSENT)
@@ -74,6 +75,7 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "unstick": lambda tab_id, note: stalls.unstick(session, events, tab_id, note),
         "tell": lambda tab_id, note: _tell(session, events, tab_id, note),
         "disk": lambda: disk.accounted(session),
+        "memory": lambda: _memory(memory),
         "exec": lambda target, cmd, cwd="/work", timeout=300.0: session.exec(
             target, cmd, cwd, timeout),
         "rebuild_body": lambda instance_id: session.rebuild_body(
@@ -197,16 +199,23 @@ def _container_logs(session: Session, container: str, tail: int) -> dict[str, An
             "logs": session.runtime.logs(info.id, tail)}
 
 
+def _memory(memory: "Memory | None") -> dict[str, Any]:
+    if memory is None:
+        raise SessionError("this daemon does not watch memory")
+    return memory.accounted()
+
+
 def _tell(session: Session, events: EventLog, tab_id: str, note: str) -> dict[str, Any]:
-    """The janitor's word to a tab, without stopping it: queued on its channel and pushed
-    when the tab is next idle (`channel.py`)."""
+    """The janitor's word to a tab, without stopping it: a working tab reads it at its next
+    tool call, an idle one starts on it (`channel.py`)."""
     if tab_id not in session.intent.tabs:
         raise SessionError(f"no tab {tab_id!r}")
     if not note.strip():
         raise SessionError("tell says something")
     events.emit("janitor.told", tab=tab_id, deliver={
         "content": note, "meta": {"from": "janitor"}})
-    return {"tab": tab_id, "note": "queued for when it is next idle"}
+    return {"tab": tab_id, "note": "a working tab reads it at its next tool call, an idle one "
+                                   "starts on it"}
 
 
 def _journal(n: int) -> dict[str, Any]:

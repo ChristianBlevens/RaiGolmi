@@ -822,6 +822,15 @@ def cmd_agent_activity(args) -> int:
         _client().call("agent_activity", busy=True, channel_seq=seq,
                        **({"prompt": prompt} if seq is None else {}))
         return 0
+    if args.state == "tool":
+        # PostToolUse: what reached the tab while it works, added to the turn as the harness's
+        # own context at this tool call (`Channels.take_midturn`); nothing printed otherwise.
+        said = _client().call("midturn")
+        if said:
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": "Arrived while you work:\n\n" + "\n\n---\n\n".join(said)}}))
+        return 0
     if args.state == "session":
         # SessionStart: printed output would be added to the agent's context, so none is.
         import socket
@@ -1030,7 +1039,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("agent-activity",
                        help="an agent's hooks report its session up, busy, idle or failed")
-    p.add_argument("state", choices=["session", "busy", "stop", "failed"])
+    p.add_argument("state", choices=["session", "busy", "tool", "stop", "failed"])
     p.set_defaults(fn=cmd_agent_activity)
 
     p = sub.add_parser("mcp", help="stdio MCP server inside an agent container")

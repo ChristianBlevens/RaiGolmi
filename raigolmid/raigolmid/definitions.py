@@ -242,6 +242,39 @@ class WatchRule:
     action: str = "rebuild"
 
 
+# What a body's tab says its project should take (`[budget]` in body.toml), each in bytes,
+# None where it has said nothing: its build caches, the rest of the output its git ignores,
+# and the peak working memory of its sandbox. Watched by `disk.py` and `memory.py`.
+BUDGET_KINDS = ("caches", "output", "memory")
+_SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*([KMGT]?)i?B?", re.IGNORECASE)
+
+
+@dataclass(frozen=True, slots=True)
+class Budget:
+    caches: int | None = None
+    output: int | None = None
+    memory: int | None = None
+
+
+def _size(value: Any, path: Path, key: str) -> int:
+    """`"8G"`, `"512M"`, `"1.5GiB"`: binary units."""
+    found = _SIZE.fullmatch(str(value).strip())
+    if found is None:
+        raise DefinitionError(f"{path}: [budget] {key} = {value!r} is not a size like \"8G\"")
+    power = " KMGT".index(found[2].upper() or " ")
+    return int(float(found[1]) * 1024 ** power)
+
+
+def _budget(raw: dict[str, Any], path: Path) -> Budget | None:
+    table = raw.get("budget")
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        raise DefinitionError(f"{path}: 'budget' is a table: [budget] with caches, output, memory")
+    _reject_unknown(table, set(BUDGET_KINDS), path, "[budget]")
+    return Budget(**{k: _size(v, path, k) for k, v in table.items()})
+
+
 @dataclass(frozen=True, slots=True)
 class Body:
     id: str
@@ -262,6 +295,8 @@ class Body:
     description: str | None = None
     author: str | None = None
     thumbnail: Path | None = None
+    # None: its tab has set no budget yet.
+    budget: Budget | None = None
 
     kind = labels.Kind.BODY
 
@@ -382,7 +417,7 @@ def load_body(directory: Path) -> Body:
     raw = _load_toml(path)
     _reject_unknown(raw, {"id", "name", "image", "dockerfile", "target", "context",
                           "working_copy", "command", "ports", "runtime", "shell",
-                          "read_only", "environment", "develop", *ABOUT_KEYS},
+                          "read_only", "environment", "develop", "budget", *ABOUT_KEYS},
                     path, "body.toml")
 
     dockerfile_name = raw.get("dockerfile")
@@ -417,6 +452,7 @@ def load_body(directory: Path) -> Body:
         read_only=bool(raw.get("read_only", False)),
         environment={str(k): str(v) for k, v in raw.get("environment", {}).items()},
         watch=tuple(watch),
+        budget=_budget(raw, path),
         **_about(raw, path),
     )
     # Checked after construction, because where the Dockerfile *is* depends on the working

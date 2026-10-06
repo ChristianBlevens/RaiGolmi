@@ -60,7 +60,7 @@ from .events import Event, EventLog
 from .intent import Run, TabIntent
 from .questions import Questions
 from .session import SessionError
-from .transcript import latest_transcript, main_rows
+from .transcript import context_tokens, latest_transcript, main_rows
 
 if TYPE_CHECKING:
     from .session import Session
@@ -69,19 +69,6 @@ if TYPE_CHECKING:
 TAIL_TURNS = 20
 TAIL_LINES = 60
 TURN_CHARS = 2000
-
-
-def context_tokens(home: Path) -> int | None:
-    """The input the latest main-conversation answer took; None before the first answer."""
-    transcript = latest_transcript(home)
-    if transcript is None:
-        return None
-    for row in reversed(main_rows(transcript)):
-        usage = (row.get("message") or {}).get("usage")
-        if row["type"] == "assistant" and usage:
-            return (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
-                    + usage.get("cache_read_input_tokens", 0))
-    return None
 
 
 def _said(row: dict[str, Any]) -> str:
@@ -677,7 +664,8 @@ class Verbs:
                 "transcript_tail": transcript_tail(home, turns)}
 
     def direct(self, tab: str, content: str) -> dict[str, Any]:
-        """One way: it is the tab's next message once its turn ends; nothing comes back."""
+        """One way: a working tab reads it at its next tool call, an idle one starts on it;
+        nothing comes back."""
         agent = self._unheld(tab)
         if not content.strip():
             raise SessionError("a directive needs words")
@@ -686,8 +674,8 @@ class Verbs:
                        f"{content}", "meta": {"from": "machine"}})
         if agent.busy:
             return {"tab": tab, "status": "queued",
-                    "next": "It is pushed when the tab's turn ends; you are told when it is "
-                            "idle."}
+                    "next": "The tab is working: it reads this at its next tool call, or as its "
+                            "next message if this turn ends first; you are told when it is idle."}
         return {"tab": tab, "status": "pushed",
                 "next": "The tab is idle, so it starts on this now, after anything already on "
                         "its way to it; you are told when that turn ends."}

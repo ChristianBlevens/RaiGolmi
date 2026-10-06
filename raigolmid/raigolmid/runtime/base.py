@@ -116,6 +116,15 @@ class DiskUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryUse:
+    """A running container's memory now: its working memory (anonymous pages — what it has
+    allocated, never the page cache it reads through), and how many of its processes the
+    kernel has killed for want of memory since it started."""
+    working: int
+    oom_kills: int
+
+
+@dataclass(frozen=True, slots=True)
 class ImageInfo:
     id: str
     tags: tuple[str, ...]
@@ -235,6 +244,10 @@ class ContainerRuntime(abc.ABC):
         """Removes the build cache no image holds — what a removed image's builds leave —
         and keeps what a present image was built from, which is what makes its next build a
         cache hit. The bytes reclaimed."""
+
+    @abc.abstractmethod
+    def memory(self, container_id: str) -> MemoryUse:
+        """A running container's memory (`memory.py`)."""
 
     @abc.abstractmethod
     def disk_usage(self) -> DiskUsage:

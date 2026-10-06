@@ -26,6 +26,7 @@ from .base import (
     ContainerRuntime,
     ContainerSpec,
     DiskUsage,
+    MemoryUse,
     ExecResult,
     ImageInfo,
     ImageInUse,
@@ -75,6 +76,8 @@ def _image_info(img) -> ImageInfo:
 class DockerRuntime(ContainerRuntime):
     def __init__(self, client: docker.DockerClient | None = None) -> None:
         self._client = client or docker.from_env()
+        # Where a container's cgroup is (`memory`), asked of Docker once.
+        self._cgroup_driver: str | None = None
 
     @property
     def client(self) -> docker.DockerClient:
@@ -337,6 +340,24 @@ class DockerRuntime(ContainerRuntime):
             return self._client.api.prune_builds()["SpaceReclaimed"]
         except APIError as exc:
             raise RuntimeError_(f"could not prune the build cache: {exc}") from exc
+
+    def memory(self, container_id: str) -> MemoryUse:
+        """Read from the container's cgroup (v2), where Docker's cgroup driver puts it."""
+        if self._cgroup_driver is None:
+            try:
+                self._cgroup_driver = self._client.info()["CgroupDriver"]
+            except APIError as exc:
+                raise RuntimeError_(f"could not ask Docker its cgroup driver: {exc}") from exc
+        group = (Path(f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope")
+                 if self._cgroup_driver == "systemd"
+                 else Path(f"/sys/fs/cgroup/docker/{container_id}"))
+        try:
+            stat = dict(line.split() for line in (group / "memory.stat").read_text().splitlines())
+            events = dict(line.split() for line in
+                          (group / "memory.events").read_text().splitlines())
+        except OSError as exc:
+            raise RuntimeError_(f"could not read {group}'s memory: {exc}") from exc
+        return MemoryUse(working=int(stat["anon"]), oom_kills=int(events["oom_kill"]))
 
     def disk_usage(self) -> DiskUsage:
         """`docker system df`'s own reckoning: an image no container uses is unused for the

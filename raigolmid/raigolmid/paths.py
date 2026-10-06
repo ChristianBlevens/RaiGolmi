@@ -85,6 +85,11 @@ class Paths:
         return self.state / "jobs.json"
 
     @property
+    def budget_asks(self) -> Path:
+        """The bodies whose tabs were asked to set a budget (`budgets.py`)."""
+        return self.state / "budget-asks.json"
+
+    @property
     def disk(self) -> Path:
         """The disk reading growth is measured from (`disk.py`)."""
         return self.state / "disk.json"

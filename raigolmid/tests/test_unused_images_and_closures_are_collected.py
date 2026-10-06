@@ -95,3 +95,30 @@ def test_only_what_no_definition_or_container_names_is_collected(h):
     [said] = [e.data for e in h.events.tail(1000) if e.type == "garbage.collected"]
     assert said["images"] == 4 and said["closures"] == 1
     assert h.runtime.cache_prunes == 1
+
+
+def test_a_toolbelt_locked_while_the_machine_runs_takes_its_old_image_with_it(h):
+    """`garbage.py`: the toolbelts' half, whenever a new toolbelt image is locked in use;
+    a body's images are the start's to collect."""
+    from raigolmid import garbage
+    collector = garbage.Garbage(h.session, h.events)
+    h.open_sandbox()
+    old = h.runtime.pull("nixery.dev/shell/python3/an-edited-away-package")
+    old_closure = h.session.closures.of_image_id(old.id)
+    undefined = h.runtime.add_image(naming.build_tag("deleted-by-hand", "sha256:aaa"))
+    h.events.emit("toolbelt.locked", toolbelt="python-dev")
+    assert any(e.type in garbage.AFTER for e in collector._sub.drain(timeout=0))
+    collector.collect()
+    present = {image.id for image in h.runtime.list_images()}
+    assert old.id not in present and not old_closure.exists()
+    assert undefined.id in present
+
+
+def test_collection_waits_for_a_flake_build_between_its_load_and_its_record(h):
+    import threading
+    with flakes.BUILDING:
+        done = threading.Event()
+        threading.Thread(target=lambda: (h.session.collect_garbage(bodies=False),
+                                         done.set()), daemon=True).start()
+        assert not done.wait(0.3), "it ran while a flake's image had a name nothing read"
+    assert done.wait(5)

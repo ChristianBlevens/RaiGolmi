@@ -22,8 +22,8 @@ description: How the machine tab manages the body tabs the user hands it over a 
   keeps the user's rulings, marked as yours, so they can overturn it. A managed tab's own rules —
   its test budget, how it works — bind your directions as they would the user's.
 - **The user's questions for a managed tab come to you.** Put each to the tab with `direct`,
-  which reaches it once its turn ends, and give them its answer when that turn's end comes to
-  you. Your own questions for the user are decided by you and recorded, as above.
+  which a working tab reads at its next tool call, and give them its answer when that turn's
+  end comes to you. Your own questions for the user are decided by you and recorded, as above.
 
 ## Where things live
 
