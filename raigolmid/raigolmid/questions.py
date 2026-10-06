@@ -204,7 +204,7 @@ class Questions:
     def lapse(self, now: float | None = None) -> None:
         now = time.time() if now is None else now
         with self._lock:
-            lapse = settings.load(self.paths.settings).lapse_seconds
+            lapse = settings.current(self.paths, self.events).lapse_seconds
             old = [i.id for i in self._pending() if now - i.asked_at >= lapse]
         for id in old:
             self._settle(id, "question.lapsed", deliver=None)

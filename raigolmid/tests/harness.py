@@ -99,7 +99,7 @@ def converse(home: Path, entrypoint: str = "cli") -> None:
     (projects / "s1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
 
 
-def build_tree(root: Path) -> SearchPaths:
+def build_tree(root: Path, private: tuple[Path, ...]) -> SearchPaths:
     """Definitions on disk, because discovery and the definition digest both read files —
     faking them would test the fake."""
     # Distinct ports, because a host port is exclusive and two bodies declaring the same
@@ -150,7 +150,7 @@ def build_tree(root: Path) -> SearchPaths:
         '[desktop]\ncompositor = "sway"\nconfig_dir = "desktop/"\napps = []\n')
 
     return SearchPaths(faces=(root / "faces",), toolbelts=(root / "toolbelts",),
-                       bodies=(root / "bodies",))
+                       bodies=(root / "bodies",), private=private)
 
 
 def answering() -> threading.Event:
@@ -163,7 +163,6 @@ def answering() -> threading.Event:
 class Harness:
     def __init__(self, tmp_path: Path, monkeypatch) -> None:
         self.root = tmp_path
-        self.search = build_tree(tmp_path / "repo")
         state = tmp_path / "state"
         for var, value in (("XDG_STATE_HOME", state / "state"),
                            ("XDG_DATA_HOME", state / "data"),
@@ -173,6 +172,7 @@ class Harness:
             monkeypatch.setenv(var, str(value))
         self.paths = Paths.from_env()
         self.paths.ensure()
+        self.search = build_tree(tmp_path / "repo", self.paths.private)
         # What the daemon's start writes before anything reads a setting.
         settings.install(self.paths.settings)
         # The user manager creates it on a real host; the runtime refuses to mount one that is not there.

@@ -35,7 +35,7 @@ class ContextWatch:
             self.tick()
 
     def tick(self) -> None:
-        budget = settings.load(self.session.paths.settings).budget_tokens
+        budget = settings.current(self.session.paths, self.events).budget_tokens
         for tab_id, tab in dict(self.session.intent.tabs).items():
             # The janitor's own conversation is one failure long and starts fresh each time.
             if tab_id == JANITOR or tab.status != "running":

@@ -31,7 +31,7 @@ def test_a_body_sends_its_dockerfile_and_what_it_copies_filtered_as_docker_filte
         "server.conf": "", "notes.md": "private", "LAYER.md": "", ".git/config": "",
     })
 
-    sent = set(upload_files(load_body(body)))
+    sent = set(upload_files(load_body(body, ())))
 
     assert sent == {"body.toml", "Dockerfile", ".dockerignore", "app/index.html",
                     "app/secret/keep.txt", "server.conf", "LAYER.md"}
@@ -46,7 +46,7 @@ def test_a_dockerfile_specific_ignore_file_replaces_the_contexts(tmp_path):
         "a.txt": "", "b.md": "",
     })
 
-    sent = set(upload_files(load_body(body)))
+    sent = set(upload_files(load_body(body, ())))
 
     assert "a.txt" in sent and "b.md" not in sent
 
@@ -59,7 +59,7 @@ def test_a_body_that_builds_from_the_users_project_is_not_uploaded(tmp_path):
                                f'working_copy = "{project}"\n'})
 
     with pytest.raises(layerfiles.LayerFilesError, match="their work"):
-        upload_files(load_body(body))
+        upload_files(load_body(body, ()))
 
 
 def test_a_face_sends_its_config_dirs_and_its_compositor_and_a_toolbelt_its_lock(tmp_path):

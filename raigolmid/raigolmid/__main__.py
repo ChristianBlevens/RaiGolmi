@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     paths = Paths.from_env()
-    search = SearchPaths.defaults(args.repo_root)
+    search = SearchPaths.defaults(args.repo_root, paths.private)
     try:
         daemon = Daemon(runtime, paths, search)
     except AlreadyRunning as exc:

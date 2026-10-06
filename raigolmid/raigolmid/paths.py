@@ -40,6 +40,12 @@ class Paths:
         runtime = _xdg("XDG_RUNTIME_DIR", Path(f"/run/user/{os.getuid()}"))
         return cls(state=state, data=data, config=config / APP, runtime=runtime)
 
+    @property
+    def private(self) -> tuple[Path, ...]:
+        """Where the machine keeps its state, its sign-ins and its sockets, which no layer's
+        definition may name (`definitions.load_body`)."""
+        return (self.state, self.data, self.config, self.config.parent / PROJECT, self.runtime)
+
     # --- state -------------------------------------------------------------------
     @property
     def intent(self) -> Path:
@@ -181,6 +187,12 @@ class Paths:
         """The user's settings (`settings.py`). Owned by the project rather than the daemon: the
         host compositor's keys are among them."""
         return self.config.parent / PROJECT / "settings.toml"
+
+    @property
+    def settings_last_right(self) -> Path:
+        """The last save of the settings that parsed, which holds while a later one is wrong
+        (`settings.current`)."""
+        return self.state / "settings-last-right.toml"
 
     @property
     def proxy_secret(self) -> Path:

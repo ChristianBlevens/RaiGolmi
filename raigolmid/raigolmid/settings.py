@@ -9,16 +9,23 @@ The document ships as `settings.toml` beside this module and is written to the u
 first time the daemon starts (`install`); from then on the file is the only place a value
 lives. A file that is missing, missing a setting, or wrong is an error that names it, because
 filling the gap would be the daemon inventing an answer; the catalog's save runs `parse`
-first, so a wrong file is refused before it is written.
+first, so a wrong file is refused before it is written, and one written past that check holds
+the last right save in its place (`in_force`).
 """
 from __future__ import annotations
 
 import re
+import threading
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import hostkeys
+
+if TYPE_CHECKING:
+    from .events import EventLog
+    from .paths import Paths
 
 
 class SettingsError(Exception):
@@ -171,3 +178,61 @@ def load(path: Path) -> Settings:
         raise SettingsError(f"{path} does not exist; raigolmid writes it from {SHIPPED} when "
                             f"it starts")
     return parse(path.read_text(encoding="utf-8"), str(path))
+
+
+_lock = threading.Lock()
+# Per settings file: the save last looked at, the settings in force for it, and what was wrong
+# with that save (None when it parsed).
+_in_force: dict[Path, tuple[tuple[int, int] | None, Settings, str | None]] = {}
+_reported: dict[Path, tuple[int, int] | None] = {}
+
+
+def in_force(paths: "Paths") -> Settings:
+    """The settings in force, for the daemon's own reads: the file re-read whenever it is saved.
+
+    A wrong save (an agent's or an editor's that skipped the catalog's check) stops nothing
+    it configures. The last right settings hold until it is put right, kept in the state
+    directory so a restart finds them too. Nothing is invented: what holds is always what the
+    user last saved right. Raises only when no right save was ever read. `current` is the same
+    read, saying a wrong save."""
+    return _read(paths)[0]
+
+
+def current(paths: "Paths", events: "EventLog") -> Settings:
+    """`in_force`, saying a wrong save once as `settings.invalid`, which the janitor takes. The
+    questions thread reads this every second, so a wrong save is said within one."""
+    held, save, error = _read(paths)
+    with _lock:
+        if error is not None and _reported.get(paths.settings, ()) != save:
+            _reported[paths.settings] = save
+            events.emit("settings.invalid", error=error)
+    return held
+
+
+def _read(paths: "Paths") -> tuple[Settings, tuple[int, int] | None, str | None]:
+    path, kept = paths.settings, paths.settings_last_right
+    with _lock:
+        stat = path.stat() if path.is_file() else None
+        save = (stat.st_mtime_ns, stat.st_size) if stat else None
+        known = _in_force.get(path)
+        if known is not None and known[0] == save:
+            return known[1], save, known[2]
+        try:
+            text = path.read_text(encoding="utf-8") if save else None
+            right = load(path) if text is None else parse(text, str(path))
+        except SettingsError as exc:
+            if known is not None:
+                held = known[1]
+            elif kept.is_file():
+                held = parse(kept.read_text(encoding="utf-8"), str(kept))
+            else:
+                raise
+            _in_force[path] = (save, held, str(exc))
+            return held, save, str(exc)
+        if not kept.is_file() or kept.read_text(encoding="utf-8") != text:
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            staged = kept.with_name(f".{kept.name}.new")
+            staged.write_text(text, encoding="utf-8")
+            staged.replace(kept)
+        _in_force[path] = (save, right, None)
+        return right, save, None

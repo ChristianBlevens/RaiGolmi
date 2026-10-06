@@ -72,7 +72,7 @@ class Library:
 
             def check_template(text: str, path: Path = path) -> None:
                 try:
-                    render_template(text, path, settings.load(p.settings).budget_tokens)
+                    render_template(text, path, settings.in_force(p).budget_tokens)
                 except AgentError as exc:
                     raise DocumentError(str(exc)) from exc
             add(Document(f"primer/{name}", "Machine", title, path, True, absent=default,

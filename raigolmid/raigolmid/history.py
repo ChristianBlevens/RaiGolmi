@@ -323,7 +323,7 @@ class History:
             entry = Entry(id=f"h{next(self._ids)}", at=event.ts, kind=event.type,
                           tab=event.tab, text=text, **fields)
             self._entries[entry.id] = entry
-            old = time.time() - settings.load(self.paths.settings).kept_seconds
+            old = time.time() - settings.current(self.paths, self.events).kept_seconds
             for id in [id for id, e in self._entries.items() if e.at < old]:
                 del self._entries[id]
             self._save()

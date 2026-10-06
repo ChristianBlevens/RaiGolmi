@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from raigolmid import keyboard
+from raigolmid import keyboard, settings
 from raigolmid.keyboard import KeyboardError
 from tests import settingsdoc
 from tests.fakesway import FakeSway
@@ -24,7 +24,7 @@ def test_his_keyboard_and_scale_are_what_the_host_is_told(sway, tmp_path):
     path = settingsdoc.write(tmp_path / "settings.toml",
                              keyboard={"layout": "us,de", "variant": "intl", "repeat_rate": 40},
                              display={"scale": 1.5})
-    keyboard.apply_host(path, str(sway.path))
+    keyboard.apply_host(settings.load(path), str(sway.path))
     assert sway.settings == {
         "input type:keyboard xkb_layout": '"us,de"',
         "input type:keyboard xkb_variant": '"intl"',
@@ -37,5 +37,5 @@ def test_his_keyboard_and_scale_are_what_the_host_is_told(sway, tmp_path):
 def test_a_layout_no_keymap_has_is_refused_with_the_compositors_reason(sway, tmp_path):
     path = settingsdoc.write(tmp_path / "settings.toml", keyboard={"layout": "qq"})
     with pytest.raises(KeyboardError, match=r"xkb_layout \"qq\".*Failed to compile keymap"):
-        keyboard.apply_host(path, str(sway.path))
+        keyboard.apply_host(settings.load(path), str(sway.path))
     assert sway.settings == {}, "nothing after the refusal is sent"

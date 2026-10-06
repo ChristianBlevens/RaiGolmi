@@ -52,6 +52,7 @@ TAKEN = frozenset({
     "agent.failed",               # the ready agent not starting
     "runtime.event_stream_failed",
     "hostkeys.watch_failed",
+    "settings.invalid",           # a save of settings.toml that does not parse (`settings.current`)
     "clipboard.unbridged",        # the user's face's clipboard left the machine's
     "garbage.failed",
     "watch.failed",

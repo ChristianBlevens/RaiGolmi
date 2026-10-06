@@ -187,10 +187,12 @@ class Daemon:
                          socket=str(self.paths.api_socket))
         threading.excepthook = self._thread_died
         # Served from here, so a caller that comes early is accepted and waits, answered only
-        # once `_reconciled` is set. Before reconciling, which starts the user's face on the
-        # socket it mounts.
+        # once `_reconciled` is set. Before reconciling, which starts the user's face and every
+        # tab's container on the sockets they mount, and can take a minute restoring the face.
         self.face_sockets.start()
+        self.agent_sockets.start()
         self._run_until_stopped(self.api.serve_forever, "api")
+        self._run_until_stopped(self.credproxy.serve, "credproxy")
         # The runtime event last handled, in ns (`_watch_runtime`): none yet, so every one
         # from here on is handled, those during the reconcile included.
         self._runtime_seen = time.time_ns()
@@ -228,7 +230,6 @@ class Daemon:
                              (lambda: self.garbage.run(self._stop), "garbage"),
                              (lambda: self.memory.run(self._stop), "memory"),
                              (lambda: self.context.run(self._stop), "context"),
-                             (self.credproxy.serve, "credproxy"),
                              (lambda: self.permissions.run(self._stop), "permissions"),
                              (lambda: self.agent_sockets.run(self._stop), "agent-sockets"),
                              (lambda: self.face_sockets.run(self._stop), "face-sockets"),
@@ -346,7 +347,7 @@ class Daemon:
             logger.exception("%s: unexpected failure", what)
 
     def _apply_keyboard(self) -> None:
-        s = keyboard.apply_host(self.paths.settings)
+        s = keyboard.apply_host(settings.current(self.paths, self.events))
         face = self.session.faces.current()
         if face is not None:
             self.session.faces.apply_keyboard(face)

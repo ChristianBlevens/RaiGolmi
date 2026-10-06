@@ -230,7 +230,7 @@ WHOLE_SIZE = "-o resize-by-cells=no"
 
 
 def ai_terminal_command(paths: Paths) -> str:
-    palette = settings.load(paths.settings).look
+    palette = settings.in_force(paths).look
     colours = " ".join(f"-o colors.{key}={str(palette[name]).lstrip('#')}"
                        for key, name in FOOT_COLOURS.items())
     return (f"foot {colours} {NEWLINE_BINDING} {WHOLE_SIZE} "

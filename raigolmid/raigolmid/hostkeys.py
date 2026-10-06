@@ -262,7 +262,7 @@ class HostKeys:
 
     def bindings(self) -> list[Binding]:
         from . import settings            # settings validates its [keys] table with this module
-        keys = settings.load(self.paths.settings).keys
+        keys = settings.current(self.paths, self.events).keys
         return [Binding(action=action, spec=keys[action], command=self.commands[action])
                 for action in sorted(keys)]
 

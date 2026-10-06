@@ -26,6 +26,7 @@ def test_a_call_made_during_the_startup_reconcile_is_answered_after_it(tmp_path)
                            daemon.events, ready=daemon._reconciled)
     served: list[str] = []
     daemon.face_sockets = SimpleNamespace(start=lambda: served.append("face-sockets"))
+    daemon.agent_sockets = SimpleNamespace(start=lambda: served.append("agent-sockets"))
 
     def run_until_stopped(target, name: str) -> None:
         served.append(name)
@@ -39,7 +40,8 @@ def test_a_call_made_during_the_startup_reconcile_is_answered_after_it(tmp_path)
                                       .call("status")), daemon=True)
 
     def reconcile():
-        assert served == ["face-sockets", "api"], "a socket is served only after reconcile"
+        assert served == ["face-sockets", "agent-sockets", "api", "credproxy"], \
+            "every socket a container mounts is served before the reconcile starts it"
         caller.start()
         caller.join(0.5)
         assert answers == [], "the daemon answered before it had reconciled"

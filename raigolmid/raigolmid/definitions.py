@@ -70,6 +70,17 @@ def _reject_unknown(d: dict[str, Any], known: set[str], path: Path, where: str) 
         )
 
 
+def _confined(value: str, root: Path, path: Path, what: str) -> Path:
+    """`root / value`, refused when it resolves (links followed) outside `root`: a layer
+    reaches only its own directory, or a body its project, so a downloaded one cannot
+    mount or build from anywhere else on the machine."""
+    target = root / value
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise DefinitionError(f"{path}: {what} '{value}' is outside {root}; a layer names "
+                              "only paths inside its own directory")
+    return target
+
+
 # --- Face ---------------------------------------------------------------------------
 
 # What the catalog shows of any layer: its words, whose it is, and its picture.
@@ -132,7 +143,8 @@ def load_face(directory: Path) -> Face:
     editor = None
     if (e := raw.get("editor")) is not None:
         _reject_unknown(e, {"package", "config_dir", "command", "open"}, path, "[editor]")
-        config_dir = directory / e["config_dir"] if e.get("config_dir") else None
+        config_dir = (_confined(e["config_dir"], directory, path, "[editor] config_dir")
+                      if e.get("config_dir") else None)
         editor = FaceEditor(
             package=_require(e, "package", path),
             config_dir=config_dir,
@@ -148,7 +160,8 @@ def load_face(directory: Path) -> Face:
                         "[desktop]")
         desktop = FaceDesktop(
             compositor=_require(d, "compositor", path),
-            config_dir=directory / d["config_dir"] if d.get("config_dir") else None,
+            config_dir=(_confined(d["config_dir"], directory, path, "[desktop] config_dir")
+                        if d.get("config_dir") else None),
             apps=tuple(d.get("apps", [])),
             browser=d.get("browser"),
         )
@@ -413,7 +426,25 @@ class Body:
         return out
 
 
-def load_body(directory: Path) -> Body:
+def _working_copy(value: str, private: tuple[Path, ...], path: Path) -> Path:
+    """The user's project, which may be anywhere they keep one, but never where the machine
+    keeps its credentials, state and sockets, nor a directory another user owns: the body and
+    its tab both mount it, and the body runs as its owner."""
+    working_copy = Path(os.path.expandvars(value)).expanduser()
+    real = working_copy.resolve()
+    for own in private:
+        own = own.resolve()
+        if real.is_relative_to(own) or own.is_relative_to(real):
+            raise DefinitionError(f"{path}: working_copy '{value}' overlaps {own}, which is the "
+                                  "machine's own and is never a body's project")
+    if real.is_dir() and (owner := real.stat().st_uid) != os.getuid():
+        raise DefinitionError(f"{path}: working_copy '{value}' is owned by uid {owner}, not "
+                              "this machine's user, and a body runs as its working copy's owner")
+    return working_copy
+
+
+def load_body(directory: Path, private: tuple[Path, ...]) -> Body:
+    """`private` is what a working copy may not overlap (`Paths.private`)."""
     path = directory / "body.toml"
     raw = _load_toml(path)
     _reject_unknown(raw, {"id", "name", "image", "dockerfile", "target", "context",
@@ -435,7 +466,7 @@ def load_body(directory: Path) -> Body:
 
     working_copy = None
     if wc := raw.get("working_copy"):
-        working_copy = Path(os.path.expandvars(wc)).expanduser()
+        working_copy = _working_copy(wc, private, path)
 
     body = Body(
         id=_require(raw, "id", path),
@@ -458,6 +489,14 @@ def load_body(directory: Path) -> Body:
     )
     # Checked after construction, because where the Dockerfile *is* depends on the working
     # copy, and the message has to name the path that was actually looked at.
+    if (root := body.source_root) is not None:
+        if body.context_name:
+            _confined(body.context_name, root, path, "context")
+        if dockerfile_name:
+            _confined(str(Path(body.context_name or ".") / dockerfile_name), root, path,
+                      "dockerfile")
+        for rule in body.watch:
+            _confined(rule.path, root, path, "[[develop.watch]] path")
     if body.builds_from_source:
         resolved = body.dockerfile
         if resolved is None or not resolved.is_file():
@@ -476,9 +515,10 @@ class SearchPaths:
     faces: tuple[Path, ...]
     toolbelts: tuple[Path, ...]
     bodies: tuple[Path, ...]
+    private: tuple[Path, ...]
 
     @classmethod
-    def defaults(cls, repo_root: Path) -> "SearchPaths":
+    def defaults(cls, repo_root: Path, private: tuple[Path, ...]) -> "SearchPaths":
         def env_paths(var: str, fallback: Path) -> tuple[Path, ...]:
             raw = os.environ.get(var)
             if raw:
@@ -489,6 +529,7 @@ class SearchPaths:
             faces=env_paths("RAIGOLMID_FACE_PATH", repo_root / "faces"),
             toolbelts=env_paths("RAIGOLMID_TOOLBELT_PATH", repo_root / "toolbelts"),
             bodies=env_paths("RAIGOLMID_BODY_PATH", repo_root / "bodies"),
+            private=private,
         )
 
 
@@ -508,7 +549,7 @@ def discover(search: SearchPaths) -> Catalogue:
     for roots, marker, loader, table in (
         (search.faces, "face.toml", load_face, cat.faces),
         (search.toolbelts, "toolbelt.toml", load_toolbelt, cat.toolbelts),
-        (search.bodies, "body.toml", load_body, cat.bodies),
+        (search.bodies, "body.toml", lambda d: load_body(d, search.private), cat.bodies),
     ):
         for root in roots:
             if not root.is_dir():

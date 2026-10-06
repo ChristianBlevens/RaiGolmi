@@ -438,7 +438,8 @@ class Agents:
         path, default = ((self.janitor_template_path, JANITOR_TEMPLATE) if spec.tab.janitor
                          else (self.template_path, DEFAULT_TEMPLATE))
         template = path.read_text(encoding="utf-8") if path.is_file() else default
-        return render_template(template, path, settings.load(self.paths.settings).budget_tokens)
+        return render_template(template, path,
+                               settings.current(self.paths, self.events).budget_tokens)
 
     def _janitor_documents(self) -> Path:
         root = self.paths.janitor_documents
@@ -519,7 +520,7 @@ class Agents:
             "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
             "CLAUDE_CODE_DISABLE_MOUSE": "1",
             # The user's settings' model; the entrypoint writes it into the tab's settings.json.
-            "RAIGOLMI_MODEL": settings.load(self.paths.settings).model,
+            "RAIGOLMI_MODEL": settings.current(self.paths, self.events).model,
         }
         env.update(credentials)
         env.update(environment or {})

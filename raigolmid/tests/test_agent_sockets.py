@@ -45,6 +45,7 @@ def world(tmp_path, monkeypatch):
 
 
 def running(sockets: AgentSockets, stop: threading.Event) -> threading.Thread:
+    sockets.start()
     thread = threading.Thread(target=lambda: sockets.run(stop), daemon=True)
     thread.start()
     return thread

@@ -17,7 +17,7 @@ from .paths import Paths
 
 
 def render(paths: Paths) -> str:
-    return json.dumps(settings.load(paths.settings).look, indent=1, sort_keys=True) + "\n"
+    return json.dumps(settings.in_force(paths).look, indent=1, sort_keys=True) + "\n"
 
 
 def digest(text: str) -> str:

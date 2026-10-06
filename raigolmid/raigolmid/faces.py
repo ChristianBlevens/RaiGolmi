@@ -388,7 +388,7 @@ class Faces:
         """The user's keyboard on the face's own sway, which keeps its own keymap
         (`keyboard.py`)."""
         nested = self._nested_compositor(state)
-        for line in keyboard.input_commands(settings.load(self.paths.settings)):
+        for line in keyboard.input_commands(settings.current(self.paths, self.events)):
             try:
                 nested.command(line)
             except FaceError as exc:

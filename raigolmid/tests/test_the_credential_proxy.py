@@ -416,3 +416,11 @@ def test_a_request_a_renewal_overlapped_is_sent_again_on_the_new_token(machine, 
     claude_login.write(tmp_path / "claude-login.json", LOGIN)
     status, _ = _post(proxy, {"Authorization": f"Bearer {oauth['claudeAiOauth']['accessToken']}"})
     assert status == 401, "a 401 no renewal explains is the agent's, as the API said it"
+
+
+def test_a_key_cut_short_is_refused_never_signed_with(tmp_path):
+    from raigolmid.credproxy import Placeholders, ProxyError
+    secret = tmp_path / "proxy-secret"
+    secret.write_text("")
+    with pytest.raises(ProxyError, match="0 bytes"):
+        Placeholders(secret)

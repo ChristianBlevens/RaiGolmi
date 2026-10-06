@@ -234,11 +234,15 @@ class AgentSockets:
         self._lock = threading.Lock()
         self._servers: dict[str, tuple[ApiServer, threading.Thread]] = {}
 
+    def start(self) -> None:
+        """Every open tab's socket, before the reconcile restarts its container, so the
+        container's first call waits on `ready` rather than finding no socket."""
+        for tab_id in list(self.session.intent.tabs):
+            self.open(tab_id)
+
     def run(self, stop: threading.Event) -> None:
         """Ends, and so ends the daemon, when an open tab's socket stops serving: its agent is
         cut off from the machine, and a fresh start serves every open tab's again."""
-        for tab_id in list(self.session.intent.tabs):
-            self.open(tab_id)
         while not stop.is_set():
             _require_serving(self._serving(), stop)
             for event in self._sub.drain(timeout=1.0):

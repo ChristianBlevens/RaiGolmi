@@ -361,7 +361,7 @@ def test_the_digest_and_the_build_read_the_same_copy_of_the_files(h, tmp_path):
         (project / name).write_text((definition / name).read_text())
     _point_at(definition, project)
 
-    body = load_body(definition)
+    body = load_body(definition, ())
     assert body.source_root == project
     assert body.build_context == project
     assert body.dockerfile == project / "Dockerfile"
@@ -372,7 +372,7 @@ def test_the_digest_and_the_build_read_the_same_copy_of_the_files(h, tmp_path):
         "a change in the working copy did not move the digest"
 
     (definition / "requirements.txt").write_text("this-is-the-stale-copy\n")
-    assert body.definition_digest() == load_body(definition).definition_digest(), \
+    assert body.definition_digest() == load_body(definition, ()).definition_digest(), \
         "the digest is reading the definition directory rather than the working copy"
 
 

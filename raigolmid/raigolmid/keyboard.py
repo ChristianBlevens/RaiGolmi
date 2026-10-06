@@ -12,9 +12,7 @@ with xkb's own reason, and that refusal is the error raised here.
 """
 from __future__ import annotations
 
-from pathlib import Path
 
-from . import settings as settings_
 from .settings import Settings
 from ui import hostipc
 from ui.hostipc import HostIpcError
@@ -37,8 +35,7 @@ def host_commands(s: Settings) -> list[str]:
     return input_commands(s) + [f"output * scale {s.scale:g}"]
 
 
-def apply_host(path: Path, swaysock: str | None = None) -> Settings:
-    s = settings_.load(path)
+def apply_host(s: Settings, swaysock: str | None = None) -> Settings:
     for line in host_commands(s):
         try:
             hostipc.run_command(line, swaysock=swaysock)

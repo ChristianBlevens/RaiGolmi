@@ -420,7 +420,7 @@ def test_compose_accepts_the_anchors_namespaces(runtime, env, tmp_path):
     instance_id = "itest-compose@tab-1"
     anchors = Anchors(runtime, epoch=1)
     anchors.ensure(instance_id, ports={8000: 18124})
-    body = load_body(minimal_body(tmp_path / "minimal"))
+    body = load_body(minimal_body(tmp_path / "minimal"), ())
     work = tmp_path / "compose-work"
     work.mkdir()
 

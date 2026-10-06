@@ -125,13 +125,28 @@ class Placeholders:
         self._key = self._load()
 
     def _load(self) -> bytes:
+        """Written whole beside the path and linked into place, so no start ever reads a key
+        cut short; one that is not 32 bytes is refused, never signed with."""
+        if not self.secret_path.exists():
+            staged = self.secret_path.with_name(f".{self.secret_path.name}.{os.getpid()}")
+            fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="ascii") as out:
+                out.write(secrets.token_hex(32))
+                out.flush()
+                os.fsync(out.fileno())
+            try:
+                os.link(staged, self.secret_path)
+            finally:
+                staged.unlink()
+        text = self.secret_path.read_text(encoding="ascii").strip()
         try:
-            fd = os.open(self.secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            return bytes.fromhex(self.secret_path.read_text(encoding="ascii").strip())
-        with os.fdopen(fd, "w", encoding="ascii") as out:
-            out.write(secrets.token_hex(32))
-        return bytes.fromhex(self.secret_path.read_text(encoding="ascii").strip())
+            key = bytes.fromhex(text)
+        except ValueError as exc:
+            raise ProxyError(f"{self.secret_path} is not a hex key: {exc}") from exc
+        if len(key) != 32:
+            raise ProxyError(f"{self.secret_path} holds {len(key)} bytes, not the 32 "
+                                       "of a placeholder key")
+        return key
 
     def _mac(self, owner: str) -> str:
         return hmac.new(self._key, owner.encode(), hashlib.sha256).hexdigest()[:40]

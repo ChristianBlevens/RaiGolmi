@@ -56,3 +56,26 @@ def test_a_wrong_value_is_refused_naming_it(section, key, value):
 def test_an_unknown_setting_is_refused_naming_it(text, names):
     with pytest.raises(SettingsError, match=names):
         settings.parse(text, "settings.toml")
+
+
+def test_a_wrong_save_holds_the_last_right_one_and_is_said_once(tmp_path, monkeypatch):
+    """A thread that reads the settings every tick must not die of a typo: the daemon is one
+    with its threads, and the janitor that would fix the file dies with it."""
+    from raigolmid.events import EventLog
+    from raigolmid.paths import Paths
+    for var in ("XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(var, str(tmp_path / var))
+    paths = Paths.from_env()
+    events = EventLog(tmp_path / "events.jsonl")
+    paths.settings.parent.mkdir(parents=True)
+    paths.settings.write_text(settingsdoc.text(agents={"model": "theirs"}))
+    assert settings.current(paths, events).model == "theirs"
+
+    paths.settings.write_text("[agents\n")
+    for _ in range(3):
+        assert settings.current(paths, events).model == "theirs"
+    said = [e for e in events.read() if e.type == "settings.invalid"]
+    assert len(said) == 1
+
+    monkeypatch.setattr(settings, "_in_force", {})
+    assert settings.in_force(paths).model == "theirs", "a restart finds the last right save"
