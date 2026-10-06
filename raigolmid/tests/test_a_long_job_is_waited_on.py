@@ -49,7 +49,7 @@ def test_a_job_is_waited_on_until_it_exits_and_says_how(h):
 
 def test_a_job_whose_toolbelt_was_recreated_is_gone_not_running(h):
     tab, instance = h.tab("myapi"), _instance(h)
-    h.session.jobs.start(tab, instance, "y50", ["ltr", "--years", "50"])
+    h.session.jobs.start(tab, instance, "y50", ["myproject", "--years", "50"])
     h.session.repair(instance)
     waited = h.session.jobs.wait(tab, "y50")
     assert waited["state"] == "gone" and "recreated" in waited["why"]

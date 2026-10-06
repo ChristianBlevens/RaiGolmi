@@ -26,7 +26,7 @@ from ui.ai_terminal import terminal        # noqa: E402
 TAB = "tab-1"
 # A resumed agent's first output: its conversation, and the three queries Claude Code 2.1.283
 # asks its terminal at start. Replayed, a query would be answered into the agent's input.
-SHOWN = b"\x1b[1m> the first thing he asked\x1b[0m\r\n"
+SHOWN = b"\x1b[1m> the first thing they asked\x1b[0m\r\n"
 CONVERSATION = b"\x1b[c\x1b[>0q\x1b[?u\x1b[>1u" + SHOWN
 
 
@@ -232,10 +232,10 @@ def test_a_permission_is_offered_in_its_window_once_each_time_he_comes_to_it(mon
 
 
 def test_a_permission_longer_than_the_terminal_is_wide_is_still_drawn(monkeypatch):
-    """The toolbelt swap's message is 161 characters; his terminal was 155 wide."""
+    """The toolbelt swap's message is 161 characters; their terminal was 155 wide."""
     tmux = _Tmux(monkeypatch, (155, 21))
     long = dict(PERMISSION, message="The agent wants to swap this sandbox's toolbelt to "
-                "'letthemrise'. Its language servers and your terminals' shells in the sandbox "
+                "'myworkspace'. Its language servers and your terminals' shells in the sandbox "
                 "end, and the body keeps running.")
     machine = _Machine("permission", viewing=TAB, permission=long)
     assert terminal._keep(machine, TAB, "%7", None) == "q4" and len(tmux.menus) == 1
@@ -258,7 +258,7 @@ def test_only_an_answer_closes_the_permission_menu(monkeypatch):
 
     def leaves(command, **kwargs):
         menus.append(command)
-        machine.viewing = None      # he hid the terminal while it was up
+        machine.viewing = None      # they hid the terminal while it was up
         return real_run(command, **kwargs)
     monkeypatch.setattr(terminal.subprocess, "run", leaves)
     terminal.offer_permission(machine, TAB)
@@ -514,7 +514,7 @@ def test_the_tab_menu_lists_every_tab_in_the_bars_order_and_selects_it(monkeypat
     """The bar is cut at the terminal's right edge; the `≡` menu reaches every tab."""
     # As `_keep` writes the marks: "1" or "0"; the base window, which it never reaches, has none.
     rows = ["@0\traigolmi\t0\t\t", "@4\tjanitor ⚙\t0\t0\t0", "@2\ttab-11 machine\t1\t0\t0",
-            "@7\ttab-10 letthemrise\t0\t1\t1"]
+            "@7\ttab-10 myapi\t0\t1\t1"]
 
     def tmux(*args, **_kwargs):
         if args[0] == "list-windows":
@@ -532,4 +532,4 @@ def test_the_tab_menu_lists_every_tab_in_the_bars_order_and_selects_it(monkeypat
         ("  raigolmi", "1", "select-window -t @0"),
         ("  janitor ⚙", "2", "select-window -t @4"),
         ("▸ tab-11 machine", "3", "select-window -t @2"),
-        ("  ● ◇ tab-10 letthemrise", "4", "select-window -t @7")]
+        ("  ● ◇ tab-10 myapi", "4", "select-window -t @7")]

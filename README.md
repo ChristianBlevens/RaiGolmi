@@ -1,5 +1,5 @@
 <!-- purpose: the public face: what RaiGolmi is and how a user installs, starts and uses it, casual reader first, then the narrated uses, then the reference
-not-here: design (ARCHITECTURE.md), settled calls (docs/standing-rulings.md), development state (SESSION-START.md), measurements (docs/findings.md)
+not-here: design, settled calls, development state and measurements (development notes, kept outside the repository)
 shape: bounded
 audited: 25171 2026-10-05
 -->
@@ -33,19 +33,20 @@ hasn't met many others yet, so if something goes wrong, see
 
 ### Install it (Windows)
 
-You need 64-bit Windows 10 or 11 on an Intel or AMD PC with virtualization turned on in its
-BIOS/UEFI (most ship with it on, and setup tells you if yours doesn't), 16 GB of RAM (the VM
-takes 8; setup refuses below 12), a graphics card with Direct3D 11, about 60 GB free for a
-disk that grows as you use it, and a paid Claude plan (Pro or Max; Team and Enterprise work
-too). It doesn't run inside another VM unless that VM passes virtualization through. Windows
-asks for administrator rights for each system part setup installs (up to four times on a
-fresh PC), and needs a restart the first time it turns on its hypervisor. Turning that
-hypervisor on can upset older VirtualBox or VMware versions and some games' anti-cheat.
+You need 64-bit Windows 10 or 11 on an Intel or AMD (x86-64) PC, not an ARM one, with
+virtualization turned on in its BIOS/UEFI (most ship with it on, and setup tells you if yours
+doesn't), 16 GB of RAM (the VM takes 8; setup refuses below 12), a graphics card with
+Direct3D 11, about 60 GB free for a disk that grows as you use it, and a paid Claude plan
+(Pro or Max; Team and Enterprise work too). It doesn't run inside another VM unless that VM
+passes virtualization through. Windows asks for administrator rights for each system part
+setup installs (up to four times on a fresh PC), and needs a restart the first time it turns
+on its hypervisor. Turning that hypervisor on can upset older VirtualBox or VMware versions
+and some games' anti-cheat.
 
 ```
 git clone https://github.com/ChristianBlevens/RaiGolmi
 cd RaiGolmi
-setup.bat
+.\setup.bat
 ```
 
 (Or download the repository as a ZIP from GitHub, right-click it and choose *Extract All*,

@@ -16,9 +16,9 @@ def test_the_shipped_document_is_installed_once_and_never_over_the_users(tmp_pat
         settings.load(path)
     settings.install(path)
     assert settings.load(path) == settings.load(settings.SHIPPED)
-    path.write_text(settingsdoc.text(agents={"model": "his-model"}))
+    path.write_text(settingsdoc.text(agents={"model": "their-model"}))
     settings.install(path)
-    assert settings.load(path).model == "his-model"
+    assert settings.load(path).model == "their-model"
 
 
 @pytest.mark.parametrize("section, key", [

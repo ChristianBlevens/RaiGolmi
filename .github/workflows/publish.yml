@@ -11,7 +11,7 @@
 # The same build runs locally (build.bat, host/ci/build-local.sh).
 name: publish
 
-# ⚠ **No push trigger, deliberately.** It runs only when dispatched (`gh workflow run
+# ⚠ No push trigger, deliberately. It runs only when dispatched (`gh workflow run
 # publish.yml`): a release exists because a person asked for one.
 on:
   workflow_dispatch:

@@ -234,6 +234,13 @@ function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
 function Run-Prerequisites {
     $missing = @()
 
+    # QEMU here is x86-64 on WHPX, which runs only an x86-64 guest on an x86-64 CPU. Asked of the
+    # hardware, which an ARM PC reports as itself even to an emulated x64 process (9 is x64).
+    if (@(Get-CimInstance Win32_Processor | Where-Object { $_.Architecture -ne 9 }).Count) {
+        Fail ("This PC's processor is not a 64-bit Intel or AMD one (an ARM PC, for one). " +
+              "RaiGolmi's machine runs only on 64-bit Intel or AMD processors.")
+    }
+
     # Asked of the hypervisor platform itself, through the API QEMU's WHPX accelerator uses: the
     # feature list can disagree with a platform that works. No WinHvPlatform.dll is no platform.
     Add-Type -Namespace RaiGolmi -Name Whp -MemberDefinition @'
@@ -263,9 +270,10 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
               "in your BIOS/UEFI settings, start Windows again, then run this again.")
     }
     # The VM takes 8 GB (`windows/RaiGolmi.cs` `-m 8192`) and Windows needs room of its own
-    # beside it; a 16 GB PC reads a little under 16 once firmware and graphics have theirs.
+    # beside it. A PC reads a little under what it has once firmware and graphics take theirs,
+    # so a 12 GB PC is measured against 11.
     $memory = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
-    if ($memory -lt 12GB) {
+    if ($memory -lt 11GB) {
         Fail (("This PC has {0:N1} GB of memory. RaiGolmi's machine takes 8 GB of it and Windows " +
                "needs its own beside that, so it needs at least 12 GB, and 16 is what it is made for.") -f ($memory / 1GB))
     }
@@ -343,7 +351,8 @@ function Refuse-Synced([string]$path) {
 # The launcher boots this disk from now on (it reads disk.txt).
 function Record-Disk {
     New-Item -ItemType Directory -Force $state | Out-Null
-    Set-Content -Path (Join-Path $state 'disk.txt') -Value $disk -NoNewline
+    # UTF-8, as the launcher reads it: Set-Content in Windows PowerShell writes the ANSI code page.
+    [IO.File]::WriteAllText((Join-Path $state 'disk.txt'), $disk)
 }
 
 # RaiGolmi.lnk beside the build scripts, to run from here or drag anywhere. It points at the

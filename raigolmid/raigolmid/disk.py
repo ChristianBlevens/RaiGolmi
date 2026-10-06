@@ -24,7 +24,6 @@ or a boot is measured from the least the disk has held since it was said.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import stat
@@ -36,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 from . import git
 from .budgets import Budgets
 from .events import EventLog
+from .intent import load_json, save_json
 from .runtime.base import RuntimeError_
 
 if TYPE_CHECKING:
@@ -215,10 +215,7 @@ class Disk:
             self.tick()
 
     def _reported(self) -> dict[str, Any] | None:
-        try:
-            return json.loads(self.path.read_text())
-        except FileNotFoundError:
-            return None
+        return load_json(self.path, "the disk's last reading")
 
     def tick(self) -> None:
         now = reading(self.session)
@@ -258,16 +255,11 @@ class Disk:
 
     def _report(self, now: dict[str, Any]) -> None:
         """`now` becomes what the next growth is measured from."""
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(now))
-        tmp.replace(self.path)
+        save_json(self.path, now)
 
 
 def accounted(session: "Session") -> dict[str, Any]:
     """The janitor's `disk`: the reading now, and each holder's change since the mark."""
     now = reading(session)
-    try:
-        then = json.loads(session.paths.disk.read_text())
-    except FileNotFoundError:
-        then = None
+    then = load_json(session.paths.disk, "the disk's last reading")
     return {**now, "since": then["at"] if then else None, "changes": changes(now, then)}

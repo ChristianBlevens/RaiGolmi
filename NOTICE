@@ -10,7 +10,7 @@ The published release carries other people's software, each under its own licens
   repositories: https://src.fedoraproject.org.
 - Docker CE (docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin,
   docker-compose-plugin), installed from download.docker.com. Docker Engine, its CLI, Buildx
-  and Compose are under the Apache License 2.0, and containerd under the Apache License 2.0:
+  and Compose, and containerd, are under the Apache License 2.0:
   https://github.com/moby/moby, https://github.com/docker/cli,
   https://github.com/docker/buildx, https://github.com/docker/compose,
   https://github.com/containerd/containerd.
@@ -18,9 +18,11 @@ The published release carries other people's software, each under its own licens
   under the license in its own distribution metadata there.
 - The machine's own container images, baked into the disk: Fedora 44 for its surfaces and
   helpers (the GitHub CLI, MIT, in one of them), and the agent image every tab runs. That one
-  is Debian bookworm with Node.js 22 (node:22-bookworm-slim), its Debian packages, the GitHub
-  CLI, and Claude Code (@anthropic-ai/claude-code, the version pinned in
-  agents/claude/Dockerfile). Claude Code is Anthropic's, is not open source, and is used under
+  is Debian bookworm with Node.js 22 (node:22-bookworm-slim; Node.js is MIT), its Debian
+  packages, the GitHub CLI, and Claude Code (@anthropic-ai/claude-code, the version pinned in
+  agents/claude/Dockerfile). Each Debian package's license is in /usr/share/doc/<package>/copyright
+  in the image, and its source is at https://sources.debian.org (and, for the exact version,
+  https://snapshot.debian.org). Claude Code is Anthropic's, is not open source, and is used under
   Anthropic's own terms, in the LICENSE.md of its npm package; every agent in RaiGolmi is it.
 
 The Windows app (RaiGolmi.exe) is built as one file and carries Vortice.Direct3D11,

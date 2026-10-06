@@ -86,10 +86,10 @@ def test_the_users_face_is_face_on_the_network_and_a_trial_is_not_on_it(rig, tmp
     runtime, paths, events = rig
     faces = Faces(runtime, paths, events, host=ScriptedHost(windows_of_faces(runtime)))
     monkeypatch.setattr(faces, "_screen_size", lambda: None)
-    his = _spec_of(runtime, monkeypatch, lambda: faces.start(a_face(tmp_path)))
+    theirs = _spec_of(runtime, monkeypatch, lambda: faces.start(a_face(tmp_path)))
     trial = _spec_of(runtime, monkeypatch, lambda: faces.start_trial(a_face(tmp_path)))
 
-    assert his.network == naming.network() and his.aliases == (naming.FACE_HOST,)
+    assert theirs.network == naming.network() and theirs.aliases == (naming.FACE_HOST,)
     assert trial.network is None and trial.aliases == ()
 
 
