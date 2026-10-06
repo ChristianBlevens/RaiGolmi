@@ -286,8 +286,9 @@ that already settles it, it's answered from there. Every answer you give is writ
 it, so the same question won't need you twice. A question you leave for 30 minutes gets
 "no answer" and the agent decides for itself; a permission left that long is a no.
 
-When an agent needs permission for something, a menu pops up in its tab. You can say yes or
-no just this once, for this project, or everywhere. The **×** on a tab archives its
+When an agent needs permission for something the machine does for it, a menu pops up in
+its tab. You can say yes or no just this once, for this project, or everywhere. Inside its
+own container an agent doesn't ask: it runs whatever commands it likes there. The **×** on a tab archives its
 conversation. For `machine` and your selected body, that gives you a fresh tab with a clean
 slate. To pick an old conversation back up, type `/resume` in a tab of the same project and
 press **Ctrl+A**: every archived one is listed there.
@@ -455,9 +456,22 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 - Each agent runs in its own container, with no capabilities and no Docker socket. It sees
   its own work, the layer definitions, `/transfer`, the layer-writing guide, and a control
   socket for its own tab, and nothing else.
-- Containers can't reach the host except through the daemon's credential proxy. Your Claude
-  token and sign-ins never go into a tab. Tabs hold placeholders, and the proxy swaps in the
-  real ones on the way out, with GitHub's only ever sent to GitHub.
+- Containers can't reach the host except through the daemon's credential proxy, and they
+  can't reach your Windows PC at all. They do get the whole internet.
+- Your Claude token and sign-ins never go into a tab. Tabs hold placeholders, and the proxy
+  swaps in the real ones on the way out, with GitHub's only ever sent to GitHub.
+
+What it doesn't protect you from, so you know what you're handing over:
+
+- Agents have full control inside the VM's containers. They run with Claude Code's
+  permission prompts turned off, so the permission menu covers what the machine does for
+  them, not every command they run.
+- Every tab can use your GitHub sign-in through the proxy, for anything that sign-in can
+  do, such as pushing to any of your repos. Skip the sign-in if you'd rather they couldn't.
+- A layer you download from the catalog is someone else's code, and it runs on your machine
+  with the same reach as one you wrote.
+- Tabs left to work on their own make decisions for you and spend your Claude plan's usage
+  while they do.
 
 ### The `rai` command
 
