@@ -19,7 +19,7 @@ $choice = (Read-Host 'Number').Trim()
 if (-not $formats.Contains($choice)) { Fail "No disk numbered '$choice'." }
 $format = $formats[$choice]
 
-Install-Missing @(Disk-Prerequisites) 'build-disk.bat'
+Install-Missing { Disk-Prerequisites } 'build-disk.bat'
 $target = Join-Path $disks $format.File
 if (Test-Path $target) {
     # The machine installed from it is not one this script can reach: the image is left for it.

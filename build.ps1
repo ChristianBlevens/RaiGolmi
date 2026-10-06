@@ -6,7 +6,7 @@
 #  launcher alone, keeping the disk, run build-launcher.bat.
 . (Join-Path $PSScriptRoot 'build-common.ps1')
 
-Install-Missing (@(Launcher-Prerequisites) + @(Disk-Prerequisites)) 'build.bat'
+Install-Missing { @(Launcher-Prerequisites) + @(Disk-Prerequisites) } 'build.bat'
 
 Build-Launcher
 $upgrade = Test-Path $disk

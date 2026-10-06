@@ -30,6 +30,10 @@ function Winget([string]$id) {
               "Installer' from the Microsoft Store, then run this again.")
     }
     winget install -e --id $id --accept-source-agreements --accept-package-agreements
+    # A declined prompt or a failed install is said here; whether it is there is asked again.
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "winget exited $LASTEXITCODE installing $id." -ForegroundColor Yellow
+    }
 }
 
 # Each install changes PATH for new processes only; this session reads it again.
@@ -38,9 +42,11 @@ function Refresh-Path {
                 [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
-# One popup for everything missing: with a yes each is installed, without it each is named
-# with its command and nothing is built.
-function Install-Missing($missing, [string]$entry) {
+# One popup for everything `$prerequisites` finds missing: with a yes each is installed and
+# then asked for again, so one that did not install is named; without it each is named with
+# its command and nothing is built.
+function Install-Missing([scriptblock]$prerequisites, [string]$entry) {
+    $missing = @(& $prerequisites)
     if ($missing.Count -eq 0) { return }
     $list = ($missing | ForEach-Object { " - $($_.What)" }) -join "`n"
     if (-not (Ask "RaiGolmi needs these, downloaded and installed:`n`n$list`n`nInstall them now?")) {
@@ -60,6 +66,11 @@ function Install-Missing($missing, [string]$entry) {
     }
     if ($script:finishWsl) {
         Fail "Finish $distro's setup (a user name and password) in the window that opened, then run $entry again."
+    }
+    $still = @(& $prerequisites)
+    if ($still.Count -ne 0) {
+        $list = ($still | ForEach-Object { " - $($_.What)`n     $($_.How)" }) -join "`n"
+        Fail "These are still missing after installing (what went wrong is above):`n$list"
     }
 }
 

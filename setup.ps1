@@ -49,9 +49,20 @@ function Download([string]$token, $layer, [string]$target) {
     $partial = "$target.$($layer.digest.Substring(7, 12)).partial"
     $have = if (Test-Path $partial) { (Get-Item $partial).Length } else { 0 }
     if ($have -lt $layer.size) {
+        $drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($target))
+        $needed = $layer.size - $have
+        if ($drive.AvailableFreeSpace -lt $needed) {
+            $shortfall = "{0} has {1:N1} GB free, and {2} needs {3:N1} GB more." -f $drive.Name,
+                     ($drive.AvailableFreeSpace / 1GB), (Split-Path -Leaf $target), ($needed / 1GB)
+            Fail "$shortfall Free some space on it, then run setup.bat again."
+        }
         Write-Host ("Downloading $(Split-Path -Leaf $target) ({0:N1} GB)..." -f ($layer.size / 1GB))
         & curl.exe -fL --retry 5 -C - -o $partial -H "Authorization: Bearer $token" `
             "https://$registry/v2/$package/blobs/$($layer.digest)"
+        # 23 is curl failing to write what it received: the drive filled, or refused the file.
+        if ($LASTEXITCODE -eq 23) {
+            Fail "Writing $partial failed (curl exit 23): $($drive.Name) may be full. Free some space on it, then run setup.bat again."
+        }
         if ($LASTEXITCODE -ne 0) {
             Fail "Downloading $(Split-Path -Leaf $target) failed (curl exit $LASTEXITCODE). Run setup.bat again to resume it."
         }
@@ -64,7 +75,7 @@ function Download([string]$token, $layer, [string]$target) {
     Move-Item -Force $partial $target
 }
 
-Install-Missing @(Run-Prerequisites) 'setup.bat'
+Install-Missing { Run-Prerequisites } 'setup.bat'
 
 $token   = Registry-Token
 $release = Latest-Release $token

@@ -3,7 +3,7 @@
 #  launcher and a new disk, run build.bat instead.
 . (Join-Path $PSScriptRoot 'build-common.ps1')
 
-Install-Missing @(Launcher-Prerequisites) 'build-launcher.bat'
+Install-Missing { Launcher-Prerequisites } 'build-launcher.bat'
 Build-Launcher
 New-Shortcut
 Write-Host "Built. Run RaiGolmi.lnk here, or drag it wherever you like."
