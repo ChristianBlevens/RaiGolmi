@@ -314,14 +314,36 @@ def test_a_face_whose_compositor_refuses_the_watch_is_said(rig):
         assert "data-control" in SAYS["clipboard.unbridged"](event)
 
 
-def test_the_host_watch_ending_ends_the_bridge_with_its_reason(rig):
+def test_the_host_compositor_going_is_said_and_the_bridge_resumes_when_it_returns(rig):
+    """At every window close the host compositor exits before the daemon: that is the
+    machine shutting down, never the bridge failing, and a compositor that comes back is
+    bridged again."""
     paths, events, log, compositors = rig
     with Clipboards(paths, events, log) as clips:
-        _until(lambda: clips.log.exists())
+        _until(lambda: clips.log.exists() or clips.held(clips.host()) is None)
+        time.sleep(0.3)
         compositors[0].close()
-        clips.thread.join(5)
+        _until(lambda: clips.events_of("clipboard.host_gone"))
+        [gone] = clips.events_of("clipboard.host_gone")
+        assert "Broken pipe" in gone["reason"]
+        assert clips.thread.is_alive() and clips.raised == []
+        clips.host().unlink()
+        _compositor(clips.host(), compositors)
+        _face_up(events, compositors, clips.face())
+        _joined(clips)
+        clips.copy(clips.host(), b"after the return")
+        _until(lambda: clips.held(clips.face()) == b"after the return")
+
+
+def test_a_host_watch_ending_while_its_compositor_answers_ends_the_bridge(rig):
+    """A watch the host compositor refuses or drops while it is still up is the bridge
+    failing, said with its reason."""
+    paths, events, log, compositors = rig
+    Path(f"{paths.runtime / 'wayland-1'}.no-data-control").touch()
+    with Clipboards(paths, events, log) as clips:
+        clips.thread.join(10)
         [raised] = clips.raised
         assert isinstance(raised, ClipboardError)
-        assert "Broken pipe" in str(raised)
+        assert "data-control" in str(raised)
 
 

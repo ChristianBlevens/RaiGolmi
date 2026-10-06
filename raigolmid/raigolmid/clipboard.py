@@ -7,7 +7,9 @@ runs no watch command at all.
 
 It follows whichever of the user's faces is up — the one found running when the daemon starts,
 which covers a face adopted across a restart, then `face.started` and `face.stopped`. A trial
-face is never joined: it is off the user's screen and its clipboard is nobody's. A face that
+face is never joined: it is off the user's screen and its clipboard is nobody's. The host
+compositor is followed the same way: one that goes (`clipboard.host_gone`, the machine shutting
+down) is waited for, never reported as the bridge failing. A face that
 joins is given the host's text before its own watch starts, so the host's selection wins and
 the two never cross over each other.
 
@@ -25,6 +27,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import IO, Callable
@@ -44,6 +47,8 @@ OFFERED = "text/plain;charset=utf-8"
 # A text `wl-copy` took and the side never reported back would otherwise be kept forever.
 ECHOES = 16
 COPY_TIMEOUT = 10.0
+# How often a gone host compositor is asked whether it is back.
+HOST_RETURN_POLL = 1.0
 
 
 class ClipboardError(RuntimeError):
@@ -153,31 +158,45 @@ class ClipboardBridge:
             # No host compositor: nothing to join, and a thread that ends is a dead part.
             stop.wait()
             return
-        self._host = _Side("host", self.paths.runtime, display, self._lines)
-        self._host.watch()
-        try:
-            # What the host holds is known before any face joins, so a face adopted across a
-            # restart is given the host's text rather than racing it.
+        while not stop.is_set():
+            self._host = _Side("host", self.paths.runtime, display, self._lines)
+            self._host.watch()
             try:
-                self._take(*self._lines.get(timeout=FIRST_REPORT_TIMEOUT))
+                self._bridge(stop)
+            finally:
+                self._leave()
+                self._host.unwatch()
+            # The host compositor went away: the machine shutting down, or the compositor
+            # restarting. The bridge resumes when it answers again.
+            while not stop.is_set() and not self._host.answering():
+                stop.wait(HOST_RETURN_POLL)
+
+    def _bridge(self, stop: threading.Event) -> None:
+        """Until stopped, or until the host compositor is gone."""
+        assert self._host is not None
+        # What the host holds is known before any face joins, so a face adopted across a
+        # restart is given the host's text rather than racing it.
+        try:
+            first = self._lines.get(timeout=FIRST_REPORT_TIMEOUT)
+        except queue.Empty:
+            raise ClipboardError(f"the host's clipboard watch reported nothing within "
+                                 f"{FIRST_REPORT_TIMEOUT:g} s") from None
+        if not self._take(*first):
+            return
+        face = self.current_face()
+        if face is not None and face.wayland_display:
+            self._join(face.container, face.face_id, face.wayland_display)
+        while not stop.is_set():
+            try:
+                if not self._take(*self._lines.get(timeout=0.25)):
+                    return
+                while True:
+                    if not self._take(*self._lines.get_nowait()):
+                        return
             except queue.Empty:
-                raise ClipboardError(f"the host's clipboard watch reported nothing within "
-                                     f"{FIRST_REPORT_TIMEOUT:g} s") from None
-            face = self.current_face()
-            if face is not None and face.wayland_display:
-                self._join(face.container, face.face_id, face.wayland_display)
-            while not stop.is_set():
-                try:
-                    self._take(*self._lines.get(timeout=0.25))
-                    while True:
-                        self._take(*self._lines.get_nowait())
-                except queue.Empty:
-                    pass
-                for event in self._sub.drain(timeout=0):
-                    self._on_event(event)
-        finally:
-            self._leave()
-            self._host.unwatch()
+                pass
+            for event in self._sub.drain(timeout=0):
+                self._on_event(event)
 
     def _on_event(self, event: Event) -> None:
         if event.type == "face.started" and event.data["wayland_display"]:
@@ -204,12 +223,22 @@ class ClipboardBridge:
         face, self._face, self._face_container = self._face, None, None
         face.unwatch()
 
-    def _take(self, side: _Side, line: bytes | None) -> None:
+    def _take(self, side: _Side, line: bytes | None) -> bool:
+        """Whether the host compositor is still there to bridge."""
         if side is not self._host and side is not self._face:
-            return  # a face that has left, whose last lines were still queued
+            return True  # a side that has left, whose last lines were still queued
         if line is None:
             if side is self._host:
-                raise ClipboardError(f"the host's clipboard is no longer watched: {side.ended()}")
+                reason = side.ended()
+                # A compositor still answering refused or dropped the watch; one that is gone
+                # took it with it, which is the machine shutting down or the compositor
+                # restarting, not the bridge failing. An exiting compositor drops its clients
+                # before it closes its socket, so it is asked once it has had time to finish.
+                time.sleep(HOST_RETURN_POLL)
+                if side.answering():
+                    raise ClipboardError(f"the host's clipboard is no longer watched: {reason}")
+                self.events.emit("clipboard.host_gone", reason=reason)
+                return False
             self._face, self._face_container = None, None
             reason = side.ended()
             # A face being stopped loses its compositor before `face.stopped` is emitted, and
@@ -218,21 +247,22 @@ class ClipboardBridge:
             if side.answering():
                 self.events.emit("clipboard.unbridged", face=side.name.removeprefix("face "),
                                  reason=reason)
-            return
+            return True
         if not line:
-            return  # an empty selection is never carried: clearing one side keeps the other's
+            return True  # an empty selection is never carried: clearing one side keeps the other's
         text = base64.b64decode(line)
         if text in side.given:
             while side.given.popleft() != text:
                 pass
             side.held = text
-            return
+            return True
         if text == side.held:
-            return
+            return True
         side.held = text
         other = self._face if side is self._host else self._host
         if other is not None:
             self._carry(text, other)
+        return True
 
     def _carry(self, text: bytes, to: _Side) -> None:
         refused = to.give(text)
