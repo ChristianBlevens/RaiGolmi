@@ -35,8 +35,8 @@ setup.bat
 (Or download the repository as a ZIP from GitHub, unzip it and double-click `setup.bat`.)
 
 `setup.bat` checks for what it needs and asks once before installing anything that's
-missing, then downloads the app and its disk (about 2 GB). When it's done there's a
-`RaiGolmi` shortcut next to `setup.bat`. Open it, and close the window when you're done.
+missing, then downloads the app and its disk (about 2 GB) and starts it. Next time, open the
+`RaiGolmi` shortcut it leaves next to `setup.bat`, and close the window when you're done.
 Closing it shuts the machine down properly.
 
 To update, run `setup.bat` again. It downloads the new app, and your machine downloads its

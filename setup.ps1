@@ -86,7 +86,8 @@ if (-not (Test-Path $disk)) {
     Record-Disk
     Set-Content -Path $releaseRecord -Value $release.Revision -NoNewline
     New-Shortcut
-    Write-Host "Installed release $short. Run RaiGolmi.lnk here, or drag it wherever you like."
+    Start-Process $exe -WorkingDirectory (Split-Path $exe)
+    Write-Host "Installed release $short. RaiGolmi is starting; next time, open RaiGolmi.lnk here, or drag it wherever you like."
     exit 0
 }
 
