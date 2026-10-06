@@ -199,7 +199,6 @@ def test_a_question_outlives_a_resuming_restart_and_goes_with_its_conversation(
 # --- what is kept -----------------------------------------------------------------------
 def test_what_is_asked_and_an_overturn_held_outlive_the_daemon(tmp_path, monkeypatch):
     events, first, judge, runtime = standalone(tmp_path, monkeypatch)
-    store = tmp_path / "questions.json"
     done = first.ask("tab-1", "Colour?")
     settle_judging(judge, first)
     judge_says(runtime, "- Colours: blue.\n- Fonts: serif.")
@@ -231,7 +230,6 @@ def test_what_is_asked_and_an_overturn_held_outlive_the_daemon(tmp_path, monkeyp
 
 def test_what_a_gone_tab_asked_is_withdrawn_at_start(tmp_path, monkeypatch):
     events, first, judge, _ = standalone(tmp_path, monkeypatch)
-    store = tmp_path / "questions.json"
     gone, kept = first.ask("tab-2", "Still there?"), first.ask("tab-1", "Here?")
     settle_judging(judge, first)
 
@@ -290,7 +288,7 @@ def test_a_tab_that_goes_idle_while_he_watches_it_is_not_marked(api):
 def test_a_question_or_permission_is_marked_until_settled_even_in_view(api):
     api.host.call("terminal_viewing", shown=True, window="tab-1 machine")
     _heard(api.viewing)
-    question = api.ask(api.tab, "Which colour?")
+    api.ask(api.tab, "Which colour?")
     assert agent_of(api, "tab-1")["state"] == "asking"
     assert _marks(api) == ({"tab-1": True, "tab-2": False}, True)
     api.tab.call("agent_activity", busy=True, prompt="blue")

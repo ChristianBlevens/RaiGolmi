@@ -17,7 +17,7 @@ from pathlib import Path
 
 from raigolmid import naming
 from raigolmid.compose import ComposeError
-from raigolmid.runtime.base import ContainerSpec, RemoveBusy, RuntimeError_
+from raigolmid.runtime.base import ContainerSpec, ExecResult, RemoveBusy, RuntimeError_
 
 # compose-go's template: an escaped `$`, a variable, or a `$` it refuses.
 _TEMPLATE = re.compile(r"\$\$|\$(?:(?P<name>[_A-Za-z][_A-Za-z0-9]*)|\{(?P<braced>[^}]*)\}|)")
@@ -307,9 +307,8 @@ class ClosureCopies:
                 return ["bash", "coreutils", *info.tags[0].split("/shell/", 1)[1].split("/")]
         raise AssertionError(f"no image {image_id}")
 
-    def __call__(self, spec: ContainerSpec) -> "ExecResult":
+    def __call__(self, spec: ContainerSpec) -> ExecResult:
         from raigolmid import closures
-        from raigolmid.runtime.base import ExecResult
         if spec.command != ("bash", "-c", closures.COPY_SCRIPT):
             return ExecResult(1, f"unexpected command {spec.command}")
         mounts = {m.target: Path(m.source) for m in spec.mounts}

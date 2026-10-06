@@ -450,9 +450,9 @@ class Coordinator:
     def _machine_idle(self, tab_id: str, handover: str | None, error: str | None) -> None:
         """The machine tab's own handover, only while the user is away (`Intent.hands_off`):
         asked at its budget and restarted after the turn that said ready. A turn that heard it
-        and ended without saying so is the tab failing, not a reason to ask again (the owner,
-        2026-09-29): it is said as `coordinator.unanswered`, which the janitor takes, and
-        nothing more is asked until it says ready."""
+        and ended without saying so is the tab failing, and asking again would only repeat
+        it: it is said as `coordinator.unanswered`, which the janitor takes, and nothing more
+        is asked until it says ready."""
         if not self.session.intent.hands_off(tab_id):
             if handover is not None:
                 self.session.hand_over(tab_id, None)    # the user is back: theirs to close

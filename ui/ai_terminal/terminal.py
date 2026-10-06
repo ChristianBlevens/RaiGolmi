@@ -919,9 +919,9 @@ def sync_windows(client) -> None:
 
 
 def _rank(window: Window, scopes: dict[str, Any], body: str | None) -> tuple:
-    """The tab bar's order (the owner, 2026-09-29): the base window, then the janitor, the
-    machine tab, the selected body's tab, and the other bodies' tabs as they were opened.
-    A window that is no tab goes last."""
+    """The tab bar's order, the tabs always there before those that come and go: the base
+    window, then the janitor, the machine tab, the selected body's tab, and the other bodies'
+    tabs as they were opened. A window that is no tab goes last."""
     if window.name == BASE or window.tab == NO_AGENT:
         return (0,)
     scope = scopes.get(window.tab)

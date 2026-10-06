@@ -38,7 +38,7 @@ def test_a_question_the_preferences_settle_is_answered_with_the_line_it_came_fro
     events, questions, judge, runtime = world
     prompts = judge_says(runtime, "ANSWER: main\nQUOTE: - Commits go straight to main; "
                                   "never open a branch.")
-    id = questions.ask("tab-1", "Commit to main or open a branch?", ["main", "branch"])
+    questions.ask("tab-1", "Commit to main or open a branch?", ["main", "branch"])
     settle_judging(judge, questions)
 
     assert DOC in prompts[0] and "Commit to main or open a branch?" in prompts[0]

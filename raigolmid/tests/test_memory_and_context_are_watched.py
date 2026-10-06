@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from raigolmid import labels, memory, naming
+from raigolmid import labels, memory
 from raigolmid.contextwatch import ContextWatch
 from raigolmid.janitor import TAKEN
 from raigolmid.runtime.base import MemoryUse

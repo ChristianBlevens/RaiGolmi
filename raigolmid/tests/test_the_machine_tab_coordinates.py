@@ -387,7 +387,7 @@ def test_a_tab_whose_time_runs_out_makes_its_documents_ready_and_is_given_back(h
 def test_a_run_ends_with_the_machine_tabs_report_filed_with_its_record(h):
     m = Machine(h)
     m.tab(MACHINE)["manage"](tab=BODY, stop_when="the parser passes")
-    home, body_home = h.session.agents.home(MACHINE), h.session.agents.home(BODY)
+    body_home = h.session.agents.home(BODY)
     record = h.session.paths.work / "run.md"
     record.write_text("directed tab-2 to the parser\n")
     converse(body_home)
