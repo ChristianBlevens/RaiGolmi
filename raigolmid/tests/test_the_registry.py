@@ -108,3 +108,50 @@ def test_an_entry_naming_a_path_outside_its_directory_is_refused(tmp_path):
         registry.unpack(buf.getvalue(), tmp_path / "web")
     assert not (tmp_path / "escape").exists()
     assert not (tmp_path / "web").exists() and not (tmp_path / ".web.unpacking").exists()
+
+
+def test_the_token_never_follows_a_redirect_to_another_host():
+    """A Release asset's download is a redirect GitHub answers to its CDN; the user's token
+    goes only to the host it was sent to."""
+    import http.server
+    import threading
+    seen: dict[str, str | None] = {}
+
+    class Answer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen[f"{self.server.server_address[0]}{self.path}"] = self.headers.get("Authorization")
+            if self.path == "/asset":
+                self.send_response(302)
+                self.send_header("Location", self.server.onward)
+            else:
+                self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    here = http.server.HTTPServer(("127.0.0.1", 0), Answer)
+    elsewhere = http.server.HTTPServer(("127.0.0.2", 0), Answer)
+    for server in (here, elsewhere):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        for onward in (f"http://127.0.0.2:{elsewhere.server_port}/cdn",
+                       f"http://127.0.0.1:{here.server_port}/same"):
+            here.onward = onward
+            status, _ = registry.UrllibHttp().request(
+                "GET", f"http://127.0.0.1:{here.server_port}/asset", {"Authorization": "Bearer t"})
+            assert status == 200
+        assert seen == {"127.0.0.1/asset": "Bearer t", "127.0.0.2/cdn": None,
+                        "127.0.0.1/same": "Bearer t"}
+    finally:
+        here.shutdown()
+        elsewhere.shutdown()
+
+
+def test_an_index_entry_whose_id_is_not_a_plain_id_is_refused():
+    """The id names the directory a download unpacks into."""
+    raw = {"kind": "face", "author": "a", "version": 1, "asset": "x", "sha256": "0", "size": 1}
+    for bad in ("..", "../../.ssh", "a/b", ".hidden"):
+        with pytest.raises(registry.RegistryError, match="plain layer id"):
+            registry._entry({**raw, "id": bad}, "index.json")
+    assert registry._entry({**raw, "id": "writing"}, "index.json").id == "writing"

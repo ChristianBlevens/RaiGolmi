@@ -27,10 +27,13 @@ import stat
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
+
+from .definitions import PLAIN_ID
 
 KIND_DIRS = {"face": "faces", "toolbelt": "toolbelts", "body": "bodies"}
 INDEX_VERSION = 1
@@ -67,17 +70,32 @@ class Http(Protocol):
                 body: bytes | None = None) -> tuple[int, bytes]: ...
 
 
+class _SameHostAuthorization(urllib.request.HTTPRedirectHandler):
+    """urllib carries every header across a redirect, `Authorization` included, to whatever
+    host it names; the user's GitHub token goes only to the host it was sent to."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).hostname != \
+                urllib.parse.urlsplit(req.full_url).hostname:
+            for name in [k for k in new.headers if k.lower() == "authorization"]:
+                del new.headers[name]
+        return new
+
+
 class UrllibHttp:
-    """Redirects are followed, which a Release asset's download needs (GitHub answers 302)."""
+    """Redirects are followed, which a Release asset's download needs (GitHub answers 302),
+    with the credential dropped when one leaves its host."""
 
     def __init__(self, timeout: float = 60.0) -> None:
         self.timeout = timeout
+        self._opener = urllib.request.build_opener(_SameHostAuthorization)
 
     def request(self, method: str, url: str, headers: dict[str, str],
                 body: bytes | None = None) -> tuple[int, bytes]:
         req = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with self._opener.open(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -105,6 +123,8 @@ def _entry(raw: dict, where: str) -> RegistryEntry:
         raise RegistryError(f"{where}: an entry is malformed ({exc!r}): {raw!r}") from exc
     if entry.kind not in KIND_DIRS:
         raise RegistryError(f"{where}: entry {entry.id!r} has kind {entry.kind!r}")
+    if not isinstance(entry.id, str) or not PLAIN_ID.fullmatch(entry.id):
+        raise RegistryError(f"{where}: entry id {entry.id!r} is not a plain layer id")
     return entry
 
 

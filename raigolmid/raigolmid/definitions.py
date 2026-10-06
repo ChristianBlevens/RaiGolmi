@@ -34,9 +34,10 @@ def _load_toml(path: Path) -> dict[str, Any]:
         raise DefinitionError(f"{path}: {exc}") from exc
 
 
-# A face's id names its settings directory in the user's home (`faces.FACE_SETTINGS`), so it is one
-# path component that is neither `.` nor `..`.
-_FACE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+# One path component that is neither `.` nor `..`: a face's id names its settings directory in
+# the user's home (`faces.FACE_SETTINGS`), and a registry entry's names the directory a download
+# unpacks into (`registry._entry`).
+PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
 _PLACE = re.compile(r"\{(\w+)\}")
@@ -174,7 +175,7 @@ def load_face(directory: Path) -> Face:
                 f"'{conf.name}' is not in '{desktop.config_dir}'")
 
     face_id = _require(raw, "id", path)
-    if not isinstance(face_id, str) or not _FACE_ID.fullmatch(face_id):
+    if not isinstance(face_id, str) or not PLAIN_ID.fullmatch(face_id):
         raise DefinitionError(f"{path}: id {face_id!r} is not letters, digits, '_', '.' and "
                               "'-' starting with a letter or digit")
     return Face(
