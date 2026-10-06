@@ -15,4 +15,18 @@ table inet raigolmi {
 		tcp dport 47100 accept
 		counter drop
 	}
+	# Nothing outside the machine is at risk: a container reaches the internet, never the
+	# Windows host. The launcher's `-netdev user` is QEMU's user network at its defaults,
+	# 10.0.2.0/24 and fec0::/64, every address of which is QEMU, and 10.0.2.2 is the Windows
+	# host's own loopback — QMP, and every service listening there. Only its DNS at 10.0.2.3
+	# is let through. A reject here is final whatever Docker's own forward chains accept; the
+	# guest's own traffic (ssh's hostfwd arrives from 10.0.2.2) never passes this hook.
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		iifname != "docker0" iifname != "br-*" accept
+		ip daddr 10.0.2.3 udp dport 53 accept
+		ip daddr 10.0.2.3 tcp dport 53 accept
+		ip daddr 10.0.2.0/24 counter reject with icmpx admin-prohibited
+		ip6 daddr { fec0::/64, fe80::/10 } counter reject with icmpx admin-prohibited
+	}
 }

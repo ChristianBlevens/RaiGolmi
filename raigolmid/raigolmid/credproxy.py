@@ -33,10 +33,13 @@ placeholder in `GH_TOKEN`, which gh reads and git's credential helper hands on, 
 kind's hosts, so neither credential can be spent on the other's. The system bundle an agent
 mounts carries the authority, so git, gh and curl trust those hosts as Node does.
 
-`CONNECT` to anywhere else is a plain tunnel — agents browse — except to this machine itself: a tab never reaches the
-host layer through the proxy, whose address is the host's. The
-target is resolved once, refused if any address it names is one the host can bind, and the
-tunnel opens to the address that was checked, so a name cannot resolve elsewhere in between.
+`CONNECT` to anywhere else is a plain tunnel — agents browse — except to this machine itself
+or the network its uplink sits on: a tab never reaches the host layer through the proxy, whose
+address is the host's, nor the Windows host behind QEMU's user network. The target is resolved
+once, refused if any address it names is one the host can bind or on that network
+(`is_off_limits`), and the tunnel opens to the address that was checked, so a name cannot
+resolve elsewhere in between. A container's own traffic to that network is the host
+firewall's (`host/firewall/raigolmi.nft`); the proxy runs on the host, so it is refused here.
 """
 from __future__ import annotations
 
@@ -47,6 +50,7 @@ import errno
 import hashlib
 import hmac
 import http.client
+import ipaddress
 import os
 import re
 import secrets
@@ -54,6 +58,7 @@ import selectors
 import socket
 import socketserver
 import ssl
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -336,7 +341,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = False
             return
         try:
-            remote = _tunnel_to(host.strip("[]"), int(port), proxy.this_machine)
+            remote = _tunnel_to(host.strip("[]"), int(port), proxy.off_limits)
         except ProxyError as exc:
             proxy.events.emit("credproxy.tunnel_refused", target=self.path, reason=str(exc))
             self.send_error(403, str(exc))
@@ -459,13 +464,56 @@ def is_this_machine(address: str) -> bool:
     return True
 
 
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def uplink_networks(route: str, ipv6_route: str) -> list[Network]:
+    """The networks reached without a gateway on the interface that carries the default route,
+    from the kernel's `/proc/net/route` and `/proc/net/ipv6_route`. Under the launcher that is
+    QEMU's user network, every address of which is QEMU itself, and its host address is the
+    Windows host's own loopback — QMP, and every service listening there."""
+    rows4 = [line.split() for line in route.splitlines()[1:] if line.strip()]
+    rows6 = [line.split() for line in ipv6_route.splitlines() if line.strip()]
+    uplinks = ({r[0] for r in rows4 if int(r[1], 16) == 0 and int(r[2], 16) != 0}
+               | {r[9] for r in rows6 if int(r[0], 16) == 0 and int(r[1], 16) == 0})
+    networks: list[Network] = []
+    for iface, dest, gateway, _flags, _ref, _use, _metric, mask, *_ in rows4:
+        if iface in uplinks and int(gateway, 16) == 0 and int(dest, 16) != 0:
+            networks.append(ipaddress.IPv4Network(f"{_route_ipv4(dest)}/{_route_ipv4(mask)}",
+                                                  strict=False))
+    for dest, plen, _src, _splen, nexthop, *_rest, iface in rows6:
+        if iface in uplinks and int(nexthop, 16) == 0 and int(plen, 16) != 0:
+            networks.append(ipaddress.IPv6Network(
+                (ipaddress.IPv6Address(bytes.fromhex(dest)), int(plen, 16)), strict=False))
+    return networks
+
+
+def _route_ipv4(field: str) -> ipaddress.IPv4Address:
+    """`/proc/net/route` prints each address as a native-order integer."""
+    return ipaddress.IPv4Address(int(field, 16).to_bytes(4, sys.byteorder))
+
+
+def is_off_limits(address: str) -> bool:
+    """Whether a tab may not tunnel to `address`: the host's own, or on the network its uplink
+    is attached to (`uplink_networks`)."""
+    ip = ipaddress.ip_address(address.split("%")[0])
+    # `::ffff:10.0.2.2` connects to 10.0.2.2.
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    networks = uplink_networks(Path("/proc/net/route").read_text(),
+                               Path("/proc/net/ipv6_route").read_text())
+    if any(ip in network for network in networks if network.version == ip.version):
+        return True
+    return is_this_machine(address)
+
+
 def _tunnel_to(host: str, port: int,
-               this_machine: Callable[[str], bool]) -> socket.socket:
+               off_limits: Callable[[str], bool]) -> socket.socket:
     addresses = [info[4] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
-    mine = [sockaddr[0] for sockaddr in addresses if this_machine(sockaddr[0])]
-    if mine:
-        raise ProxyError(f"{host} is this machine ({', '.join(mine)}); a tab does not reach "
-                         "the host through the proxy")
+    refused = [sockaddr[0] for sockaddr in addresses if off_limits(sockaddr[0])]
+    if refused:
+        raise ProxyError(f"{host} is this machine or the network it sits on "
+                         f"({', '.join(refused)}); a tab reaches the internet through the "
+                         "proxy, never the host or what is behind it")
     failures = []
     for sockaddr in addresses:
         try:
@@ -506,11 +554,11 @@ class CredentialProxy:
                  intercepted: str = INTERCEPTED,
                  github: dict[str, str] | None = None,
                  anthropic: dict[str, str] | None = None,
-                 this_machine: Callable[[str], bool] = is_this_machine,
+                 off_limits: Callable[[str], bool] = is_off_limits,
                  renewal: claude_login.Renewal | None = None) -> None:
         self.broker = broker
         self.renewal = renewal if renewal is not None else claude_login.Renewal()
-        self.this_machine = this_machine
+        self.off_limits = off_limits
         self.events = events
         self.open_owner = open_owner
         self.intercepted = intercepted

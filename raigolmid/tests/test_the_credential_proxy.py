@@ -244,7 +244,7 @@ def test_any_other_host_is_a_plain_tunnel(machine):
     """Agents browse; only the API host is opened. The only
     server a test can reach is on this machine, so it is declared not to be."""
     _, proxy, _, _ = machine
-    proxy.this_machine = lambda address: False
+    proxy.off_limits = lambda address: False
     echo = socket.create_server(("127.0.0.1", 0))
 
     def serve() -> None:
@@ -270,6 +270,35 @@ def test_a_tunnel_to_this_machine_is_refused(machine):
             assert sock.recv(100).startswith(b"HTTP/1.1 403"), target
     listening.close()
     assert len([e for e in events.tail(50) if e.type == "credproxy.tunnel_refused"]) == 3
+
+
+# A machine under the launcher, as its kernel prints them: QEMU's user network on the uplink,
+# and Docker's two bridges.
+VM_ROUTE = """Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
+enp0s3\t00000000\t0202000A\t0003\t0\t0\t100\t00000000\t0\t0\t0
+enp0s3\t0002000A\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
+docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0
+br-bf3c10c8e275\t000013AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0
+"""
+VM_IPV6_ROUTE = """\
+fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001  docker0
+fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000400 00000002 00000000 00000001   enp0s3
+fec00000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000064 00000003 00000000 00000001   enp0s3
+00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000002 00000064 0000000d 00000000 00000003   enp0s3
+"""
+
+
+def test_the_network_behind_the_uplink_is_off_limits():
+    """Under the launcher the uplink is QEMU's user network, whose host address is Windows'
+    own loopback; a tab reaches past it to the internet, never onto it."""
+    import ipaddress
+    from raigolmid.credproxy import uplink_networks
+    networks = uplink_networks(VM_ROUTE, VM_IPV6_ROUTE)
+    assert sorted(map(str, networks)) == ["10.0.2.0/24", "fe80::/64", "fec0::/64"]
+    inside = lambda a: any(ipaddress.ip_address(a) in n for n in networks
+                           if n.version == ipaddress.ip_address(a).version)
+    assert inside("10.0.2.2") and inside("fec0::2") and not inside("140.82.112.3")
+    assert not inside("172.17.0.2")
 
 
 def test_an_agent_is_pointed_at_the_proxy_and_given_the_authority(machine):

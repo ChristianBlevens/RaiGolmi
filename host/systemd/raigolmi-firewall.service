@@ -1,5 +1,5 @@
 [Unit]
-Description=RaiGolmi: the host is unreachable from containers but for what it serves them
+Description=RaiGolmi: containers reach the internet, never the Windows host, and the host only for what it serves them
 Documentation=file:/usr/lib/raigolmi/firewall.nft
 DefaultDependencies=no
 Wants=network-pre.target
