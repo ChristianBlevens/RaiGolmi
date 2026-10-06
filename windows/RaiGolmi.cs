@@ -126,6 +126,8 @@ class Machine
     // Two control sockets, because QEMU serves one client per socket: the close has one no
     // probe can hold, and everything that only looks shares the other.
     public int ControlPort, WatchPort;
+    // QEMU's arguments, made once here so a path it cannot be given is said before any window.
+    public string CommandLine;
     // The guest's sshd, forwarded on the loopback only: a login there is root in the guest.
     // 2222 when it is free, so what already knows it keeps working; any free port otherwise.
     public int SshPort;
@@ -164,6 +166,7 @@ class Machine
             return null;
         m.ControlPort = FreePort();
         m.WatchPort = FreePort();
+        m.CommandLine = m.Arguments();
         return m;
     }
 
@@ -229,23 +232,23 @@ class Machine
     // core, so the guest gets every logical processor and an idle one costs nothing. The
     // hypervisor emulates each vCPU's local APIC (kernel-irqchip=on, required, so a host that
     // cannot fails QEMU's start): off, every IPI, timer and EOI exits to QEMU under its one lock.
-    public string Arguments()
+    string Arguments()
     {
         var a = new List<string>();
         a.Add("-name RaiGolmi");
         a.Add("-machine type=q35,accel=whpx,kernel-irqchip=on -cpu max -m 8192 -smp " + Environment.ProcessorCount);
-        a.Add("-drive " + Quote("if=pflash,format=raw,readonly=on,file=" + Opt(Firmware)));
-        a.Add("-drive " + Quote("if=pflash,format=raw,file=" + Opt(Vars)));
+        a.Add("-drive " + Quote("if=pflash,format=raw,readonly=on,file=" + Opt(Native.Ascii(Firmware))));
+        a.Add("-drive " + Quote("if=pflash,format=raw,file=" + Opt(Native.Ascii(Vars))));
         // What the guest discards (its trim every ten minutes and at shutdown) the patched QEMU
         // releases from the sparse file, so the file shrinks with the guest's use while it runs.
-        a.Add("-drive " + Quote("file=" + Opt(Disk) + ",format=qcow2,discard=unmap,detect-zeroes=unmap"));
+        a.Add("-drive " + Quote("file=" + Opt(Native.Ascii(Disk)) + ",format=qcow2,discard=unmap,detect-zeroes=unmap"));
         a.Add("-device virtio-vga-gl -device qemu-xhci,id=xhci -device usb-tablet,bus=xhci.0");
         a.Add("-netdev user,id=net0,hostfwd=tcp:127.0.0.1:" + SshPort + "-:22 -device virtio-net,netdev=net0");
         // Boot credentials (systemd reads SMBIOS type 11): the login keys, and Windows' own
         // timezone, which the guest makes its own (host/systemd/set-timezone).
         var credentials = new List<string>();
         if (Ssh != null)
-            credentials.Add("path=" + Opt(Ssh.Credential));
+            credentials.Add("path=" + Opt(Native.Ascii(Ssh.Credential)));
         credentials.Add("value=" + Opt("io.systemd.credential:raigolmi.timezone=" +
                                        Native.IanaZone(TimeZoneInfo.Local.Id)));
         a.Add("-smbios " + Quote("type=11," + string.Join(",", credentials)));
@@ -312,7 +315,7 @@ class Window : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        var info = new ProcessStartInfo(machine.Qemu, machine.Arguments());
+        var info = new ProcessStartInfo(machine.Qemu, machine.CommandLine);
         info.UseShellExecute = false;
         info.RedirectStandardError = true;
         info.RedirectStandardOutput = true;
@@ -328,7 +331,7 @@ class Window : Form
         // The last run's log is kept beside this one's, for the run that ended badly.
         if (File.Exists(machine.Log))
             File.Copy(machine.Log, Path.ChangeExtension(machine.Log, ".previous.log"), true);
-        File.WriteAllText(machine.Log, "\"" + machine.Qemu + "\" " + machine.Arguments() +
+        File.WriteAllText(machine.Log, "\"" + machine.Qemu + "\" " + machine.CommandLine +
                                        Environment.NewLine);
         qemu.Start();
         // QEMU dies with this program: one outliving its window keeps the disk locked and the
@@ -857,10 +860,32 @@ class Window : Form
             string log;
             lock (stderr) log = stderr.ToString();
             string tail = log.Length > 3000 ? log.Substring(log.Length - 3000) : log;
-            Launcher.Fail("QEMU exited with code " + qemu.ExitCode + ". Its output is in " +
+            string said = Explain(log);
+            Launcher.Fail((said != null ? said + "\n\n" : "") +
+                          "QEMU exited with code " + qemu.ExitCode + ". Its output is in " +
                           machine.Log + ":\n\n" + tail);
         }
         Close();
+    }
+
+    // The failures a stranger's PC meets, by what QEMU says of each
+    // (target/i386/whpx/whpx-all.c, net/slirp.c, ui/egl-helpers.c), in one sentence each.
+    static string Explain(string log)
+    {
+        if (log.Contains("WHPX: No accelerator found"))
+            return "Windows' hypervisor is not running, so the machine cannot start. Windows " +
+                   "Hypervisor Platform may be off, or virtualization turned off in the PC's " +
+                   "BIOS/UEFI: run setup.bat, which checks both and says which.";
+        if (log.Contains("WHPX: kernel irqchip requested, but unavailable"))
+            return "This Windows' hypervisor does not emulate the interrupt controller the " +
+                   "machine needs. Updating Windows is the first thing to try.";
+        if (log.Contains("Could not set up host forwarding rule"))
+            return "Another program took the port RaiGolmi chose for the machine's ssh just as " +
+                   "it started. Start RaiGolmi again, and it picks a free one.";
+        if (log.Contains("egl:"))
+            return "QEMU could not start its graphics on this PC's GPU. Updating the graphics " +
+                   "driver is the first thing to try.";
+        return null;
     }
 }
 
@@ -1736,6 +1761,33 @@ static class Native
     public struct KBDLLHOOKSTRUCT { public uint vkCode, scanCode, flags, time; public IntPtr extra; }
 
     public delegate IntPtr LowLevelKeyboardProc(int code, IntPtr wparam, IntPtr lparam);
+
+    // A path as QEMU can be handed it: QEMU takes its command line in the ANSI code page (a
+    // plain `main`, no UTF-8 manifest), so a path with any other character is given as its
+    // 8.3 short name, which is ASCII where Windows keeps one.
+    public static string Ascii(string path)
+    {
+        if (IsAscii(path))
+            return path;
+        var shortened = new StringBuilder(1024);
+        uint length = GetShortPathName(path, shortened, (uint)shortened.Capacity);
+        if (length == 0 || length >= shortened.Capacity || !IsAscii(shortened.ToString()))
+            throw new LauncherError(path + " has characters QEMU cannot be given, and Windows " +
+                                    "keeps no short ASCII name for it. Move RaiGolmi's files to " +
+                                    "a folder whose path is plain letters and digits.");
+        return shortened.ToString();
+    }
+
+    static bool IsAscii(string s)
+    {
+        foreach (char c in s)
+            if (c > 127)
+                return false;
+        return true;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint size);
 
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
