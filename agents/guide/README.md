@@ -1,3 +1,8 @@
+<!-- purpose: how the layer-authoring guide is laid out: what the three layers are and which file of it to read for each
+not-here: a layer's rules (faces.md, toolbelts.md, bodies.md); how the machine works (the primer every tab starts with)
+shape: bounded
+audited: 973 2026-10-05
+-->
 # Writing a layer
 
 Every piece of work runs in three layers, and each is a directory under `/definitions` that you

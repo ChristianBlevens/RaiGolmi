@@ -1,3 +1,8 @@
+<!-- purpose: how a face is written: its face.toml, compositor, apps, editor, and what it reaches on the machine
+not-here: toolbelts (toolbelts.md), bodies (bodies.md), the machine's own design (the primer)
+shape: bounded
+audited: 11193 2026-10-05
+-->
 # Writing a face
 
 A face is a complete desktop: a compositor nested fullscreen in the host's, with the apps the

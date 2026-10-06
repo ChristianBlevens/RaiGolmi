@@ -10,7 +10,7 @@ carries `deliver`, which its channel holds until its turn ends (`channel.py`):
   machine tab opens, everything it has not heard because it was not there to hear it.
 
 The machine tab's own verbs (`methods`) are refused to every other tab: the views of a
-managed tab, a directive pushed into one, and a fresh conversation for it.
+managed tab, a directive sent to one, and a fresh conversation for it.
 
 **A fresh conversation is a new tab** (`Session.succeed_tab`): the old one closes, its
 conversation and thought doc archived together as that conversation's record, and a new tab on

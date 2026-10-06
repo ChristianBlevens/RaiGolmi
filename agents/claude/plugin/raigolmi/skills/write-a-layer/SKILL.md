@@ -2,6 +2,11 @@
 name: write-a-layer
 description: How a face, a toolbelt or a body is written on RaiGolmi — its definition file, what it can reach, how it is checked. Load it before creating, editing or repairing anything under /definitions/faces, /definitions/toolbelts or /definitions/bodies (face.toml, toolbelt.toml, body.toml, a body's Dockerfile, a face's apps or editor).
 ---
+<!-- purpose: sends a tab to the part of /guide for the layer it is about to write
+not-here: the rules themselves (/guide, the one authority)
+shape: bounded
+audited: 1489 2026-10-05
+-->
 
 # Writing a layer
 

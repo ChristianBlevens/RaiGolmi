@@ -1,7 +1,7 @@
 <!-- purpose: the public face: what RaiGolmi is and how a user installs, starts and uses it, casual reader first, then the narrated uses, then the reference
 not-here: design (ARCHITECTURE.md), settled calls (docs/standing-rulings.md), development state (SESSION-START.md), measurements (docs/findings.md)
 shape: bounded
-audited: 23901 2026-10-02
+audited: 25171 2026-10-05
 -->
 # RaiGolmi
 
@@ -81,7 +81,7 @@ up yourself.
 
 The first time you boot it there's nothing on the screen but the three tabs. You open the
 terminal and tell the machine tab you want a dark tiling desktop with Firefox, a file
-janitor, and a clock in the corner. It writes the desktop, builds it, and a few minutes
+manager, and a clock in the corner. It writes the desktop, builds it, and a few minutes
 later it shows up in the selector. You pick it and you're in.
 
 The bar is too tall, so you say so, and it fixes it. You'd like the windows to have gaps
@@ -232,6 +232,11 @@ ports = [8000]
 [[develop.watch]]
 path = "requirements.txt"
 action = "rebuild"
+
+[budget]                    # set by the project's tab; the janitor holds it to this
+caches = "4G"
+output = "2G"
+memory = "3G"
 ```
 
 ```toml
@@ -292,16 +297,21 @@ host's own screens failing, the clipboard bridge dropping, or another tab that s
 responding. It also catches a tab that's stuck: one working for ten minutes with nothing in its
 conversation moving, or for half an hour without anything in its work changing. It looks at
 what the tab was running, leaves a real long wait alone, and otherwise stops the tab's turn and
-tells it what went wrong. It watches the disk too: when the machine holds a couple of GB more
-than when it last looked, or free space runs low, it works out what grew. The machine's own
-leftovers piling up it treats as a failure and fixes; a project's build or run output it points
-out to that project's tab, which knows what it still needs — including build caches like Rust's
-`target/`, which only ever grow. Each project's tab sets how much disk and memory the project should
-take, and the janitor tells it when it goes past that, whether to clean up or raise the limit. It
-also notices a tab that has run past its context budget and tells it to wrap up — it never cuts
-one off. A turn that fails on something waiting won't fix, like a tab
-that lost its sign-in, comes to it as well. It also keeps the agents' documents in shape: one that's grown past its size,
-names something that no longer exists, or describes a layer that has since changed. The point is that you're never the one who has to take a failure to an AI.
+tells it what went wrong. A turn that fails in a way retrying won't fix, like a tab that lost
+its sign-in, comes to it too.
+
+It keeps an eye on resources. Each project's tab says how much disk and memory the project
+should take, and the janitor tells the tab when it goes past that, and whether to clean up or
+raise the limit. Build caches like Rust's `target/` only ever grow, so it watches those
+separately from the project's other output. When the whole disk grows by a couple of GB or runs
+low, or the machine runs short of memory, it works out what took it: the machine's own leftovers
+it treats as a failure and fixes, and anything a project holds it puts to that project's tab,
+which knows what it still needs. It never deletes a project's files itself. It also notices a
+tab that has run past its context budget and tells it to wrap up; nothing is ever cut off.
+
+It also keeps the agents' documents in shape: one that's grown past its size, names something
+that no longer exists, or describes a layer that has since changed. The point is that you're
+never the one who has to take a failure to an AI.
 
 It reads the logs, the journal and the machine's state. It repairs things with the daemon's
 own tools (restarting an agent, rebuilding or repairing a sandbox, bringing your desktop
@@ -318,6 +328,8 @@ a tab to stop for you, a number of hours, or both. From then on:
 - a managed tab's questions go to the machine tab, which answers them and steers the work.
   It stands in for you on every decision you didn't keep with your stop, design questions
   included, and records each one in the run's record so you can overturn it;
+- to ask a managed tab something, ask the machine tab: it passes your question on, the tab
+  reads it at its next step even mid-task, and the machine tab brings you the answer;
 - when a tab's conversation reaches its budget, it's handed to a new tab that starts from
   the project's `SESSION-START.md`, and the machine tab does the same for itself;
 - a tab cut off by a usage limit or an API error is resumed;

@@ -1,3 +1,8 @@
+<!-- purpose: how a body is written: its body.toml, its working copy, and the budget its tab sets
+not-here: faces (faces.md), toolbelts (toolbelts.md)
+shape: bounded
+audited: 2614 2026-10-05
+-->
 # Writing a body
 
 A body is the project as it would deploy: an image, built from its definition, running the

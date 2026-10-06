@@ -2,6 +2,11 @@
 name: orchestrate
 description: How the machine tab manages the body tabs the user hands it over a run of hours or days — deciding for the user, steering each tab at its turn's end, handing tabs on at their budget and at its own, the limits that keep a run honest, and keeping and reporting the run. Load it whenever you `manage` a tab, are told a managed tab's turn ended, or resume a run after a handover.
 ---
+<!-- purpose: how the machine tab manages body tabs over a long run, loaded when it manages or resumes one
+not-here: what the machine is (the primer), a project's own state (its SESSION-START.md and design docs), one run's events (run.md)
+shape: bounded
+audited: 7102 2026-10-05
+-->
 
 # Orchestrating managed tabs
 

@@ -1,3 +1,8 @@
+<!-- purpose: how a toolbelt is written: its toolbelt.toml, its packages, Nixery and the flake escape hatch
+not-here: faces (faces.md), bodies (bodies.md)
+shape: bounded
+audited: 2162 2026-10-05
+-->
 # Writing a toolbelt
 
 A toolbelt is the tools that act on a project — compilers, language servers, debuggers, a

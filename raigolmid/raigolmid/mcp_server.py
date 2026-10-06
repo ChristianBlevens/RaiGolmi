@@ -556,7 +556,8 @@ def build_machine_server(client: ApiClient):
 def serve_with_channel(client: ApiClient, server) -> None:
     """The tools, and the channel beside them: once Claude Code has initialized, whatever
     `channel_take` hands out is pushed as `notifications/claude/channel`. The daemon decides
-    what and when (only to an idle tab); this only carries it.
+    what and when (only to an idle tab; words for a working one go by its `PostToolUse` hook,
+    `Channels.take_midturn`); this only carries it.
 
     Claude Code takes a channel only on the handshake era: on the 2026-07-28 revision, which
     a feature flag of its own decides to ask for, it skips it ("no unsolicited notification
