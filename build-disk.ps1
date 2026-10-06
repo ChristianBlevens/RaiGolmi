@@ -28,6 +28,7 @@ if (Test-Path $target) {
     Write-Host "Built: $archive. Copy it to the machine installed from $target, then run there:"
     Write-Host "  sudo bootc switch --transport oci-archive <where you copied it> && sudo systemctl reboot"
 } else {
+    Refuse-Synced $target
     Build-Disk $format.Type $target
     Write-Host "Built: $target"
 }

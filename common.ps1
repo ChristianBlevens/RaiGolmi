@@ -236,6 +236,13 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
               "Turn on Intel VT-x (sometimes 'Intel Virtualization Technology') or AMD SVM " +
               "in your BIOS/UEFI settings, start Windows again, then run this again.")
     }
+    # The VM takes 8 GB (`windows/RaiGolmi.cs` `-m 8192`) and Windows needs room of its own
+    # beside it; a 16 GB PC reads a little under 16 once firmware and graphics have theirs.
+    $memory = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+    if ($memory -lt 12GB) {
+        Fail (("This PC has {0:N1} GB of memory. RaiGolmi's machine takes 8 GB of it and Windows " +
+               "needs its own beside that, so it needs 16 GB.") -f ($memory / 1GB))
+    }
     if (-not $hypervisor -and $platform) {
         if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
             Fail "Windows has changes waiting for a restart. Restart Windows, then run this again."
@@ -293,6 +300,18 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     }
 
     return $missing
+}
+
+# The disk grows to 60 GB and is written to all the time, so under OneDrive every write would
+# be uploaded. A new one is never made there; one already there is the user's to move.
+function Refuse-Synced([string]$path) {
+    foreach ($root in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
+        if ($root -and $path.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            Fail ("$path would be inside OneDrive ($root), which would upload the machine's disk " +
+                  "(up to 60 GB) every time it changes. Put the RaiGolmi folder somewhere OneDrive " +
+                  "does not sync, such as C:\RaiGolmi, then run this again from there.")
+        }
+    }
 }
 
 # The launcher boots this disk from now on (it reads disk.txt).

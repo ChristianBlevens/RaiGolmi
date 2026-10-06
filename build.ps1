@@ -10,7 +10,7 @@ Install-Missing { @(Launcher-Prerequisites) + @(Disk-Prerequisites) } 'build.bat
 
 Build-Launcher
 $upgrade = Test-Path $disk
-if ($upgrade) { Build-Upgrade $disk } else { Build-Disk 'qcow2' $disk }
+if ($upgrade) { Build-Upgrade $disk } else { Refuse-Synced $disk; Build-Disk 'qcow2' $disk }
 
 Record-Disk
 # The machine runs this build from here on, not a published release.

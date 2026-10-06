@@ -127,7 +127,9 @@ class Machine
     // probe can hold, and everything that only looks shares the other.
     public int ControlPort, WatchPort;
     // The guest's sshd, forwarded on the loopback only: a login there is root in the guest.
-    public const int SshPort = 2222;
+    // 2222 when it is free, so what already knows it keeps working; any free port otherwise.
+    public int SshPort;
+    const int UsualSshPort = 2222;
     // The transfer bridge's tools and key, or why there are none.
     public Ssh Ssh;
     public string NoSsh;
@@ -148,9 +150,10 @@ class Machine
         m.Placement = Path.Combine(home, "window.txt");
         if (!File.Exists(m.Vars))
             File.Copy(Require(Launcher.QemuPath(@"share\qemu\edk2-i386-vars.fd")), m.Vars);
+        m.SshPort = PortOr(UsualSshPort);
         try
         {
-            m.Ssh = Ssh.Prepare(home);
+            m.Ssh = Ssh.Prepare(home, m.SshPort);
         }
         catch (LauncherError e)
         {
@@ -193,6 +196,22 @@ class Machine
             File.WriteAllText(record, pick.FileName);
             return pick.FileName;
         }
+    }
+
+    // `preferred` if this program can bind it as QEMU's forward will, else a free one.
+    static int PortOr(int preferred)
+    {
+        var l = new TcpListener(IPAddress.Loopback, preferred);
+        try
+        {
+            l.Start();
+        }
+        catch (SocketException)
+        {
+            return FreePort();
+        }
+        l.Stop();
+        return preferred;
     }
 
     static int FreePort()
@@ -946,7 +965,7 @@ class Ssh
     public string Outbox;
     string client, tar;
 
-    public static Ssh Prepare(string home)
+    public static Ssh Prepare(string home, int port)
     {
         string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
         var s = new Ssh();
@@ -990,7 +1009,7 @@ class Ssh
         File.WriteAllText(s.Config, string.Join("\n", new[] {
             "Host " + Host,
             "    HostName 127.0.0.1",
-            "    Port " + Machine.SshPort,
+            "    Port " + port,
             "    User agent",
             "    IdentityFile " + ConfigPath(s.Key),
             "    IdentitiesOnly yes",

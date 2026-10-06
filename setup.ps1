@@ -89,6 +89,7 @@ if ((Test-Path $disk) -and (Test-Path $exe) -and $installed -eq $release.Revisio
 }
 
 if (-not (Test-Path $disk)) {
+    Refuse-Synced $disk
     if (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
         Fail 'RaiGolmi is running and holds its launcher. Close its window, then run setup.bat again.'
     }
