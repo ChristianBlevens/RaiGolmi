@@ -34,11 +34,23 @@ class Upstream(BaseHTTPRequestHandler):
     seen: list[dict] = []
     # The headers of the usage limit's 429, when the account is at it.
     limited: dict[str, str] | None = None
+    # Access tokens refused as the API refuses a retired one, and what runs as one is refused.
+    retired: set[str] = set()
+    on_retired = None
 
     def do_POST(self) -> None:
         body = self.rfile.read(int(self.headers["Content-Length"]))
         Upstream.seen.append({"path": self.path, "headers": dict(self.headers.items()),
                               "body": body})
+        if self.headers.get("Authorization", "").removeprefix("Bearer ") in Upstream.retired:
+            if Upstream.on_retired is not None:
+                Upstream.on_retired()
+            said = b'{"type":"error","error":{"type":"authentication_error"}}'
+            self.send_response(401)
+            self.send_header("Content-Length", str(len(said)))
+            self.end_headers()
+            self.wfile.write(said)
+            return
         if Upstream.limited is not None:
             said = b'{"type":"error","error":{"type":"rate_limit_error"}}'
             self.send_response(429)
@@ -62,7 +74,7 @@ class Upstream(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def machine(tmp_path):
-    Upstream.seen, Upstream.limited = [], None
+    Upstream.seen, Upstream.limited, Upstream.retired, Upstream.on_retired = [], None, set(), None
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
     credentials = tmp_path / "agent-credentials"
@@ -332,3 +344,46 @@ def test_a_host_with_only_a_hashed_ca_directory_is_extended_all_the_same(tmp_pat
     bundle = authority.bundle.read_bytes()
     assert all(bundle.count(root.strip()) == 1 for root in roots), "each root once"
     assert bundle.rstrip().endswith(authority.cert.read_bytes().strip())
+
+
+def _renewed(tmp_path) -> None:
+    """The sign-in as a renewal leaves it: a new access token, the old one retired."""
+    renewed = json.loads(json.dumps(LOGIN))
+    renewed["claudeAiOauth"]["accessToken"] = "sk-ant-oat01-the-renewed-login"
+    claude_login.write(tmp_path / "claude-login.json", renewed)
+    Upstream.retired.add(LOGIN["claudeAiOauth"]["accessToken"])
+
+
+def test_a_request_on_the_sign_in_waits_out_a_renewal(machine, tmp_path):
+    broker, proxy, _, _ = machine
+    oauth, _ = broker.login_files("tab-1")
+    answered = []
+    with proxy.renewal.running():
+        asking = threading.Thread(target=lambda: answered.append(
+            _post(proxy, {"Authorization": f"Bearer {oauth['claudeAiOauth']['accessToken']}"})))
+        asking.start()
+        asking.join(0.5)
+        assert asking.is_alive() and not Upstream.seen, "nothing is sent while it runs"
+        _renewed(tmp_path)
+    asking.join(10)
+    assert answered[0][0] == 200
+    assert Upstream.seen[-1]["headers"]["Authorization"] == "Bearer sk-ant-oat01-the-renewed-login"
+
+
+def test_a_request_a_renewal_overlapped_is_sent_again_on_the_new_token(machine, tmp_path):
+    broker, proxy, events, _ = machine
+    oauth, _ = broker.login_files("tab-1")
+    Upstream.retired.add(LOGIN["claudeAiOauth"]["accessToken"])
+
+    def renew() -> None:
+        with proxy.renewal.running():
+            _renewed(tmp_path)
+    Upstream.on_retired = renew
+    status, _ = _post(proxy, {"Authorization": f"Bearer {oauth['claudeAiOauth']['accessToken']}"})
+    assert status == 200, "the tab never sees the retired token's 401"
+    assert [e.type for e in events.tail(20)].count("credproxy.resent") == 1
+
+    Upstream.on_retired = None
+    claude_login.write(tmp_path / "claude-login.json", LOGIN)
+    status, _ = _post(proxy, {"Authorization": f"Bearer {oauth['claudeAiOauth']['accessToken']}"})
+    assert status == 401, "a 401 no renewal explains is the agent's, as the API said it"

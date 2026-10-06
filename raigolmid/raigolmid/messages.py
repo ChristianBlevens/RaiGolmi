@@ -129,7 +129,10 @@ class Messages:
         with self._lock:
             m = self._messages.get(id)
             if m is None or m.to != tab:
-                raise MessageError(f"no message {id} was sent to this tab")
+                raise MessageError(
+                    f"no message {id} was sent to this tab. `reply` answers a tab's `message`; "
+                    "a direction from the machine tab, the manager or the user is answered in "
+                    "your turn's own text, which its sender reads when the turn ends")
             if m.state == "withdrawn":
                 raise MessageError(f"tab {m.sender} closed; nobody is waiting on {id}")
             if m.state != "open":

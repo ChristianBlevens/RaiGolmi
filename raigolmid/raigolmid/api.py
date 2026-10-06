@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from . import stalls
+from . import disk, stalls
 from .events import EventLog
 from .channel import Channels
 from .intent import MANAGER
@@ -36,6 +36,7 @@ from .docwrite import DocumentError
 from .library import Library
 from .questions import PERMISSIONS_ABSENT, QuestionError, Questions, parse_permissions
 from .registry import RegistryError
+from .jobs import JobError
 from .session import Session, SessionError
 from .viewing import Viewing
 
@@ -71,6 +72,8 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "restart_agent": lambda tab_id, resume=True: session.restart_agent(tab_id, resume),
         "close_tab": lambda tab_id: session.close_tab(tab_id),
         "unstick": lambda tab_id, note: stalls.unstick(session, events, tab_id, note),
+        "tell": lambda tab_id, note: _tell(session, events, tab_id, note),
+        "disk": lambda: disk.accounted(session),
         "exec": lambda target, cmd, cwd="/work", timeout=300.0: session.exec(
             target, cmd, cwd, timeout),
         "rebuild_body": lambda instance_id: session.rebuild_body(
@@ -194,6 +197,18 @@ def _container_logs(session: Session, container: str, tail: int) -> dict[str, An
             "logs": session.runtime.logs(info.id, tail)}
 
 
+def _tell(session: Session, events: EventLog, tab_id: str, note: str) -> dict[str, Any]:
+    """The manager's word to a tab, without stopping it: queued on its channel and pushed
+    when the tab is next idle (`channel.py`)."""
+    if tab_id not in session.intent.tabs:
+        raise SessionError(f"no tab {tab_id!r}")
+    if not note.strip():
+        raise SessionError("tell says something")
+    events.emit("manager.told", tab=tab_id, deliver={
+        "content": note, "meta": {"from": "manager"}})
+    return {"tab": tab_id, "note": "queued for when it is next idle"}
+
+
 def _journal(n: int) -> dict[str, Any]:
     """The daemon's unit journal: what it logged, including tracebacks the event log only
     points at. The agent image has no journalctl, so the daemon reads it."""
@@ -265,7 +280,7 @@ class Handler(socketserver.StreamRequestHandler):
         try:
             result = fn(*call.args, **call.kwargs)
         except (SessionError, QuestionError, MessageError, HistoryError, CatalogError,
-                RegistryError, DocumentError) as exc:
+                RegistryError, DocumentError, JobError) as exc:
             self._send({"id": request_id, "ok": False, "error": str(exc),
                         "kind": type(exc).__name__})
         except Exception as exc:                       # noqa: BLE001

@@ -105,6 +105,17 @@ class ContainerInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class DiskUsage:
+    """What the runtime holds on disk, in bytes: its images (each layer once), their build
+    cache, and the containers' own writable layers — and of the first two, what nothing uses."""
+    images: int
+    images_unused: int
+    build_cache: int
+    build_cache_unused: int
+    containers: int
+
+
+@dataclass(frozen=True, slots=True)
 class ImageInfo:
     id: str
     tags: tuple[str, ...]
@@ -224,6 +235,10 @@ class ContainerRuntime(abc.ABC):
         """Removes the build cache no image holds — what a removed image's builds leave —
         and keeps what a present image was built from, which is what makes its next build a
         cache hit. The bytes reclaimed."""
+
+    @abc.abstractmethod
+    def disk_usage(self) -> DiskUsage:
+        """What the runtime holds on disk (`disk.py`)."""
 
     # --- network ---------------------------------------------------------------------
     @abc.abstractmethod

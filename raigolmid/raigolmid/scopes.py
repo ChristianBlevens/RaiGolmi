@@ -23,7 +23,7 @@ import shutil
 import threading
 from typing import Any, Callable
 
-from . import api, hostsurfaces, naming, permissions
+from . import api, hostsurfaces, jobs, naming, permissions
 from .api import ApiServer
 from .channel import Channels
 from . import coordinator
@@ -38,7 +38,8 @@ SOCKET = "raigolmid.sock"
 # Of the full table, what the manager's machine scope reaches: the machine's state
 # read-only, its channel, and the repairs the daemon already has — never a shell in a sandbox.
 MACHINE = ("version", "status", "list_items", "events", "container_logs", "journal",
-           "crash_logs", "restart_agent", "repair", "reconcile", "rediscover", "unstick")
+           "crash_logs", "restart_agent", "repair", "reconcile", "rediscover", "unstick",
+           "tell", "disk")
 
 # Of the full table, what a face reaches: a read-only view of the machine, and every sandbox's
 # toolbelt by name (a face works with every body). Beyond it, what the user does themselves,
@@ -175,6 +176,11 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
                                   tab_status(session, questions, channels, tab_id))[1],
         "exec": lambda cmd, cwd="/work", timeout=300.0: session.exec(here(), cmd, cwd,
                                                                      timeout),
+        "job_start": lambda name, cmd, cwd="/work": session.jobs.start(tab_id, here(), name,
+                                                                       cmd, cwd),
+        "job_wait": lambda name, timeout=jobs.WAIT_MOST: session.jobs.wait(tab_id, name,
+                                                                           timeout),
+        "jobs": lambda: session.jobs.list(tab_id),
         "rebuild_body": lambda: session.rebuild_body(
             here(), why=f"{tab_id}'s request").to_dict(),
         "restart_body": lambda: session.restart_body(here()),

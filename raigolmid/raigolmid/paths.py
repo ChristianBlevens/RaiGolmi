@@ -80,6 +80,16 @@ class Paths:
         return self.state / "protection.json"
 
     @property
+    def jobs(self) -> Path:
+        """Each tab's long jobs and the launcher that runs each (`jobs.py`)."""
+        return self.state / "jobs.json"
+
+    @property
+    def disk(self) -> Path:
+        """The disk reading growth is measured from (`disk.py`)."""
+        return self.state / "disk.json"
+
+    @property
     def channels(self) -> Path:
         """What is on its way into each tab's session (`channel.py`)."""
         return self.state / "channels.json"

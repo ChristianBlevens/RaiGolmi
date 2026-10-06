@@ -223,6 +223,22 @@ class LauncherClient:
             )
         return ExecOutput(exit_code=exit_code, stdout="".join(out), stderr="".join(err))
 
+    def start_job(self, cmd: list[str], *, cwd: str = "/work") -> tuple[int, str]:
+        """Start a tab's job (`jobs.py`) as a child of the launcher, so it outlives this
+        connection, and let go: the process and the launcher that issued it, which is how it
+        is asked about later (`process`). Its terminal is a dumb one: what it prints is read
+        back as text (`scrollback`), never drawn."""
+        req = protocol.StartRequest(cmd=tuple(cmd), cwd=cwd, pty=True, term="dumb")
+        sock = self._connect()
+        try:
+            sock.sendall(protocol.encode(req.to_wire()))
+            reply = self._read_frame(sock)
+        finally:
+            sock.close()
+        if not reply.get("ok"):
+            raise LauncherError(reply.get("error", "start refused"))
+        return int(reply["proc"]), str(reply["launcher"])
+
     def start_detached(self, cmd: list[str], *, cwd: str = "/work",
                        env: dict[str, str] | None = None) -> int:
         """Start something long-lived — a language server — and let go. The

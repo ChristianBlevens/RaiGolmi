@@ -35,6 +35,7 @@ from .coordinator import Coordinator
 from .limits import Limits
 from .remotecontrol import RemoteControl
 from .stalls import Stalls
+from .disk import Disk
 from .credproxy import CredentialProxy
 from .permissions import Permissions
 from .judge import Judge
@@ -139,14 +140,16 @@ class Daemon:
         self.coordinator = Coordinator(self.session, self.events, self.questions)
         self.limits = Limits(self.session, self.events)
         self.stalls = Stalls(self.session, self.events)
+        self.disk = Disk(self.session, self.events)
         self.remote_control = RemoteControl(self.session, self.events)
+        renewal = claude_login.Renewal()
         self.claude_login = claude_login.Refresher(self.paths.claude_login, self.events,
-                                                   runtime, self.epoch)
+                                                   runtime, self.epoch, renewal)
         # The credential stays here; every agent container is given a placeholder.
         self.credproxy = CredentialProxy(
             self.session.agents.broker, self.events,
             lambda owner: owner == naming.judge() or owner in self.session.intent.tabs,
-            host=runtime.bridge_gateway())
+            host=runtime.bridge_gateway(), renewal=renewal)
         self.permissions = Permissions(self.session, self.events)
         self.viewing = Viewing(self.events, paths.viewing)
         methods = build_methods(self.session, self.events, self.questions, self.channels,
@@ -214,6 +217,7 @@ class Daemon:
                              (lambda: self.stalls.run(self._stop), "stalls"),
                              (lambda: self.remote_control.run(self._stop), "remote-control"),
                              (lambda: self.claude_login.run(self._stop), "claude-login"),
+                             (lambda: self.disk.run(self._stop), "disk"),
                              (self.credproxy.serve, "credproxy"),
                              (lambda: self.permissions.run(self._stop), "permissions"),
                              (lambda: self.agent_sockets.run(self._stop), "agent-sockets"),

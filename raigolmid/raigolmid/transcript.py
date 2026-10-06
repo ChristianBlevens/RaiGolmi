@@ -35,6 +35,10 @@ DECLARE = "declare_documents"
 # `sed -i` edits, and a redirect's target is written, so neither is a read.
 _READERS = frozenset({"cat", "head", "tail", "sed", "grep", "rg", "awk", "nl", "less", "more",
                       "diff", "cut", "sort", "uniq", "bat", "tac"})
+# Readers whose first operand is their program — a pattern or a script — unless an option gave
+# it, and the options that do: `ls | grep NOTES.md` reads no file.
+_PROGRAM = {"grep": ("-e", "-f", "--regexp", "--file"), "rg": ("-e", "-f", "--regexp", "--file"),
+            "sed": ("-e", "-f", "--expression", "--file"), "awk": ("-f", "--file")}
 _SEGMENT = re.compile(r"\s*(?:&&|\|\||;|\||\n)\s*")
 _HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?")
 _PORTION_CHARS = 120
@@ -96,8 +100,21 @@ def _shell_reads(command: str, cwd: str, home: Path) -> tuple[list[tuple[str, st
                 w.startswith("-i") for w in words)):
             continue
         written = {words[i + 1] for i, w in enumerate(words[:-1]) if w in (">", ">>")}
+        given = _PROGRAM.get(words[0], ())
+        operands, program_given, skip = [], False, False
         for word in words[1:]:
-            if word.startswith((">", "-")) or word in written or ".md" not in word:
+            if skip:
+                skip = False
+            elif word in given:
+                program_given = skip = True          # its value is the program
+            elif word.split("=", 1)[0] in given or word[:2] in given:
+                program_given = True
+            elif not word.startswith((">", "-")) and word not in written:
+                operands.append(word)
+        if given and not program_given:
+            operands = operands[1:]
+        for word in operands:
+            if ".md" not in word:
                 continue
             portion = segment if len(segment) <= _PORTION_CHARS else (
                 segment[:_PORTION_CHARS] + "…")

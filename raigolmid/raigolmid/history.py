@@ -96,6 +96,10 @@ def _handed(e: Event) -> str:
     return said
 
 
+def _gb(n: int) -> str:
+    return f"{n / 1e9:.1f}"
+
+
 # What each event this records says. None: this one is not recorded.
 SAYS: dict[str, Callable[[Event], str | None]] = {
     "tab.opened": _opened,
@@ -145,6 +149,11 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "clipboard.copy_failed": lambda e: (f"a copy did not reach the {e.data['to']} clipboard: "
                                         f"{e.data['reason']}"),
     "documents.maintenance": lambda e: e.data["message"],
+    "disk.grown": lambda e: (f"the disk holds {_gb(e.data['used'])} GB, grown since "
+                             f"{time.strftime('%a %H:%M', time.localtime(e.data['since']))}; "
+                             "the manager is looking at what grew"),
+    "disk.short": lambda e: (f"the disk has {_gb(e.data['free'])} GB of "
+                             f"{_gb(e.data['size'])} GB free; the manager is looking"),
     "account.limited": lambda e: (
         "the account's usage limit was reached; "
         + ("its reset was not said, so a tab is tried again every few minutes"

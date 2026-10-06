@@ -176,6 +176,8 @@ def restart_message(tab: str, continues: str) -> str:
             "archived with its conversation.")
 
 
+# A managed tab whose restart the machine tab asked for while its turn ran (`restart_fresh`).
+RESTART_ON_IDLE = "restart"
 WRAP_UP = "coordinator.wrap_up"
 TIME_UP = "coordinator.time_up"
 RESTART_ASKED = "coordinator.restart_asked"
@@ -368,6 +370,20 @@ class Coordinator:
             error = event.data.get("error")
             if error == limits.LIMIT or error in limits.TRANSIENT:
                 return      # resumed by the daemon, and heard of when that turn ends
+            if tab.handover == RESTART_ON_IDLE:
+                self.session.hand_over(tab.tab_id, None)
+                if error is None:
+                    if (waiting := self.questions.tab_state(tab.tab_id)) is not None:
+                        content = (f"Tab {tab.tab_id} ({tab.body}) was not restarted at its "
+                                   f"turn's end as you asked: it is {waiting} on a question "
+                                   "or permission, which a restart would withdraw")
+                    else:
+                        started = hand_on(self.session, tab.tab_id)
+                        content = (f"Tab {tab.tab_id} ({tab.body}) was restarted at its turn's "
+                                   f"end as you asked: {started['next']}")
+                    self._to_machine(event.tab, "coordinator.restarted_on_idle", content,
+                                     why="restarted")
+                    return
             if error is None and tab.handover == "heard":
                 self.session.hand_over(tab.tab_id, "ready")
             if error is None and tab.handover == "ready" and self._time_up(tab, time.time()):
@@ -575,6 +591,18 @@ def methods(session: "Session", questions: Questions, channels: Channels,
         ("ready_to_restart", ready_to_restart), ("report_run", report_run))}
 
 
+def hand_on(session: "Session", tab: str) -> dict[str, Any]:
+    """A new tab takes over `tab`'s work from its `SESSION-START.md`, and `tab` is closed."""
+    successor = session.succeed_tab(tab, by="machine")
+    session.events.emit("coordinator.restarted", tab=successor.tab_id, deliver={
+        "content": restart_message(successor.tab_id, tab),
+        "meta": {"from": "machine"}})
+    return {"tab": successor.tab_id, "continues": tab, "status": "started",
+            "next": f"{successor.tab_id} takes over {tab}'s work, which is closed and "
+                    f"archived; you manage {successor.tab_id} now, and are told when its "
+                    "first turn ends."}
+
+
 class Verbs:
     """What the machine tab does to the tabs it manages."""
 
@@ -633,13 +661,17 @@ class Verbs:
                     session_start: bool = True) -> dict[str, Any]:
         """One managed tab closer: its `SESSION-START.md`, which its next conversation starts
         from — its size always, its text unless `session_start` is false — and the tails of
-        this conversation's thought doc and transcript."""
+        this conversation's thought doc and transcript; and the directions from the machine tab
+        still on their way to it, so a machine tab that took over never sends one twice."""
         row = next((t for t in self.managed() if t["tab"] == tab), None)
         if row is None:
             raise SessionError(f"{tab} is not a tab you manage")
         home = self.session.agents.home(tab)
         start = self.session.session_start(tab)
-        return {**row, "session_start": start if session_start else None,
+        channel = self.channels.state(tab)
+        return {**row, "directions_queued": [m["content"] for m in channel["queued"]
+                                             if m["cause"] == "coordinator.directed"],
+                "session_start": start if session_start else None,
                 "session_start_bytes": len(start.encode()) if start is not None else None,
                 "thoughts_tail": thoughts_tail(home, lines),
                 "transcript_tail": transcript_tail(home, turns)}
@@ -677,11 +709,21 @@ class Verbs:
         would cut its turn off, and while anything is asked of the user or the machine tab,
         since a restart withdraws it."""
         agent = self._unheld(tab)
+        if agent.busy and documents_ready and agent.handover in (None, RESTART_ON_IDLE):
+            # Its documents are ready and it is finishing a turn: restarted when that ends.
+            self.session.hand_over(tab, RESTART_ON_IDLE)
+            return {"tab": tab, "status": "restart_queued",
+                    "next": "It is restarted when its turn ends, unless that turn ends on an "
+                            "error or a question; you are told either way."}
         if agent.busy:
-            raise SessionError(f"{tab} is working; restart it once it is idle")
+            raise SessionError(f"{tab} is working; restart it once it is idle, or say its "
+                               "documents are ready to restart it when its turn ends")
         if (waiting := self.questions.tab_state(tab)) is not None:
             raise SessionError(f"{tab} is {waiting} on a question or permission, and a "
                                "restart would withdraw it; settle it first")
+        if agent.handover == RESTART_ON_IDLE:
+            self.session.hand_over(tab, None)
+            agent.handover = None
         if agent.handover != "ready" and not (documents_ready and agent.handover is None):
             if agent.handover is None:
                 self.session.hand_over(tab, "asked")
@@ -691,14 +733,7 @@ class Verbs:
                     "next": "It is making its documents ready for its next conversation; you "
                             "are told when that turn ends, and `restart_fresh` then restarts "
                             "it."}
-        successor = self.session.succeed_tab(tab, by="machine")
-        self.events.emit("coordinator.restarted", tab=successor.tab_id, deliver={
-            "content": restart_message(successor.tab_id, tab),
-            "meta": {"from": "machine"}})
-        return {"tab": successor.tab_id, "continues": tab, "status": "started",
-                "next": f"{successor.tab_id} takes over {tab}'s work, which is closed and "
-                        f"archived; you manage {successor.tab_id} now, and are told when its "
-                        "first turn ends."}
+        return hand_on(self.session, tab)
 
     def hold(self, tab: str, situation: str) -> dict[str, Any]:
         """The tab stopped for the user where they said, and told to put `situation` to

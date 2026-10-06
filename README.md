@@ -292,7 +292,11 @@ host's own screens failing, the clipboard bridge dropping, or another tab that s
 responding. It also catches a tab that's stuck: one working for ten minutes with nothing in its
 conversation moving, or for half an hour without anything in its work changing. It looks at
 what the tab was running, leaves a real long wait alone, and otherwise stops the tab's turn and
-tells it what went wrong. It also keeps the agents' documents in shape: one that's grown past its size,
+tells it what went wrong. It watches the disk too: when the machine holds a couple of GB more
+than when it last looked, or free space runs low, it works out what grew. The machine's own
+leftovers piling up it treats as a failure and fixes; a project's build or run output it points
+out to that project's tab, which knows what it still needs. A turn that fails on something waiting won't fix, like a tab
+that lost its sign-in, comes to it as well. It also keeps the agents' documents in shape: one that's grown past its size,
 names something that no longer exists, or describes a layer that has since changed. The point is that you're never the one who has to take a failure to an AI.
 
 It reads the logs, the journal and the machine's state. It repairs things with the daemon's

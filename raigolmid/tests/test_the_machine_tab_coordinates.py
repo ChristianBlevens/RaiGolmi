@@ -451,6 +451,10 @@ def test_a_tabs_last_turn_reaches_the_machine_tab_whole(h):
         .write_text("# start\n")
     lean = m.tab(MACHINE)["managed_tab"](tab=BODY, session_start=False)
     assert (lean["session_start"], lean["session_start_bytes"]) == (None, 8)
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(MACHINE)["direct"](tab=BODY, content="park the parser")
+    assert any("park the parser" in d for d in
+               m.tab(MACHINE)["managed_tab"](tab=BODY)["directions_queued"])
 
 
 def test_a_tab_already_ready_is_handed_on_in_one_call(h):
@@ -459,6 +463,21 @@ def test_a_tab_already_ready_is_handed_on_in_one_call(h):
     started = m.tab(MACHINE)["restart_fresh"](tab=BODY, documents_ready=True)
     assert (started["status"], started["continues"]) == ("started", BODY)
     assert not h.events_of("coordinator.wrap_up"), "no wrap-up turn"
+
+
+def test_a_ready_tab_still_in_its_turn_is_restarted_as_that_turn_ends(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(BODY)["agent_activity"](busy=True)
+    queued = m.tab(MACHINE)["restart_fresh"](tab=BODY, documents_ready=True)
+    assert queued["status"] == "restart_queued"
+    assert BODY in h.session.intent.tabs, "nothing cut off mid-turn"
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+    assert BODY not in h.session.intent.tabs
+    [told] = [q["content"] for q in m.queued(MACHINE) if "restarted at its turn's end" in
+              q["content"]]
+    assert "takes over" in told
 
 
 def test_a_runs_report_after_a_checkpoint_covers_its_last_stretch(h):

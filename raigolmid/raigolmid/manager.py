@@ -52,14 +52,17 @@ TAKEN = frozenset({
     "agent.failed",               # the ready agent not starting
     "runtime.event_stream_failed",
     "hostkeys.watch_failed",
-    "clipboard.unbridged",
-    "garbage.failed",        # the user's face's clipboard left the machine's
+    "clipboard.unbridged",        # the user's face's clipboard left the machine's
+    "garbage.failed",
     "watch.failed",
     "channel.unheard",            # another tab's session not hearing its channel
     "channel.silent",             # another tab's channel no longer asking
     "coordinator.unanswered",     # the machine tab not confirming its own handover
     "tab.stalled",                # a working tab whose conversation stands still (`stalls.py`)
     "tab.spinning",               # a working tab whose working copy does not change
+    "agent.turn_failed",          # a turn cut off by an API error continuing will not fix
+    "disk.grown",                 # the disk holding more than when last looked at (`disk.py`)
+    "disk.short",                 # little of the disk left free
     "documents.maintenance",      # an owner's docs: no header, grown, over budget, stale, dead refs
     "documents.maintenance_failed",
 })

@@ -182,7 +182,19 @@ class FakeLaunchers:
         self.store_names: list[str] = ["8xk3v1q7-bashInteractive-5.2",
                                        "b2m9zr04-coreutils-9.5",
                                        "q7n1d5wc-neovim-0.10.2"]
+        # Each view's jobs as its launcher knows them, by the view container that runs it:
+        # a recreated view is a new launcher, which never knew the old one's jobs.
+        self.jobs: dict[str, dict[int, dict]] = {}
         self._lock = threading.Lock()
+
+    def launcher(self, instance: str) -> str:
+        return self.runtime.inspect(naming.view(instance)).id
+
+    def print_job(self, instance: str, proc: int, text: str) -> None:
+        self.jobs[self.launcher(instance)][proc]["printed"] += text
+
+    def end_job(self, instance: str, proc: int, code: int) -> None:
+        self.jobs[self.launcher(instance)][proc]["exit"] = code
 
     def client_for(self, instance: str) -> "FakeLauncherClient":
         return FakeLauncherClient(self, instance)
@@ -225,6 +237,27 @@ class FakeLauncherClient:
         near, far = socket.socketpair()
         self.parent.connections.append((self.instance, far))
         return near
+
+    def start_job(self, cmd: list[str], *, cwd: str = "/work") -> tuple[int, str]:
+        self._require_reachable()
+        launcher = self.parent.launcher(self.instance)
+        mine = self.parent.jobs.setdefault(launcher, {})
+        proc = len(mine) + 1
+        mine[proc] = {"cmd": list(cmd), "cwd": cwd, "exit": None, "printed": ""}
+        return proc, launcher
+
+    def process(self, launcher: str, proc_id: int) -> dict | None:
+        """As the real one: None from another launcher, and a KeyError for a proc this one
+        never issued."""
+        self._require_reachable()
+        if launcher != self.parent.launcher(self.instance):
+            return None
+        job = self.parent.jobs[launcher][proc_id]
+        return {"proc": proc_id, "exit": job["exit"]}
+
+    def scrollback(self, proc: int, timeout: float = 5.0) -> str:
+        self._require_reachable()
+        return self.parent.jobs[self.parent.launcher(self.instance)][proc]["printed"]
 
     def exec(self, cmd: list[str], *, cwd: str = "/work",
              env: dict | None = None, stdin: str | None = None,

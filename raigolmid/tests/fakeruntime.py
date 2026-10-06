@@ -34,6 +34,7 @@ from raigolmid.runtime.base import (
     ContainerInfo,
     ContainerRuntime,
     ContainerSpec,
+    DiskUsage,
     ExecResult,
     ImageInfo,
     ImageInUse,
@@ -79,6 +80,7 @@ class FakeRuntime(ContainerRuntime):
         self.build_should_fail = False
         self.build_count = 0
         self.cache_prunes = 0
+        self.disk: DiskUsage | None = None
         self.exec_log: list[tuple[str, list[str]]] = []
         self.spawn_log: list[tuple[str, list[str], dict[str, str]]] = []
         # What a command run in a body answers, keyed on the joined argv. A command a
@@ -587,6 +589,12 @@ class FakeRuntime(ContainerRuntime):
     def prune_build_cache(self) -> int:
         self.cache_prunes += 1
         return 0
+
+    def disk_usage(self) -> DiskUsage:
+        """`disk` as a test sets it; a test that has not, asks of a runtime that cannot answer."""
+        if self.disk is None:
+            raise RuntimeError_("the fake runtime was given no disk usage")
+        return self.disk
 
     def list_images(self, label_filter: dict[str, str] | None = None) -> list[ImageInfo]:
         out = []

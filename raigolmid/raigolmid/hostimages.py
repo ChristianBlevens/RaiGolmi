@@ -169,6 +169,8 @@ def _load_archive(runtime: ContainerRuntime) -> bool:
             _LOADED.add(archive)
             logger.info("loaded %s from %s in %.0fs", ", ".join(loaded) or "nothing",
                         archive, time.monotonic() - started)
+            # A load can put back an older tag of an image already swept.
+            superseded.sweep_again(runtime)
     return True
 
 

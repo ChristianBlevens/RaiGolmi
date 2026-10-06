@@ -354,6 +354,8 @@ class _Handler(BaseHTTPRequestHandler):
         proxy = self.server.proxy
         # A request sent to the proxy itself rather than inside a CONNECT is for Anthropic.
         host = getattr(self, "intercepted", proxy.intercepted)
+        on_login = proxy.on_login(self.headers.items(), host)
+        settled = proxy.renewal.settled() if on_login else None
         try:
             owner, outgoing = proxy.outgoing(self.headers.items(), host, self.path)
         except ProxyError as exc:
@@ -364,16 +366,31 @@ class _Handler(BaseHTTPRequestHandler):
         upstream = urlsplit(proxy.upstreams[host])
         connect = (http.client.HTTPSConnection if upstream.scheme == "https"
                    else http.client.HTTPConnection)
-        conn = connect(upstream.hostname, upstream.port, timeout=UPSTREAM_TIMEOUT)
         started = time.monotonic()
+        conn = connect(upstream.hostname, upstream.port, timeout=UPSTREAM_TIMEOUT)
         try:
             try:
                 conn.request(self.command, self.path, body=body, headers=outgoing)
                 answer = conn.getresponse()
+                if on_login and answer.status == 401 and proxy.renewal.overlapped(settled):
+                    # Refused on the token a renewal was retiring: sent again on the new one.
+                    answer.read()
+                    conn.close()
+                    proxy.renewal.settled()
+                    owner, outgoing = proxy.outgoing(self.headers.items(), host, self.path)
+                    proxy.events.emit("credproxy.resent", owner=owner, path=self.path)
+                    conn = connect(upstream.hostname, upstream.port, timeout=UPSTREAM_TIMEOUT)
+                    conn.request(self.command, self.path, body=body, headers=outgoing)
+                    answer = conn.getresponse()
             except OSError as exc:
                 proxy.events.emit("credproxy.upstream_failed", owner=owner, path=self.path,
                                   error=str(exc))
                 self._refuse(502, f"{host} could not be reached: {exc}", "api_error")
+                return
+            except ProxyError as exc:
+                proxy.events.emit("credproxy.refused", host=host, path=self.path,
+                                  reason=str(exc))
+                self._refuse(401, str(exc))
                 return
             if answer.status == 429:
                 proxy.events.emit("credproxy.limited", owner=owner, path=self.path,
@@ -489,8 +506,10 @@ class CredentialProxy:
                  intercepted: str = INTERCEPTED,
                  github: dict[str, str] | None = None,
                  anthropic: dict[str, str] | None = None,
-                 this_machine: Callable[[str], bool] = is_this_machine) -> None:
+                 this_machine: Callable[[str], bool] = is_this_machine,
+                 renewal: claude_login.Renewal | None = None) -> None:
         self.broker = broker
+        self.renewal = renewal if renewal is not None else claude_login.Renewal()
         self.this_machine = this_machine
         self.events = events
         self.open_owner = open_owner
@@ -505,6 +524,15 @@ class CredentialProxy:
     @property
     def address(self) -> tuple[str, int]:
         return self._server.server_address[:2]
+
+    def on_login(self, headers: list[tuple[str, str]], host: str) -> bool:
+        """Whether the request carries a placeholder for the claude.ai sign-in."""
+        if host in self.github:
+            return False
+        sent = {name.lower(): value for name, value in headers}
+        token = (sent.get("authorization", "").removeprefix("Bearer ").strip()
+                 or sent.get("x-api-key", "").strip())
+        return bool(token) and self.broker.placeholders.owner_of(token, (LOGIN,)) is not None
 
     def outgoing(self, headers: list[tuple[str, str]], host: str,
                  path: str = "") -> tuple[str | None, dict[str, str]]:

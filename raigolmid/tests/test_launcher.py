@@ -208,6 +208,18 @@ def test_detached_processes_outlive_the_connection(launcher, tmp_path):
     assert marker.exists(), "the process died with the connection that started it"
 
 
+def test_a_job_outlives_its_start_and_is_read_back_as_text(launcher):
+    """`jobs.py` asks only `process` and `scrollback` of what `start_job` started."""
+    proc, issued = launcher.start_job(
+        ["/bin/sh", "-c", "sleep 0.3; echo \"term=$TERM\"; exit 3"], cwd="/tmp")
+    deadline = time.time() + 5
+    while (known := launcher.process(issued, proc))["exit"] is None and time.time() < deadline:
+        time.sleep(0.1)
+    assert known["exit"] == 3
+    assert "term=dumb" in launcher.scrollback(proc)
+    assert launcher.process("another-launcher", proc) is None
+
+
 def _exit_of(launcher, marker: str, within: float = 8.0):
     """The recorded exit of the one process whose command line carries `marker`, once it
     has one; None if it is still running at the deadline."""

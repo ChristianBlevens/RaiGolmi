@@ -40,6 +40,7 @@ from .events import EventLog
 from .faces import FaceError, Faces
 from .facemounts import FaceMounts, FaceMountError
 from .instances import Instance, Instances, RebuildResult
+from .jobs import Jobs
 from .intent import MANAGER, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent
 from .launcher import LauncherError, LauncherOutputHeld, LauncherUnreachable
 from .paths import Paths
@@ -123,6 +124,7 @@ class Session:
 
         self.anchors = Anchors(runtime, epoch, image=anchor_image or DEFAULT_ANCHOR_IMAGE)
         self.views = Views(runtime, paths, epoch)
+        self.jobs = Jobs(self, events)
         self.index = PackageIndex(paths.data / "nixpkgs-names.json")
         self.resolver = ToolbeltResolver(flakes=paths.state / "flakes")
         self.compose_cli = compose_cli or compose.ComposeCLI()

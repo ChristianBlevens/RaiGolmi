@@ -189,11 +189,33 @@ def build_server(client: ApiClient):
                              "toolbelt and the language servers run. Returns stdout, "
                              "stderr and the exit code. `timeout` is how long it may go "
                              "without output; when it passes, everything the command started "
-                             "is stopped, background jobs included. A job meant to outlive "
-                             "the call is started on its own output: `setsid cmd > log 2>&1 "
-                             "< /dev/null &`.")
+                             "is stopped, background jobs included. Anything that may run "
+                             "longer than a few minutes — a build, a test suite, a long run — "
+                             "is a job (`job_start`), never a background `&` here.")
     def exec(cmd: list[str], cwd: str = "/work", timeout: float = 300.0) -> dict[str, Any]:
         return client.call("exec", cmd=cmd, cwd=cwd, timeout=timeout)
+
+    @tool(server, description="Start a long command in your sandbox's toolbelt container as a "
+                             "job under `name`: it runs on whatever happens to this call, your "
+                             "turn or your session, until it exits. Wait on it with `job_wait`. "
+                             "Its output is kept (the last 256 KB); a job whose output you "
+                             "need whole writes it to a file itself.")
+    def job_start(name: str, cmd: list[str], cwd: str = "/work") -> dict[str, Any]:
+        return client.call("job_start", name=name, cmd=cmd, cwd=cwd)
+
+    @tool(server, description="Wait on a job: returns when it exits (with its exit code), when it "
+                             "is gone (its toolbelt container was recreated or the machine "
+                             "restarted, so it left no exit code), or after `timeout` seconds "
+                             "(at most 300) with it still running — then call again. Always "
+                             "returns the end of what it printed, so a run that crashed says "
+                             "how.")
+    def job_wait(name: str, timeout: float = 300.0) -> dict[str, Any]:
+        return client.call("job_wait", name=name, timeout=timeout)
+
+    @tool(server, description="Your jobs: each one's command, how long since it started, and "
+                             "whether it is running, exited (with its code) or gone.")
+    def jobs() -> list[dict[str, Any]]:
+        return client.call("jobs")
 
     @tool(server, description="Rebuild your sandbox's body from its definition and swap "
                              "it in. Returns exactly one of rebuilt, already_current or "
@@ -295,7 +317,9 @@ def build_server(client: ApiClient):
     @tool(server, description="Machine tab only: one tab you manage closer — its state, "
                              "its SESSION-START.md's size and, unless `session_start` is "
                              "false, its text; the tail of this conversation's thought doc "
-                             "(`lines`) and its last `turns` turns, the last one whole.")
+                             "(`lines`) and its last `turns` turns, the last one whole; and "
+                             "the directions it has not yet been handed (`direct`), so none "
+                             "is sent twice.")
     def managed_tab(tab: str, turns: int = 20, lines: int = 60,
                     session_start: bool = True) -> dict[str, Any]:
         return call("managed_tab", tab=tab, turns=turns, lines=lines,
@@ -323,7 +347,9 @@ def build_server(client: ApiClient):
                              "goes in that document. `documents_ready` makes it one call, for "
                              "a tab whose last turn already left its documents ready and whose "
                              "SESSION-START.md you have read. You manage the new tab by its new "
-                             "id. Only while it is idle with nothing asked.")
+                             "id. Only while it is idle with nothing asked — except with "
+                             "`documents_ready` while it finishes a turn, when it is restarted "
+                             "as that turn ends and you are told.")
     def restart_fresh(tab: str, documents_ready: bool = False) -> dict[str, Any]:
         return call("restart_fresh", tab=tab, documents_ready=documents_ready)
 
@@ -474,6 +500,20 @@ def build_machine_server(client: ApiClient):
                              "and what to do instead. Its conversation is kept.")
     def unstick(tab_id: str, note: str) -> dict[str, Any]:
         return call("unstick", tab_id=tab_id, note=note)
+
+    @tool(server, description="Say something to a tab without stopping it: the note starts "
+                             "its next turn once it is idle, marked as from you.")
+    def tell(tab_id: str, note: str) -> dict[str, Any]:
+        return call("tell", tab_id=tab_id, note=note)
+
+    @tool(server, description="What holds the disk now, in bytes: the filesystem's used and "
+                             "free, each holder (images, build cache, closures, archives, "
+                             "homes, journal, each body with what its git ignores and the "
+                             "largest of that, and the body's tab), what is unused and could "
+                             "go, the unnamed rest, and each holder's change since growth was "
+                             "last said.")
+    def disk() -> dict[str, Any]:
+        return call("disk")
 
     @tool(server, description="Recreate a sandbox from its recorded intent: its anchor, body "
                              "and view.")

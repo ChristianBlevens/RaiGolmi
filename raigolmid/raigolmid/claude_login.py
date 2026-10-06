@@ -22,6 +22,7 @@ answered in the AI terminal's base window); any other failed renewal is retried.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -29,7 +30,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import hostimages, labels, naming
 from .events import EventLog
@@ -157,16 +158,55 @@ def refreshed(login: dict[str, Any], runtime: ContainerRuntime, epoch: int,
     return renewed
 
 
+class Renewal:
+    """Whether the sign-in is being renewed, and how many renewals have ended: what the
+    refresher and the proxy share. The old access token can be refused from the moment the
+    token endpoint issues the new one, a moment before the new one is written here, so a
+    request sent on the sign-in in between can be refused — and a tab refused there refreshes with its placeholder,
+    which is refused too and signs it out for good. So the proxy holds a request on the sign-in
+    while a renewal runs, and sends one again that a renewal overlapped (`credproxy.py`)."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._running = False
+        self._ended = 0
+
+    @contextlib.contextmanager
+    def running(self) -> Iterator[None]:
+        with self._cond:
+            self._running = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._running = False
+                self._ended += 1
+                self._cond.notify_all()
+
+    def settled(self) -> int:
+        """Once no renewal runs: how many have ended. A renewal is bounded by its
+        container's `RUN_TIMEOUT`, so this wait is too."""
+        with self._cond:
+            self._cond.wait_for(lambda: not self._running, timeout=RUN_TIMEOUT + 30.0)
+            return self._ended
+
+    def overlapped(self, settled: int) -> bool:
+        """Whether a renewal ran since `settled` was answered."""
+        with self._cond:
+            return self._running or self._ended != settled
+
+
 class Refresher:
     """Renews the sign-in before it expires, says so when it cannot, and removes it once it
     has ended. A new one is said by the daemon's file watch (`claude_login.stored`)."""
 
     def __init__(self, path: Path, events: EventLog, runtime: ContainerRuntime,
-                 epoch: int) -> None:
+                 epoch: int, renewal: Renewal | None = None) -> None:
         self.path = path
         self.events = events
         self.runtime = runtime
         self.epoch = epoch
+        self.renewal = renewal if renewal is not None else Renewal()
         self._retry_at = 0.0
 
     def run(self, stop: threading.Event) -> None:
@@ -184,8 +224,9 @@ class Refresher:
                 raise LoginEnded("its refresh token has expired")
             if oauth["expiresAt"] / 1000 - now > REFRESH_AHEAD_SECONDS:
                 return
-            write(self.path, refreshed(read(self.path), self.runtime, self.epoch,
-                                      self.path.parent))
+            with self.renewal.running():
+                write(self.path, refreshed(read(self.path), self.runtime, self.epoch,
+                                          self.path.parent))
         except LoginEnded as exc:
             self.path.unlink()
             self.events.emit("claude_login.lost", error=str(exc))

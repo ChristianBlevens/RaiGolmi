@@ -62,6 +62,21 @@ def test_an_image_the_archive_moves_a_tag_off_is_removed(tmp_path, monkeypatch):
     assert all(i.tags for i in runtime.list_images())
 
 
+def test_an_older_tag_a_load_puts_back_is_swept_again(tmp_path, monkeypatch):
+    """A machine running images newer than its disk's (a tree tried on it) loads the archive
+    when it needs an image only the archive has, and the load puts back the older tags of
+    images already swept."""
+    current, missing = _image(tmp_path, "selector"), _image(tmp_path, "claude")
+    monkeypatch.setenv(hostimages.ARCHIVE_ENV, str(_archive(
+        tmp_path / "a.tar", ["raigolmi/selector:older", missing.tag()])))
+    runtime = FakeRuntime()
+    runtime.add_image(current.tag())
+    hostimages.ensure(runtime, current)
+    hostimages.ensure(runtime, missing)
+    tags = {t for i in runtime.list_images() for t in i.tags}
+    assert "raigolmi/selector:older" not in tags and current.tag() in tags
+
+
 def test_the_archive_is_read_once(tmp_path, monkeypatch):
     first, second = _image(tmp_path, "selector"), _image(tmp_path, "host-control")
     monkeypatch.setenv(hostimages.ARCHIVE_ENV, str(_archive(tmp_path / "a.tar", [])))

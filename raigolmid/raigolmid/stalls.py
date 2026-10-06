@@ -6,7 +6,8 @@ interrupted without its `Stop` hook, a hung Claude Code: its transcript stops gr
 (**stalled**). A tab retrying the same failure: its transcript grows and its working copy —
 HEAD and the files that differ from it — does not (**spinning**). Neither reading knows a
 cause, so a cause nobody has met yet is caught the same way. Only a body tab has a working
-copy of its own, so only a body tab is read for spinning.
+copy of its own, so only a body tab is read for spinning; a job it runs printing
+(`job.progressed`, `jobs.py`) is its work moving too.
 
 Each is said once per episode as `tab.stalled` or `tab.spinning`, which the manager takes
 (`manager.py`) with the evidence: the transcript's last calls, the background tasks the tab
@@ -162,6 +163,10 @@ class Stalls:
             self._watches.clear()
         elif event.type == "agent.restarted" and event.tab is not None:
             self._watches.pop(event.tab, None)
+        elif event.type in ("job.started", "job.progressed") and event.tab in self._watches:
+            # A job the tab runs printing is its work moving, whatever its working copy does.
+            watch = self._watches[event.tab]
+            watch.changed_at, watch.spinning = event.ts, False
 
     def tick(self, now: float) -> None:
         if self._limited:

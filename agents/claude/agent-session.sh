@@ -22,10 +22,15 @@ mv "$config.new" "$config"
 # The tab's server is its channel, so it comes as the plugin the image's managed settings
 # approve (agents/claude/plugin/), and `rai mcp` takes its scope from RAIGOLMI_SCOPE. A
 # user-scope server of the same name would be a second, unapproved one, so a home that has
-# one loses it. Both commands are no-ops on a home that already has the plugin.
+# one loses it. A home that already has the plugin may hold a copy of an older image's, which
+# `install` leaves as it is, so it is installed afresh: the plugin is always this image's.
 jq 'del(.mcpServers.raigolmi)' "$config" > "$config.new"
 mv "$config.new" "$config"
 claude plugin marketplace add /usr/local/share/raigolmi/plugin >/dev/null
+installed="$HOME/.claude/plugins/installed_plugins.json"
+if [ -f "$installed" ] && jq -e '.plugins["raigolmi@raigolmi"]' "$installed" >/dev/null; then
+    claude plugin uninstall raigolmi@raigolmi >/dev/null
+fi
 claude plugin install raigolmi@raigolmi >/dev/null
 
 # Every launch bypasses permissions (agents.CLAUDE); the dialog accepting that mode is

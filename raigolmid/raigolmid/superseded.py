@@ -65,6 +65,17 @@ def drop_older(runtime: ContainerRuntime, tag: str) -> None:
             _prune_build_cache(runtime)
 
 
+def sweep_again(runtime: ContainerRuntime) -> None:
+    """Every current tag swept again: a `docker load` puts back whatever older tags its
+    archive carries, after `drop_older` has already removed them once."""
+    with _DROP:
+        superseded = _SUPERSEDED.setdefault(runtime, _Superseded())
+        tags, superseded.swept = sorted(superseded.swept), set()
+    for tag in tags:
+        if runtime.image(tag) is not None:
+            drop_older(runtime, tag)
+
+
 def release(runtime: ContainerRuntime) -> None:
     """A container went: each superseded image Docker refused is asked for again, and one no
     container holds any more goes."""

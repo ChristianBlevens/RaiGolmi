@@ -25,6 +25,7 @@ from .base import (
     ContainerInfo,
     ContainerRuntime,
     ContainerSpec,
+    DiskUsage,
     ExecResult,
     ImageInfo,
     ImageInUse,
@@ -336,6 +337,24 @@ class DockerRuntime(ContainerRuntime):
             return self._client.api.prune_builds()["SpaceReclaimed"]
         except APIError as exc:
             raise RuntimeError_(f"could not prune the build cache: {exc}") from exc
+
+    def disk_usage(self) -> DiskUsage:
+        """`docker system df`'s own reckoning: an image no container uses is unused for the
+        bytes no other image shares, and a cache record neither in use nor shared."""
+        try:
+            df = self._client.df()
+        except APIError as exc:
+            raise RuntimeError_(f"could not read the runtime's disk use: {exc}") from exc
+        images = df.get("Images") or []
+        cache = df.get("BuildCache") or []
+        return DiskUsage(
+            images=df["LayersSize"],
+            images_unused=sum(i["Size"] - max(i["SharedSize"], 0) for i in images
+                              if i["Containers"] == 0),
+            build_cache=sum(c["Size"] for c in cache if not c["Shared"]),
+            build_cache_unused=sum(c["Size"] for c in cache
+                                   if not c["InUse"] and not c["Shared"]),
+            containers=sum(c.get("SizeRw") or 0 for c in df.get("Containers") or []))
 
     def list_images(self, label_filter: dict[str, str] | None = None) -> list[ImageInfo]:
         filters: dict[str, Any] = {}

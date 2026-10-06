@@ -127,8 +127,12 @@ def test_a_read_is_undeclared_until_a_declaration_after_it_and_names_what_was_re
             call("7", "mcp__plugin_raigolmi_raigolmi__exec",
                  {"cmd": ["bash", "-c", "grep -n '^## ' design/1*.md"], "cwd": w}), result("7"),
             call("8", declare, {"documents": [{"path": f"{w}/B.md", "state": "current"}]}),
-            result("8", error=True)]
+            result("8", error=True),
+            # A pattern or a script is no file, unless an option gave it and the operand is one.
+            call("9", "Bash", {"command": "ls | grep A.md; grep -e C.md B.md; awk '/x/' run.md"}),
+            result("9")]
     assert undeclared_documents(rows, tmp_path) == {
         f"{w}/design/09-social.md": ["`sed -n 61,80p design/09-social.md`"],
-        f"{w}/design/10-x.md": ["`grep -n '^## ' design/1*.md`"]}
+        f"{w}/design/10-x.md": ["`grep -n '^## ' design/1*.md`"],
+        f"{w}/B.md": ["`grep -e C.md B.md`"], f"{w}/run.md": ["`awk '/x/' run.md`"]}
     assert undeclared_documents(rows[:2], tmp_path) == {f"{w}/A.md": ["lines 61-80"]}
