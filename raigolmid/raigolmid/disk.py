@@ -17,6 +17,9 @@ The used bytes rising past the last reported reading by `GROWTH_BYTES` is said a
 per episode; the janitor takes both (`janitor.py`) with each holder's change since that
 reading. What is the machine's the janitor repairs; what a body holds is the project's to
 judge, so the janitor `tell`s that body's tab what it holds and never deletes it from here.
+Growth across something the machine built for a layer the user chose (`BUILT`: a body's image,
+a face's, a closure, a sandbox's toolbelt) is the work going as it should: the reading after it
+is the new mark, and nothing is said. What a body keeps is held to its budget either way.
 
 A holder that cannot be read is reported as unread, never as empty. The last reported reading
 is kept in `Paths.disk`, and lowered whenever less is held, so growth across a daemon restart
@@ -44,6 +47,9 @@ if TYPE_CHECKING:
 # How far the used bytes rise past the last reported reading, and how little may be free,
 # before the janitor looks. Both set how soon disk use is looked at, never whether.
 GROWTH_BYTES = 2 * 1024 ** 3
+# What the machine builds for a layer the user chose, which the disk holding more is expected of.
+BUILT = frozenset({"build.complete", "closure.copied", "face.started", "face.trial_started",
+                   "sandbox.opened", "toolbelt.flake_built"})
 SHORT_FRACTION = 0.15
 # Sizing walks every file a body holds, so it is read this often rather than continuously.
 TICK_SECONDS = 600.0
@@ -209,6 +215,7 @@ class Disk:
         self.budgets = Budgets(session, events)
         self._short = False
         self._over: set[tuple[str, str]] = set()       # (body, kind) said this episode
+        self._sub = events.subscribe()
 
     def run(self, stop: threading.Event) -> None:
         while not stop.wait(TICK_SECONDS):
@@ -218,10 +225,11 @@ class Disk:
         return load_json(self.path, "the disk's last reading")
 
     def tick(self) -> None:
+        built = any(event.type in BUILT for event in self._sub.drain(timeout=0))
         now = reading(self.session)
         then = self._reported()
         fs = now["filesystem"]
-        if then is None or fs["used"] < then["filesystem"]["used"]:
+        if then is None or fs["used"] < then["filesystem"]["used"] or built:
             # Freed space lowers the mark, so growth is always measured from the least held.
             self._report(now)
         elif fs["used"] - then["filesystem"]["used"] >= GROWTH_BYTES:

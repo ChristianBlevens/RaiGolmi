@@ -137,6 +137,14 @@ def test_the_browser_is_opened_on_the_faces_own_display(h, tmp_path, monkeypatch
     assert "firefox http://myapi.tab-2:8000/" in cmd[-1]
 
 
+def test_a_browser_that_takes_the_page_into_its_open_window_has_shown_it(h, tmp_path, monkeypatch):
+    """Firefox already on the face hands a second start's page to its own window and opens no
+    new one; the window it retitles is the page being shown."""
+    monkeypatch.setattr(Faces, "_nested_compositor", lambda _self, _s: NestedSway(
+        h.runtime, maps=lambda c: False, retitles=lambda c: "firefox" in c))
+    h.session.faces.show_url(_browser_face(tmp_path), "http://myapi.tab-2:8000/")
+
+
 def test_a_browser_that_opens_no_window_is_a_refusal_with_its_output(h, tmp_path, monkeypatch):
     """Epiphany in a face dies at start (WebKit's sandbox needs user namespaces), and the
     call must not answer "shown" all the same."""

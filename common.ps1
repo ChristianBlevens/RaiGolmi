@@ -14,13 +14,17 @@ $state = Join-Path $env:LOCALAPPDATA 'RaiGolmi'
 # then runs what was built here.
 $releaseRecord = Join-Path $state 'release.txt'
 
+# Each box is shown above every window: one that opened behind the console would leave setup
+# waiting on a question nobody can see.
 function Ask([string]$text) {
-    [System.Windows.MessageBox]::Show($text, 'RaiGolmi', 'YesNo', 'Question') -eq 'Yes'
+    [System.Windows.MessageBox]::Show($text, 'RaiGolmi', 'YesNo', 'Question', 'Yes',
+                                      'DefaultDesktopOnly') -eq 'Yes'
 }
 
 function Fail([string]$text) {
     Write-Host $text -ForegroundColor Red
-    [System.Windows.MessageBox]::Show($text, 'RaiGolmi', 'OK', 'Error') | Out-Null
+    [System.Windows.MessageBox]::Show($text, 'RaiGolmi', 'OK', 'Error', 'OK',
+                                      'DefaultDesktopOnly') | Out-Null
     exit 1
 }
 
@@ -128,6 +132,15 @@ function Apply-Upgrade([string]$image, [string]$archive) {
     }
     & $ssh -F $config raigolmi "$switch && rm -f ~/.config/systemd/user/raigolmid.service.d/patched.conf"
     if ($LASTEXITCODE -ne 0) { Fail "The machine refused the new image; bootc's output is above. Nothing on it changed." }
+    # bootc stages nothing when the image is the one the machine already boots ("No update
+    # available"): there is nothing to write into the boot entries and nothing to restart.
+    & $ssh -F $config raigolmi 'test -e /run/ostree/staged-deployment'
+    if ($LASTEXITCODE -gt 1) { Fail "Asking the machine whether bootc staged the image failed (ssh exited $LASTEXITCODE). Run this again." }
+    if ($LASTEXITCODE -eq 1) {
+        if ($archive) { Remove-Item $archive -ErrorAction Stop }
+        Write-Host 'The machine already runs this image; nothing changed, so it keeps running.'
+        return
+    }
     # A staged image is written into the boot entries only by a clean shutdown, and a guest
     # that dies on the way down loses it. Stopping the finalize unit runs that step now, the
     # way ostree's own tests do; the new image is then the next boot's whatever the shutdown.
@@ -173,7 +186,10 @@ $patchedSha256 = @{
 
 function Msys([string]$command) {
     & "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 CHERE_INVOKING=1 /usr/bin/bash -lc $command
-    if ($LASTEXITCODE -ne 0) { Fail "MSYS2 failed running: $command" }
+    if ($LASTEXITCODE -ne 0) {
+        Fail ("MSYS2 failed running: $command (what it said is above). Run this again: it " +
+              "picks up where this stopped.")
+    }
 }
 
 # Every command handed to bash here carries no double quote: Windows PowerShell 5.1, which
@@ -219,9 +235,9 @@ function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
     }
     # The patched packages' dependencies resolve from the sync databases, and a fresh MSYS2's
     # are as old as its installer. MSYS2 supports only a whole-system upgrade, never -Sy alone,
-    # and one that updates its core closes every MSYS2 process, this shell included, so the
-    # first run may end early and the second finishes it (as msys2/setup-msys2 does). The
-    # IgnorePkg pins above keep it off the patched packages.
+    # and one that updates its core closes every MSYS2 process, the shell it ran in included, so
+    # the first round's exit says nothing and a second round finishes it (as msys2/setup-msys2
+    # does). The IgnorePkg pins above keep it off the patched packages.
     & "$msys2\usr\bin\env.exe" MSYSTEM=UCRT64 CHERE_INVOKING=1 /usr/bin/bash -lc 'pacman -Syu --noconfirm'
     Msys 'pacman -Syu --noconfirm'
     Msys 'pacman -U --noconfirm /tmp/raigolmi-packages/*.pkg.tar.zst'
@@ -353,6 +369,19 @@ function Record-Disk {
     New-Item -ItemType Directory -Force $state | Out-Null
     # UTF-8, as the launcher reads it: Set-Content in Windows PowerShell writes the ANSI code page.
     [IO.File]::WriteAllText((Join-Path $state 'disk.txt'), $disk)
+}
+
+# How every way of making or changing the machine here ends (setup.bat installing or updating,
+# build.bat building or upgrading, build-launcher.bat): the disk recorded for the launcher, the
+# shortcut beside these scripts, and the window open on the machine. One function, so no entry
+# can end differently from the rest.
+function Open-RaiGolmi([string]$said) {
+    Record-Disk
+    New-Shortcut
+    if (-not (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue)) {
+        Start-Process $exe -WorkingDirectory (Split-Path $exe)
+    }
+    Write-Host "$said RaiGolmi is starting; next time, open RaiGolmi.lnk here, or drag it wherever you like."
 }
 
 # RaiGolmi.lnk beside the build scripts, to run from here or drag anywhere. It points at the

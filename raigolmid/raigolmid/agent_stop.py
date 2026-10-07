@@ -5,7 +5,9 @@ running, and an agent may be waiting on one. Its answer is what decides, so a tu
 with a running command it has not been asked about is refused once, and the agent names the
 ones it is waiting on. The tab stays busy while any of those runs; each one finishing wakes
 the agent and the stop is decided again. A command it is not waiting on (a server left up for
-the user) is asked about once and never keeps the tab.
+the user) is asked about once and never keeps the tab. A call to the daemon through RaiGolmi's
+own tools (`try_face`, `sandbox_open`) is the turn's own work, answered back into it: it is
+waited on without asking.
 
 A turn also ends only once every document the agent read and can change is declared current or
 brought up to date (`declare_documents`): the conversation that read a doc is the one that knows
@@ -53,6 +55,15 @@ class Decision:
 
 def _running(hook: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {t["id"]: t for t in hook["background_tasks"] if t["status"] == "running"}
+
+
+# The MCP server every tab's RaiGolmi tools are served from, as Claude Code names a plugin's
+# (`agents/claude/plugin/raigolmi/.mcp.json`).
+RAIGOLMI_SERVER = "plugin:raigolmi:raigolmi"
+
+
+def _own(running: dict[str, dict[str, Any]]) -> set[str]:
+    return {i for i, t in running.items() if t.get("server") == RAIGOLMI_SERVER}
 
 
 # What each kind of task carries besides its description (Claude Code 2.1.283's `Stop` input:
@@ -104,6 +115,7 @@ def decide(hook: dict[str, Any], memory: Memory,
            undeclared: Mapping[str, list[str]] | None = None) -> Decision:
     undeclared = undeclared or {}
     running = _running(hook)
+    own = _own(running)
     if hook["stop_hook_active"]:
         unasked_documents = {doc: portions for doc, portions in undeclared.items()
                              if doc not in memory.documents}
@@ -111,18 +123,18 @@ def decide(hook: dict[str, Any], memory: Memory,
         if answers:
             named = {w.strip("`") for w in answers[-1].replace(",", " ").split()} - {"none"}
             memory = Memory(asked=memory.asked | set(running),
-                            waiting=named & set(running), documents=memory.documents)
+                            waiting=(named & set(running)) | own, documents=memory.documents)
     else:
-        unasked = [t for i, t in running.items() if i not in memory.asked]
+        unasked = [t for i, t in running.items() if i not in memory.asked and i not in own]
         if unasked:
             return Decision(None, _ask(unasked), memory)
-        memory = Memory(asked=memory.asked, waiting=memory.waiting & set(running))
+        memory = Memory(asked=memory.asked, waiting=(memory.waiting & set(running)) | own)
         unasked_documents = dict(undeclared)
     if unasked_documents:
         return Decision(None, _declare(unasked_documents),
                         Memory(memory.asked, memory.waiting,
                                memory.documents | set(unasked_documents)))
-    if hook["stop_hook_active"] and not answers and not set(running) <= memory.asked:
+    if hook["stop_hook_active"] and not answers and not set(running) - own <= memory.asked:
         # Unanswered, so nothing is settled: kept rather than closed, as an interrupt is.
         return Decision("busy" if running else "idle", None, memory)
-    return Decision("busy" if memory.waiting & set(running) else "idle", None, memory)
+    return Decision("busy" if (memory.waiting | own) & set(running) else "idle", None, memory)

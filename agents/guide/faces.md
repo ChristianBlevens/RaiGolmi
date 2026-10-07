@@ -53,11 +53,14 @@ upload of the face carries it. A new compositor must be wlroots-based (below). T
 - installs the GL drivers by name (on Fedora `mesa-dri-drivers mesa-libEGL mesa-libgbm`,
   with `install_weak_deps=False` they are otherwise dropped), a UTF-8 locale, a font and a
   cursor theme — without the last the face draws no pointer and reads as taking no input;
-- carries `sh`, which a startup `exec` waits on the apps with (below).
+- carries `sh`, which a startup `exec` waits on the apps with (below);
+- starts a session bus at `$XDG_RUNTIME_DIR/bus` before the compositor. An app that keeps one
+  window, as Firefox does, hands a second start to the first over it, so without it
+  `show_url` opens a dialog saying the browser is already running instead of the page.
 
 ```dockerfile
 FROM docker.io/library/fedora:44
-RUN dnf install -y --setopt=install_weak_deps=False sway foot \
+RUN dnf install -y --setopt=install_weak_deps=False sway foot dbus-daemon \
         mesa-dri-drivers mesa-libEGL mesa-libgbm glibc-langpack-en \
         dejavu-sans-mono-fonts dejavu-sans-fonts adwaita-cursor-theme && dnf clean all
 RUN useradd --uid 1000 --create-home face
@@ -65,7 +68,8 @@ USER 1000:1000
 COPY sway.conf /etc/face/sway.conf
 ENV HOME=/home/face XDG_CACHE_HOME=/home/face/.cache LANG=C.UTF-8 \
     XCURSOR_THEME=Adwaita XCURSOR_SIZE=24
-ENTRYPOINT ["sway", "-c", "/etc/face/sway.conf"]
+ENTRYPOINT ["sh", "-c", "dbus-daemon --session --address=unix:path=$XDG_RUNTIME_DIR/bus \
+            --fork --nopidfile && exec sway -c /etc/face/sway.conf"]
 ```
 
 **Apps.** `python3`, the editor's `package` and `apps` become one Nix closure whose `bin` is
@@ -104,7 +108,12 @@ nothing. foot draws it over any program that does not track the mouse; such a pr
 prints `\e]22;default\e\\` (OSC 22) once as it starts, as `rai terminal` does.
 
 A face on the user's screen keeps what it started with. A changed definition takes effect when
-the face next starts: have them switch away and back, or try it off their screen (below).
+it next starts: try it off their screen first (below), then `restart_face`, which waits until
+they are away from the keyboard and opens again the windows they had open. Read
+`face_windows` before it: ask them first only when a window may hold work its app would not
+restore, such as an unsaved document; otherwise restart it without asking. Each window is asked to close
+first, as its own close button does, so an app that keeps its state across a restart keeps
+it: set a face's browser to reopen its windows and tabs (Firefox's `browser.startup.page = 3`).
 
 ## What costs the user: every frame crosses to Windows
 

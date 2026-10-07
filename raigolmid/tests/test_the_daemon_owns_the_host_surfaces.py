@@ -65,7 +65,7 @@ class Screen:
 
 def _sources(root: Path) -> Path:
     """The host image's source tree, in the repository's layout (`host/Containerfile`)."""
-    for surface in ("host_control", "selector_native", "notify_popup", "catalog"):
+    for surface in ("host_control", "selector_native", "notify_popup", "catalog", "welcome"):
         (root / "ui" / surface).mkdir(parents=True, exist_ok=True)
         # Copying its own directory, as each surface's does: an image is what it copies.
         (root / "ui" / surface / "Containerfile").write_text(
@@ -224,7 +224,7 @@ def test_a_surface_that_exited_comes_back_on_reconcile_as_it_rests(daemon):
     outcome = restore_resident(runtime, daemon.paths, lambda *f: failures.append(f))
 
     assert outcome == {"selector": "restored", "control": "running", "notify": "restored",
-                       "catalog": "running"}
+                       "catalog": "running", "welcome": "running"}
     assert runtime.inspect(NOTIFY_CONTAINER).running
     assert "--hidden" in runtime.spec_of(SELECTOR_CONTAINER).command, \
         "a restored drawer must not open itself and take the keyboard"
@@ -253,7 +253,8 @@ def _refuse(*_a, **_k):
 
 
 @pytest.mark.parametrize("surface", ["host_control/control.py", "notify_popup/popup.py",
-                                     "selector_native/selector.py", "catalog/window.py"])
+                                     "selector_native/selector.py", "catalog/window.py",
+                                     "welcome/welcome.py"])
 def test_a_host_surface_is_not_a_unique_application(surface):
     """Static, because a second GTK instance cannot run here. A unique application id on the
     session bus in the shared runtime dir makes a restarted surface hand over to the one still

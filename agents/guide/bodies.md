@@ -17,7 +17,7 @@ body's tab.
 id = "myapi"
 name = "My API"
 dockerfile = "Dockerfile"          # or image = "python:3.12-slim"; one of the two
-working_copy = "~/projects/myapi"  # the project; without it, the definition directory
+working_copy = "project"           # the project, in this directory; without it, the directory
 command = ["python", "-m", "myapi"]
 ports = [8000]                     # published while its sandbox is the active one
 environment = { MODE = "dev" }
@@ -29,6 +29,26 @@ action = "rebuild"
 ```
 
 Also accepted: `target` and `context` (the Docker build's), `runtime`, `shell`, `read_only`.
+
+## Making a body for a project
+
+The user asking to work on a project is asking for its body: a link to a repository, a folder
+they put in `/transfer`, or a project that does not exist yet. Make `bodies/<id>/` with the
+project inside it at `project/`, and everything else the body needs, in the same turn:
+
+- the project: `git clone <url> /definitions/bodies/<id>/project` (their GitHub sign-in reaches
+  their private repositories), a copy of what they dropped, or `git init` and a first commit
+  for a new one;
+- `body.toml` beside it, with `working_copy = "project"`, built as the project deploys: its own
+  Dockerfile where it has one, and otherwise one written into the project and committed;
+- the toolbelt its work needs, an existing one when one fits;
+- `LAYER.md`, citing the project's files as `project/<path>`, and `project/SESSION-START.md`,
+  which carries what the user asked for, since its tab starts from it.
+
+The project's own documents (its README and the rest it came with) are its readers', and are
+left as they are: only what an agent writes carries a header.
+
+Then select the body: its tab opens on the project and takes the work from there.
 
 `[budget]` is the range a regular run of the project stays within with nothing duplicated or
 stale, each a size like `"2G"`: `caches` (its build tools' caches — every directory holding

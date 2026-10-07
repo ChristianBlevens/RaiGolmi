@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import re
+import shlex
 import socket
 import threading
 import time
@@ -1424,6 +1425,45 @@ class Session:
             # face is up, showing nothing, which is the face's failure and not its restart's.
             pass
         return started
+
+    def face_windows(self, tab_id: str) -> list[dict[str, Any]]:
+        """The windows open on the user's face, for the machine tab to judge whether a restart
+        would lose anything of theirs."""
+        self._machine_only(tab_id, "reads the face's windows")
+        try:
+            return [{k: w[k] for k in ("app", "title", "command")} for w in self.faces.windows()]
+        except FaceError as exc:
+            raise SessionError(str(exc)) from exc
+
+    def restart_face(self, tab_id: str) -> dict[str, Any]:
+        """The user's face started again on its definition as it is now, once they are away
+        from the keyboard, with the windows they had open opened again."""
+        self._machine_only(tab_id, "restarts the face")
+        face_id = self.intent.selection.face
+        if face_id is None:
+            raise SessionError("no face is selected, so there is none to restart")
+        try:
+            open_ = self.faces.windows()
+            self.presence.wait_until_away(INPUT_PATIENCE)
+        except PresenceError as exc:
+            raise SessionError(f"not restarted: {exc}. Try again when the user has stepped "
+                               "away") from exc
+        except FaceError as exc:
+            raise SessionError(str(exc)) from exc
+        self.faces.close_windows()
+        with self._lock:
+            if self._restart_face(face_id) is None:
+                raise SessionError(f"face '{face_id}' is no longer the selected one, or has no "
+                                   "desktop to restart")
+        reopened = self.faces.reopen(open_)
+        self.events.emit("face.restarted", face=face_id, by=tab_id, reopened=len(reopened))
+        return {"restarted": face_id, "reopened": [shlex.join(c) for c in reopened]}
+
+    def _machine_only(self, tab_id: str, what: str) -> None:
+        tab = self.intent.tabs.get(tab_id)
+        if tab is None or not tab.machine:
+            raise SessionError(f"only the machine tab {what}; message it (`to` \"machine\") "
+                               "instead")
 
     def _restart_door(self) -> str | None:
         """The active sandbox's ports again, if it still has any. Under the session lock."""

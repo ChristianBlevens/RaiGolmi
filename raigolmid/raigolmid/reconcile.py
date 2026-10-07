@@ -71,7 +71,7 @@ class Report:
 # Roles that belong to the host rather than to an instance.
 HOST_SCOPED = frozenset({labels.Role.FACE, labels.Role.FACE_TRIAL, labels.Role.SELECTOR,
                          labels.Role.CONTROL, labels.Role.NOTIFY, labels.Role.CATALOG,
-                         labels.Role.DOOR})
+                         labels.Role.WELCOME, labels.Role.DOOR})
 
 
 def group_containers(containers: list[ContainerInfo]) -> tuple[dict[str, Group],

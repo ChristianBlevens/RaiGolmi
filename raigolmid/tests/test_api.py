@@ -130,8 +130,9 @@ def test_reconcile_brings_back_the_resident_surfaces_that_are_not_running(api, m
                         lambda runtime, paths, role: started.append(str(role)))
     report = client.call("reconcile")
     assert report["host_surfaces"] == {"selector": "restored", "control": "restored",
-                                       "notify": "restored", "catalog": "restored"}
-    assert started == ["selector", "control", "notify", "catalog"]
+                                       "notify": "restored", "catalog": "restored",
+                                       "welcome": "restored"}
+    assert started == ["selector", "control", "notify", "catalog", "welcome"]
 
 
 def test_only_parameters_that_do_not_fit_are_bad_params(tmp_path):

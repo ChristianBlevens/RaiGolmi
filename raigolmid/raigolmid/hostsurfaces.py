@@ -1,5 +1,5 @@
 """The host's own surfaces: the native selector, the always-on-top control that is the AI
-terminal's surface, and the history menu.
+terminal's surface, the history menu, the catalog, and the welcome under every window.
 
 Each is a layer-shell client of the host compositor, and both ship as images because the
 host `/` is a read-only ostree overlay and cannot gain GTK — the same move a face's
@@ -37,9 +37,11 @@ SELECTOR_CONTAINER = "raigolmid-selector"
 CONTROL_CONTAINER = "raigolmid-host-control"
 NOTIFY_CONTAINER = "raigolmid-notify"
 CATALOG_CONTAINER = "raigolmid-catalog"
+WELCOME_CONTAINER = "raigolmid-welcome"
 # Each resident surface's container, by the role its label carries.
 CONTAINERS = {labels.Role.SELECTOR: SELECTOR_CONTAINER, labels.Role.CONTROL: CONTROL_CONTAINER,
-              labels.Role.NOTIFY: NOTIFY_CONTAINER, labels.Role.CATALOG: CATALOG_CONTAINER}
+              labels.Role.NOTIFY: NOTIFY_CONTAINER, labels.Role.CATALOG: CATALOG_CONTAINER,
+              labels.Role.WELCOME: WELCOME_CONTAINER}
 
 
 class HostSurfaceError(RuntimeError):
@@ -112,6 +114,8 @@ def start_at_rest(runtime: ContainerRuntime, paths: Paths, role: labels.Role) ->
         start_notify(runtime, paths)
     elif role == labels.Role.CATALOG:
         start_catalog(runtime, paths)
+    elif role == labels.Role.WELCOME:
+        start_welcome(runtime, paths)
     else:
         raise HostSurfaceError(f"{role} is not a resident host surface")
 
@@ -184,6 +188,16 @@ def start_control(runtime: ContainerRuntime, paths: Paths) -> str:
     runtime.run(_wayland_spec(
         CONTROL_CONTAINER, image, str(labels.Role.CONTROL), paths,
         command=("--terminal-command", ai_terminal_command(paths))))
+    return "started"
+
+
+def start_welcome(runtime: ContainerRuntime, paths: Paths) -> str:
+    """Bring the bare host's welcome up, replacing any previous one. It lies under every
+    window, so a face covers it and it never needs taking down."""
+    if runtime.inspect(WELCOME_CONTAINER) is not None:
+        runtime.remove(WELCOME_CONTAINER, force=True)
+    image = _image(runtime, hostimages.welcome())
+    runtime.run(_wayland_spec(WELCOME_CONTAINER, image, str(labels.Role.WELCOME), paths))
     return "started"
 
 

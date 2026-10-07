@@ -288,6 +288,8 @@ class Daemon:
                   lambda: start_at_rest(runtime, self.paths, labels.Role.NOTIFY))
         self._try("catalog", "catalog window",
                   lambda: start_at_rest(runtime, self.paths, labels.Role.CATALOG))
+        self._try("welcome", "welcome screen",
+                  lambda: start_at_rest(runtime, self.paths, labels.Role.WELCOME))
         # Built now so the first selection of a face does not wait on its compositor.
         for face in self.session.catalogue.faces.values():
             if face.desktop is not None:

@@ -47,6 +47,7 @@ class Role(StrEnum):
     CONTROL = "control"
     NOTIFY = "notify"
     CATALOG = "catalog"
+    WELCOME = "welcome"
     # The one-shot helper that mounts what a face shows (`facemounts.py`). It exits
     # before its caller returns, so one still present is residue, swept as an orphan.
     FACE_MOUNT = "face-mount"

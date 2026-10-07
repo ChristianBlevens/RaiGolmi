@@ -110,12 +110,16 @@ MOUSE = {
     "Any": ("if-shell -F '#{&&:#{pane_in_mode},#{==:#{mouse_y},}}' "
             "'send-keys -X cancel' ; send-keys"),
 }
+# tmux names a drag's end after where the button comes up, so a drag carried past the text onto
+# the scrollbar, a border or the tab bar ends under another name, and copies all the same.
+DRAG_ENDS = ("Pane", "Border", "Status", "StatusLeft", "StatusRight", "StatusDefault",
+             "ScrollbarUp", "ScrollbarSlider", "ScrollbarDown")
 COPY_MODE = {
     "MouseDown1Pane": ("select-pane ; send-keys -X clear-selection ; "
                        "send-keys -X scroll-exit-on ; "
                        "if-shell -F '#{==:#{scroll_position},0}' 'send-keys -X cancel'"),
     "MouseDrag1Pane": "select-pane ; send-keys -X scroll-exit-off ; send-keys -X begin-selection",
-    "MouseDragEnd1Pane": "send-keys -X copy-pipe-no-clear",
+    **{f"MouseDragEnd1{where}": "send-keys -X copy-pipe-no-clear" for where in DRAG_ENDS},
     "WheelUpPane": "select-pane ; send-keys -N5 -X scroll-up",
     "WheelDownPane": "select-pane ; send-keys -N5 -X scroll-down",
     "DoubleClick1Pane": "select-pane ; " + _COPY % "select-word",
@@ -165,16 +169,19 @@ def _first_command() -> str:
     paths = Paths.from_env()
     # Signing in to GitHub follows the Claude token on a first start, and is asked again on
     # every opening until it is done: an upload from the catalog needs it. A skipped
-    # sign-in costs uploads only, so the agent's tab opens either way.
-    github = ("" if credential.is_set(paths.registry_token, credential.REGISTRY_KEYS)
-              else "rai registry-token --login; ")
-    # So is the claude.ai sign-in, which only a tab held for the user's phone needs.
-    if not claude_login.is_set(paths.claude_login):
-        github += "rai claude-login --login; "
-    if credential.is_set(paths.agent_credentials):
-        return github.removesuffix("; ")
-    # A token given is an agent wanted: the tab opens the moment there is one.
-    return f"rai credential --set && {{ {github}rai ai ready; }}"
+    # sign-in costs uploads only, so the agent's tab opens either way. So is the claude.ai
+    # sign-in, which only a tab followed from the user's phone needs. Each is numbered among
+    # those asked, so the user sees how far through they are.
+    asked = [command for command, done in (
+        ("rai credential --set", credential.is_set(paths.agent_credentials)),
+        ("rai registry-token --login",
+         credential.is_set(paths.registry_token, credential.REGISTRY_KEYS)),
+        ("rai claude-login --login", claude_login.is_set(paths.claude_login))) if not done]
+    steps = [f"{command} --step {n}/{len(asked)}" for n, command in enumerate(asked, 1)]
+    if not credential.is_set(paths.agent_credentials):
+        # A token given is an agent wanted: the tab opens the moment there is one.
+        return f"{steps[0]} && {{ {''.join(f'{s}; ' for s in steps[1:])}rai ai ready; }}"
+    return "; ".join(steps)
 
 
 def _shell() -> str:

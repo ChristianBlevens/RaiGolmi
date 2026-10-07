@@ -261,6 +261,21 @@ def build_server(client: ApiClient):
     def show_url(url: str) -> dict[str, Any]:
         return client.call("show_url", url=url)
 
+    @tool(server, description="Machine tab only: the windows open on the user's face, each "
+                             "with its app, title and command, to judge whether restarting "
+                             "the face would lose work of theirs.")
+    def face_windows() -> dict[str, Any]:
+        return {"windows": client.call("face_windows")}
+
+    @tool(server, description="Machine tab only: start the user's face again on its definition "
+                             "as it is now, so a change to it takes effect. It waits until the "
+                             "user is away from the keyboard, and opens again the windows "
+                             "they had open; what was in them that the app does not restore "
+                             "itself is lost, so read `face_windows` first and ask the user "
+                             "only when a window may hold unsaved work.")
+    def restart_face() -> dict[str, Any]:
+        return client.call("restart_face")
+
     @tool(server, description="Capture the face, the desktop on the user's screen, as a PNG. "
                              "Returns its path; read that file to see it, for instance to "
                              "check a UI you built. `trial` captures the face you are trying "

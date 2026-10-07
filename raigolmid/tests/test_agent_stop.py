@@ -136,3 +136,18 @@ def test_a_read_is_undeclared_until_a_declaration_after_it_and_names_what_was_re
         f"{w}/design/10-x.md": ["`grep -n '^## ' design/1*.md`"],
         f"{w}/B.md": ["`grep -e C.md B.md`"], f"{w}/run.md": ["`awk '/x/' run.md`"]}
     assert undeclared_documents(rows[:2], tmp_path) == {f"{w}/A.md": ["lines 61-80"]}
+
+
+def test_a_call_to_raigolmis_own_tools_is_waited_on_without_asking():
+    """`try_face` building a face is the turn's own work, answered back into it: the tab stays
+    busy on it and the agent is never asked, while another task beside it still is."""
+    hook = _stop()
+    hook["background_tasks"] = [{"id": "k1", "type": "mcp", "status": "running",
+                                 "description": "plugin:raigolmi:raigolmi try_face",
+                                 "server": "plugin:raigolmi:raigolmi", "tool": "try_face"}]
+    d = decide(hook, Memory())
+    assert d.refusal is None and d.report == "busy"
+    hook["background_tasks"].append({"id": "b2", "type": "shell", "status": "running",
+                                     "description": "a server", "command": "npm start"})
+    d = decide(hook, Memory())
+    assert "b2" in d.refusal and "k1" not in d.refusal

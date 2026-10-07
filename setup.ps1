@@ -5,6 +5,13 @@
 #  in place, keeping everything on it. build.bat builds both from this checkout instead.
 . (Join-Path $PSScriptRoot 'common.ps1')
 
+# An error no step expected still ends setup saying what it was and what to do: every step is
+# checked again on the next run, so running it again picks up where this one stopped.
+trap {
+    Fail ("Setup stopped: $($_.Exception.Message)`n`nRun setup.bat again: it picks up where " +
+          "this stopped.")
+}
+
 # Published by .github/workflows/publish.yml. `latest` (and `<commit>`) carry the launcher and
 # a fresh disk; `host-<commit>` is the host image a machine already installed upgrades to.
 $registry = 'ghcr.io'
@@ -95,11 +102,8 @@ if (-not (Test-Path $disk)) {
     }
     Download $token $release.Files['RaiGolmi.exe'] $exe
     Download $token $release.Files['raigolmi.qcow2'] $disk
-    Record-Disk
     Set-Content -Path $releaseRecord -Value $release.Revision -NoNewline
-    New-Shortcut
-    Start-Process $exe -WorkingDirectory (Split-Path $exe)
-    Write-Host "Installed release $short. RaiGolmi is starting; next time, open RaiGolmi.lnk here, or drag it wherever you like."
+    Open-RaiGolmi "Installed release $short."
     exit 0
 }
 
@@ -112,6 +116,4 @@ Record-Disk
 Apply-Upgrade -image $host_image
 if (Test-Path $next) { Move-Item -Force $next $exe }
 Set-Content -Path $releaseRecord -Value $release.Revision -NoNewline
-New-Shortcut
-Start-Process $exe -WorkingDirectory (Split-Path $exe)
-Write-Host "Updated to release $short. RaiGolmi is starting on it, with everything on the machine kept."
+Open-RaiGolmi "Updated to release $short, with everything on the machine kept."

@@ -389,8 +389,9 @@ def protection_digest(binds: list[Mount]) -> str:
 # What a document's header is, as every primer says it (`{header}`). Its fields are spelled out
 # in words as well as shown: the format is `documents.HEADER_FORMAT`, the one the sweep reads.
 HEADER = (
-    "**Every document opens with its header**, an HTML comment of four lines, before anything "
-    "else in the file:\n\n```\n" + documents.HEADER_FORMAT + "\n```\n\n"
+    "**Every document you write opens with its header**, an HTML comment of four lines, before "
+    "anything else in the file; a project's own documents, the ones it came with, are its "
+    "readers' and are left as they are:\n\n```\n" + documents.HEADER_FORMAT + "\n```\n\n"
     "`purpose` is what the doc is for, in one sentence; `not-here` is what does not belong in "
     "it and the doc each goes to instead; `shape` is `bounded` (kept to what serves its "
     "purpose), `log` (grows by entries, its oldest rolled into an archive doc) or `archive` "

@@ -5,5 +5,5 @@
 
 Install-Missing { Launcher-Prerequisites } 'build-launcher.bat'
 Build-Launcher
-New-Shortcut
-Write-Host "Built. Run RaiGolmi.lnk here, or drag it wherever you like."
+Open-RaiGolmi 'Built the launcher.'
+

@@ -12,14 +12,13 @@ Build-Launcher
 $upgrade = Test-Path $disk
 if ($upgrade) { Build-Upgrade $disk } else { Refuse-Synced $disk; Build-Disk 'qcow2' $disk }
 
-Record-Disk
 # The machine runs this build from here on, not a published release.
 Remove-Item $releaseRecord -ErrorAction SilentlyContinue
-New-Shortcut
 if ($upgrade) {
+    # The launcher Apply-Upgrade opens boots the recorded disk, so it is recorded first.
+    Record-Disk
     Apply-Upgrade -archive (Upgrade-Archive $disk)
-    Start-Process $exe -WorkingDirectory (Split-Path $exe)
-    Write-Host 'Upgraded. RaiGolmi is starting on the new image, with everything on it kept.'
+    Open-RaiGolmi 'Upgraded on the new image, with everything on the machine kept.'
 } else {
-    Write-Host "Built. Run RaiGolmi.lnk here, or drag it wherever you like."
+    Open-RaiGolmi 'Built.'
 }

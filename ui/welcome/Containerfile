@@ -1,0 +1,29 @@
+# The bare host's welcome as a container image, for the reason every host surface is one: the
+# host's `/` is a read-only ostree overlay with no GTK, and there is no `dnf install` on it.
+FROM docker.io/library/fedora:44
+
+# ⚠ Byte-identical to the other surfaces', so they share one cached layer and a fresh machine
+# runs this `dnf` once.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gtk4 gtk4-layer-shell python3-gobject gobject-introspection \
+        mesa-dri-drivers mesa-libEGL libglvnd-gles \
+        google-noto-color-emoji-fonts \
+    && dnf clean all
+
+RUN useradd --uid 1000 --create-home welcome
+USER 1000:1000
+
+COPY --chown=1000:1000 ui/__init__.py ui/copyable.py ui/layershell.py ui/theme.py \
+     /opt/raigolmi/ui/
+COPY --chown=1000:1000 ui/welcome/ /opt/raigolmi/ui/welcome/
+COPY --chown=1000:1000 raigolmid/raigolmid/__init__.py raigolmid/raigolmid/paths.py \
+     /opt/raigolmi/raigolmid/
+
+# ⚠ LD_PRELOAD is required: gtk4-layer-shell must load before libwayland-client (`ui/layershell.py`).
+ENV HOME=/home/welcome \
+    XDG_RUNTIME_DIR=/run/user/1000 \
+    GDK_BACKEND=wayland \
+    PYTHONPATH=/opt/raigolmi \
+    LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0
+
+ENTRYPOINT ["python3", "-m", "ui.welcome.welcome"]

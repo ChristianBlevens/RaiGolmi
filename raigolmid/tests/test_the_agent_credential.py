@@ -32,20 +32,23 @@ def test_a_credential_is_never_readable_by_anyone_else(tmp_path):
 
 def test_the_ai_terminal_opens_on_the_question_only_when_it_is_open(tmp_path, monkeypatch):
     """And a token given opens the agent's tab at once: only if the question was answered.
-    Signing in to GitHub and to claude.ai follow it, each asked on every opening until done."""
+    Signing in to GitHub and to claude.ai follow it, each asked on every opening until done,
+    and each numbered among those asked."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    github, claude = "rai registry-token --login; ", "rai claude-login --login; "
-    assert _first_command() == f"rai credential --set && {{ {github}{claude}rai ai ready; }}"
+    assert _first_command() == ("rai credential --set --step 1/3 && { rai registry-token "
+                                "--login --step 2/3; rai claude-login --login --step 3/3; "
+                                "rai ai ready; }")
 
     from raigolmid.paths import Paths
     paths = Paths.from_env()
     credential.write(paths.agent_credentials, "CLAUDE_CODE_OAUTH_TOKEN", "token")
-    assert _first_command() == f"{github}{claude}".removesuffix("; "), "asked until signed in"
+    assert _first_command() == ("rai registry-token --login --step 1/2; "
+                                "rai claude-login --login --step 2/2"), "asked until signed in"
 
     credential.write(paths.registry_token, "GITHUB_TOKEN", "gho_x", credential.REGISTRY_KEYS)
-    assert _first_command() == claude.removesuffix("; ")
+    assert _first_command() == "rai claude-login --login --step 1/1"
     claude_login.write(paths.claude_login, {
         "claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": 1,
                           "scopes": [claude_login.SESSIONS_SCOPE]},

@@ -29,7 +29,8 @@ def _container(name: str, role: labels.Role, instance: str | None = None) -> Con
 def test_the_hosts_own_surfaces_are_not_swept():
     containers = [_container("raigolmid-selector", labels.Role.SELECTOR),
                   _container("raigolmid-host-control", labels.Role.CONTROL),
-                  _container("raigolmid-notify", labels.Role.NOTIFY)]
+                  _container("raigolmid-notify", labels.Role.NOTIFY),
+                  _container("raigolmid-welcome", labels.Role.WELCOME)]
     _, orphans = group_containers(containers)
     assert orphans == []
 

@@ -23,6 +23,8 @@ Two rules bind everything here:
 """
 from __future__ import annotations
 
+import collections
+import functools
 import json
 import os
 import re
@@ -31,6 +33,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from . import hostimages, keyboard, labels, localtime, naming, settings
 from .closures import Closures
@@ -98,6 +101,10 @@ def _placed(argv: tuple[str, ...], **places: str) -> list[str]:
 # socket, and only the second is a fault. The wait is for the nested display to appear.
 START_TIMEOUT = 20.0
 POLL = 0.25
+# How long a restarted face goes without a new window before its own start-up is taken as done.
+SETTLE = 5.0
+# A window's start-up activation is its first start's, and is never handed on.
+_STARTUP_TOKENS = ("DESKTOP_STARTUP_ID=", "XDG_ACTIVATION_TOKEN=")
 
 _WAYLAND_SOCKET = re.compile(r"^wayland-[0-9]+$")
 _SWAY_IPC_SOCKET = re.compile(r"^sway-ipc\.[0-9]+\.[0-9]+\.sock$")
@@ -105,6 +112,10 @@ _SWAY_IPC_SOCKET = re.compile(r"^sway-ipc\.[0-9]+\.[0-9]+\.sock$")
 
 class FaceError(RuntimeError):
     """A face's desktop could not be brought up."""
+
+
+class FaceQuiet(FaceError):
+    """A face's compositor sent no window event in the time it was given."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +192,22 @@ class HostCompositor:
         rather than dying with the daemon's cgroup. sway answers before the command runs;
         what it did is only visible as whatever it draws."""
         self.command("exec", command)
+
+    def window_events(self, timeout: float):
+        """Its window events from now on, subscribed before this returns. A read waiting
+        `timeout` for the next one is a failure, carrying sway's reason."""
+        events = self._ipc(functools.partial(hostipc.subscribe, timeout=timeout), ["window"])
+
+        def each():
+            try:
+                yield from events
+            except HostIpcError as exc:
+                if isinstance(exc.__cause__, TimeoutError):
+                    raise FaceQuiet(f"no window event within {timeout:g}s") from exc
+                raise FaceError(str(exc)) from exc
+            finally:
+                events.close()
+        return each()
 
     def node_for_pid(self, pid: int) -> dict | None:
         """The host's view of a client, which is the only place fullscreen state is true."""
@@ -598,7 +625,7 @@ class Faces:
                                     config=EDITOR_CONFIG_MOUNT, glue=EDITOR_GLUE))
         log = state.runtime_dir / self.paths.editor_window_log.name
         try:
-            exec_id = self._open_window(state, editor, log, append=True, what="the editor")
+            exec_id = self._open_window(state, editor, log, what="the editor")
         except (RuntimeError_, FaceError) as exc:
             # The desktop is up and usable without it; the reason is reported, not raised.
             self.events.emit("face.editor_window.failed", face=face.id, trial=trial,
@@ -607,8 +634,7 @@ class Faces:
         self.events.emit("face.editor_window.opened", face=face.id, trial=trial,
                          exec_id=exec_id, log=str(log))
 
-    def _open_window(self, state: FaceRuntimeState, command: str, log: Path, append: bool,
-                     what: str) -> str:
+    def _open_window(self, state: FaceRuntimeState, command: str, log: Path, what: str) -> str:
         """`command` run in the face on its own display, and the exec's id once it has a new
         window there. A status code is not evidence (module docstring): an app that dies at
         start never makes one, and its output is the reason."""
@@ -616,7 +642,7 @@ class Faces:
         before = _views(nested.tree())
         exec_id = self.runtime.spawn(
             state.container,
-            ["sh", "-c", f"exec {command} {'>>' if append else '>'}{shlex.quote(str(log))} 2>&1"],
+            ["sh", "-c", f"exec {command} >>{shlex.quote(str(log))} 2>&1"],
             environment={"WAYLAND_DISPLAY": state.wayland_display})
         deadline = time.monotonic() + START_TIMEOUT
         while not _views(nested.tree()) - before:
@@ -654,15 +680,36 @@ class Faces:
 
     def show_url(self, face: Face, url: str) -> None:
         """`url`, as the face reaches it, opened in the face's browser, a command
-        from its apps that the face names (`[desktop] browser`)."""
+        from its apps that the face names (`[desktop] browser`). The effect is a window: a new
+        one, or a running browser's retitled as it takes the page, which is where a browser
+        that keeps one window opens it and the tree only shows for a moment."""
         if face.desktop is None or face.desktop.browser is None:
             raise FaceError(f"face '{face.id}' names no browser ([desktop] browser), so it "
                             "has nothing to show a page in")
         state = self.current()
         if state is None or not state.wayland_display:
             raise FaceError("no face is running, so there is no browser to show a page in")
-        self._open_window(state, shlex.join([face.desktop.browser, url]),
-                          self.paths.browser_log, append=False, what=face.desktop.browser)
+        browser, log = face.desktop.browser, self.paths.browser_log
+        events = self._nested_compositor(state).window_events(START_TIMEOUT)
+        quiet: FaceError | None = None
+        try:
+            self.runtime.spawn(
+                state.container,
+                ["sh", "-c", f"exec {shlex.join([browser, url])} >{shlex.quote(str(log))} 2>&1"],
+                environment={"WAYLAND_DISPLAY": state.wayland_display})
+            deadline = time.monotonic() + START_TIMEOUT
+            for event in events:
+                if event.get("change") in ("new", "title"):
+                    return
+                if time.monotonic() > deadline:
+                    break
+        except FaceError as exc:
+            quiet = exc
+        finally:
+            events.close()
+        output = log.read_text(errors="replace")[-2000:] if log.exists() else ""
+        raise FaceError(f"{browser} opened no window on the face and took the page into none "
+                        f"within {START_TIMEOUT:g}s. Its output:\n{output.strip() or '<none>'}") from quiet
 
     def _nested_compositor(self, state: FaceRuntimeState) -> HostCompositor:
         """The face's own sway. It is pid 1 in the face, so its socket's name is one every
@@ -790,6 +837,81 @@ class Faces:
             raise
         self.stop()
         return self.start(face)
+
+    def windows(self) -> list[dict[str, Any]]:
+        """Each window open on the user's face: its app, its title, and the command and
+        environment it was started with, read from the face's own `/proc`, which is what opens
+        it again (`reopen`)."""
+        state = self.current()
+        if state is None:
+            raise FaceError("no face is running, so it has no windows")
+        out = []
+        for node in hostipc.nodes(self._nested_compositor(state).tree()):
+            if not node.get("pid"):
+                continue
+            out.append({"app": node.get("app_id") or "", "title": node.get("name") or "",
+                        "command": self._proc(state, node["pid"], "cmdline"),
+                        "environment": self._proc(state, node["pid"], "environ")})
+        return out
+
+    def close_windows(self) -> None:
+        """Ask every window on the user's face to close, as its own close button does, so each
+        app ends on its own terms (a browser keeping its session) rather than being killed with
+        the face; returns once none is open, or after `START_TIMEOUT` with what would not."""
+        state = self.current()
+        if state is None:
+            return
+        nested = self._nested_compositor(state)
+        if not _views(nested.tree()):
+            return
+        nested.command("[all]", "kill")
+        deadline = time.monotonic() + START_TIMEOUT
+        while _views(nested.tree()) and time.monotonic() < deadline:
+            time.sleep(POLL)
+
+    def reopen(self, windows: list[dict[str, Any]]) -> list[list[str]]:
+        """Each of `windows` the restarted face has not opened itself, started again with the
+        environment it had. The face's own start-up opens windows after it is up, so what it
+        opened is read once no window has mapped for `SETTLE` seconds. The editor window is the
+        daemon's to open, and is left to it."""
+        state = self.current()
+        if state is None:
+            raise FaceError("no face is running to open the windows in")
+        events = self._nested_compositor(state).window_events(SETTLE)
+        deadline = time.monotonic() + START_TIMEOUT
+        try:
+            for _ in events:
+                if time.monotonic() > deadline:
+                    break
+        except FaceQuiet:
+            pass
+        finally:
+            events.close()
+        present = collections.Counter(tuple(w["command"]) for w in self.windows())
+        editor = str(self.paths.editor_socket)
+        reopened = []
+        for window in windows:
+            command = window["command"]
+            if not command or any(editor in arg for arg in command):
+                continue
+            if present[tuple(command)]:
+                present[tuple(command)] -= 1
+                continue
+            environment = dict(entry.split("=", 1) for entry in window["environment"]
+                               if "=" in entry and not entry.startswith(_STARTUP_TOKENS))
+            environment["WAYLAND_DISPLAY"] = state.wayland_display
+            self.runtime.spawn(state.container,
+                               ["sh", "-c", 'exec "$@" >/dev/null 2>&1', "sh", *command],
+                               environment=environment)
+            reopened.append(command)
+        return reopened
+
+    def _proc(self, state: FaceRuntimeState, pid: int, name: str) -> list[str]:
+        result = self.runtime.exec(state.container, ["cat", f"/proc/{pid}/{name}"])
+        if result.exit_code != 0:
+            raise FaceError(f"could not read /proc/{pid}/{name} in the face: "
+                            f"{result.output.strip()}")
+        return [part for part in result.output.split("\0") if part]
 
     # --- the nested display ------------------------------------------------------------
     def display_of(self, pid: int, runtime_dir: Path | None = None) -> str:

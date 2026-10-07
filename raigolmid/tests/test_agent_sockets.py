@@ -120,3 +120,13 @@ def test_the_janitors_socket_answers_the_machine(world):
     client.call("events", n=5)
     with pytest.raises(ApiError, match="unknown method"):
         client.call("exec", cmd=["true"])
+
+
+def test_every_agent_socket_answers_the_hooks_every_container_runs(world):
+    """`agent-session.sh` installs one set of Claude Code hooks in every agent container, the
+    janitor's included, so every tab's socket answers each method they call."""
+    h, paths, sockets, stop = world
+    running(sockets, stop)
+    h.session.open_janitor()
+    for tab in (h.tab("myapi"), JANITOR):
+        assert answers(paths, tab).call("midturn") == [], tab

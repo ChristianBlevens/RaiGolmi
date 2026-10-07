@@ -138,6 +138,9 @@ class Maintenance:
                         if body is not None and doc == item.source_root / documents.SESSION_START:
                             yield (owner, doc, documents.BUDGET[documents.SESSION_START], cites,
                                    None, body)
+                        elif (body is not None and directory == item.source_root
+                              and documents.the_projects_own(directory, doc)):
+                            continue
                         else:
                             yield owner, doc, None, None, None, body
         patterns = root / documents.PATTERNS

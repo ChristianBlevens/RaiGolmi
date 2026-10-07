@@ -21,4 +21,4 @@ def test_the_surfaces_install_their_stack_with_the_same_line():
         return text[start:text.index("dnf clean all", start)]
 
     assert install_line("selector_native") == install_line("host_control") \
-        == install_line("notify_popup")
+        == install_line("notify_popup") == install_line("welcome")

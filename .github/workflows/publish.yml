@@ -94,9 +94,11 @@ jobs:
           df -h /
           # --rootfs: `quay.io/fedora/fedora-bootc` declares no default root filesystem
           # type, and bootc-image-builder refuses rather than picking one —
-          # "missing required info: DefaultRootFs". xfs rather than btrfs because Docker's
-          # overlay2 driver is what runs every body on this host, and overlay2 wants a
-          # filesystem with d_type; mkfs.xfs gives that by default.
+          # "missing required info: DefaultRootFs". ext4, because Docker's overlay2 driver runs
+          # every body on this host and wants d_type, which ext4 always has; and because the
+          # disk is also built on WSL, whose 6.6 kernel cannot mount the XFS that Fedora 44's
+          # mkfs.xfs makes (parent pointers and exchange-range on by default, no way to say
+          # otherwise through the builder).
           # quay's CDN drops a blob mid-read ("unexpected EOF") often enough to fail a release
           # on an intact image, so the builder is pulled on its own, retried, each failure
           # shown; the run then finds it in storage.
@@ -111,7 +113,7 @@ jobs:
             -v "$PWD/host/ci/config.toml:/config.toml:ro" \
             -v "$PWD/output:/output" \
             --pull=never "$builder" \
-            --type qcow2 --rootfs xfs "$PACKAGE:$HOST_TAG"
+            --type qcow2 --rootfs ext4 "$PACKAGE:$HOST_TAG"
           sudo chown -R "$USER" output
 
       # Compressed clusters QEMU reads as they are, so the launcher boots the download

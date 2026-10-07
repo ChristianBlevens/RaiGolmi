@@ -52,8 +52,11 @@ else
     #  machine's container storage rather than pulling it from a registry.
     #
     #  --rootfs: the Fedora bootc base declares no default root filesystem type and the builder
-    #  refuses rather than choosing one. xfs because Docker's overlay2 driver runs every body
-    #  here and wants d_type, which mkfs.xfs provides by default.
+    #  refuses rather than choosing one. ext4 because Docker's overlay2 driver runs every body
+    #  here and wants d_type, which ext4 always has; and because WSL's 6.6 kernel, which mounts
+    #  the new disk during this build, cannot mount the XFS Fedora 44's mkfs.xfs makes (parent
+    #  pointers and exchange-range are on by default and the builder passes no way to turn
+    #  them off).
     #  The installer asks where to install (installer.toml); the disk types are sized by config.toml.
     config=config.toml
     [ "$type" = anaconda-iso ] && config=installer.toml
@@ -62,7 +65,7 @@ else
         -v "$repo/host/ci/$config:/config.toml:ro" \
         -v "$out:/output" \
         quay.io/centos-bootc/bootc-image-builder:latest \
-        --type "$type" --rootfs "${ROOTFS:-xfs}" "$image"
+        --type "$type" --rootfs "${ROOTFS:-ext4}" "$image"
 fi
 
 sudo chown -R "$(id -u):$(id -g)" "$out"

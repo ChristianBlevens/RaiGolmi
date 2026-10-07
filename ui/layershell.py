@@ -78,8 +78,9 @@ def _why_unsupported() -> str:
 
 def overlay(window: Gtk.Window, *, namespace: str,
             anchors: tuple[str, ...] = (), margin: int = 0,
-            keyboard: bool = False, reserve: bool = False) -> None:
-    """Make `window` a layer-shell surface on the overlay layer.
+            keyboard: bool = False, reserve: bool = False, background: bool = False) -> None:
+    """Make `window` a layer-shell surface on the overlay layer, or with `background` on the
+    background layer, under every window, where a face covers it.
 
     `anchors` are edge names; an empty tuple centres the surface. `keyboard` asks the compositor for focus — the selector needs it to be navigable,
     the control does not and takes clicks only.
@@ -103,7 +104,8 @@ def overlay(window: Gtk.Window, *, namespace: str,
         )
 
     LayerShell.set_namespace(window, namespace)
-    LayerShell.set_layer(window, LayerShell.Layer.OVERLAY)
+    LayerShell.set_layer(window, LayerShell.Layer.BACKGROUND if background
+                         else LayerShell.Layer.OVERLAY)
     for name in anchors:
         LayerShell.set_anchor(window, EDGES[name], True)
         LayerShell.set_margin(window, EDGES[name], margin)

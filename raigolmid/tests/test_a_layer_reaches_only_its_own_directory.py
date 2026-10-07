@@ -57,6 +57,14 @@ def test_a_project_elsewhere_is_a_working_copy(tmp_path):
     assert body.source_root == project
 
 
+def test_a_project_named_relatively_is_in_the_bodys_own_directory(tmp_path):
+    """A body made for a project keeps it beside its definition: `working_copy = "project"`."""
+    body_dir = _body(tmp_path, 'working_copy = "project"\n')
+    (body_dir / "project").mkdir()
+    (body_dir / "project" / "Dockerfile").write_text("FROM scratch\n")
+    assert load_body(body_dir, ()).source_root == body_dir / "project"
+
+
 def test_a_face_config_dir_outside_its_directory_is_refused(tmp_path):
     face = tmp_path / "faces" / "f"
     face.mkdir(parents=True)

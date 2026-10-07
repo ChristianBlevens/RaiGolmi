@@ -106,6 +106,11 @@ def notify() -> HostImage:
     return HostImage("notify", root, root / "ui" / "notify_popup" / "Containerfile")
 
 
+def welcome() -> HostImage:
+    root = source_root()
+    return HostImage("welcome", root, root / "ui" / "welcome" / "Containerfile")
+
+
 def catalog() -> HostImage:
     root = source_root()
     return HostImage("catalog", root, root / "ui" / "catalog" / "Containerfile")
@@ -147,7 +152,8 @@ def face_compositor(faces_root: Path, compositor: str) -> HostImage:
 def shipped() -> list[HostImage]:
     """Every image the disk carries: the machine's own. A face's compositor is the face's,
     built on the machine when it first starts (`face_compositor`)."""
-    return [selector(), control(), notify(), catalog(), agent(), face_mount(), door(), gh()]
+    return [selector(), control(), notify(), catalog(), welcome(), agent(), face_mount(), door(),
+            gh()]
 
 
 # Loaded at most once per process: the archive holds every image, and a second load of it

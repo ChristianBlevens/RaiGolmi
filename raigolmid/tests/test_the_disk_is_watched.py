@@ -169,3 +169,18 @@ def test_the_ask_says_a_budget_is_a_regular_run_not_a_ceiling():
     from raigolmid.budgets import unset_message
     said = unset_message("myapi", {"caches": GB})
     assert "regular run" in said and "not a" in said and "room to spare" in said
+
+
+def test_growth_across_what_the_machine_built_for_a_chosen_layer_is_the_new_mark(h, monkeypatch):
+    """A first face builds gigabytes of image and closure: the work going as it should, so the
+    janitor is not sent to it. Growth after it is measured from there."""
+    watch = disk.Disk(h.session, h.events)
+    _filesystem(monkeypatch, 20 * GB)
+    watch.tick()
+    h.events.emit("face.trial_started", face="writing")
+    _filesystem(monkeypatch, 25 * GB)
+    watch.tick()
+    assert "disk.grown" not in h.event_types()
+    _filesystem(monkeypatch, 28 * GB)
+    watch.tick()
+    assert len(h.events_of("disk.grown")) == 1

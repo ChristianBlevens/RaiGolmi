@@ -113,10 +113,11 @@ def end_all() -> None:
 class NestedSway:
     """A face's own compositor (`Faces._nested_compositor`): a window for each command
     spawned in the face that `maps` says opens one, and none for any other, as an app that
-    dies at start never maps."""
+    dies at start never maps. `retitles` says a command hands its work to a window already
+    open, as a browser that keeps one window does, which retitles it instead."""
 
-    def __init__(self, runtime, maps=lambda command: True):
-        self.runtime, self.maps = runtime, maps
+    def __init__(self, runtime, maps=lambda command: True, retitles=lambda command: False):
+        self.runtime, self.maps, self.retitles = runtime, maps, retitles
         self.commands: list[str] = []
 
     def command(self, *words):
@@ -126,6 +127,23 @@ class NestedSway:
         if not line.startswith("input type:keyboard "):
             raise FaceError(f"the host compositor refused '{line}': not modelled")
         self.commands.append(line)
+
+    def window_events(self, timeout):
+        """Each command spawned from now on as the window event it causes; with none left, the
+        read that would wait `timeout` fails, as the real subscription's does."""
+        seen = len(self.runtime.spawn_log)
+
+        def each():
+            nonlocal seen
+            while seen < len(self.runtime.spawn_log):
+                command = " ".join(self.runtime.spawn_log[seen][1])
+                seen += 1
+                if self.maps(command):
+                    yield {"change": "new"}
+                elif self.retitles(command):
+                    yield {"change": "title"}
+            raise FaceError(f"host compositor: no window event within {timeout:g}s")
+        return each()
 
     def tree(self):
         windows = [{"id": 100 + n, "pid": 1000 + n, "nodes": []}

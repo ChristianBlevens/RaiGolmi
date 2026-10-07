@@ -1160,11 +1160,13 @@ exec wl-paste --no-newline --type text --watch bash -c '[ ""$CLIPBOARD_STATE"" =
     // look identical to a terminal that cannot paste. The count is of base64 characters, so
     // the log says a text of about the right size landed without saying what it was. The
     // primary selection too: a terminal's right-click pastes it (foot has no clipboard paste
-    // on a button), and it must paste what was copied on Windows.
+    // on a button), and it must paste what was copied on Windows. The type is named: left to
+    // sniff the content, wl-copy offers some text as application/octet-stream alone, which
+    // every `wl-paste --type text` here, the AI terminal's right-click among them, cannot take.
     const string Feed = Session + @"
 echo 'ready for what is copied on Windows' >&2
 while IFS= read -r line; do
-    if printf %s ""$line"" | base64 -d | wl-copy && printf %s ""$line"" | base64 -d | wl-copy --primary; then
+    if printf %s ""$line"" | base64 -d | wl-copy --type 'text/plain;charset=utf-8' && printf %s ""$line"" | base64 -d | wl-copy --primary --type 'text/plain;charset=utf-8'; then
         echo ""took ${#line} base64 characters"" >&2
     else
         echo 'wl-copy refused what the launcher sent' >&2
@@ -1398,6 +1400,9 @@ done
         {
             if (g == fromGuest || g == pending)
                 return;
+            // Windows holds something else now, so the guest's next copy is news even when it
+            // repeats the last one.
+            fromGuest = null;
             pending = g;
         }
         fed.Set();

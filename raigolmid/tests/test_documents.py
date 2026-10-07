@@ -35,6 +35,21 @@ def test_in_a_repository_ignored_output_is_not_the_layer(tmp_path):
     assert documents.changed_after(layer / "LAYER.md", layer) == ["Dockerfile"]
 
 
+def test_a_project_inside_a_body_is_its_own_and_none_of_the_layers(tmp_path):
+    """A body made for a project keeps it in its own directory as its working copy: what the
+    project writes, its run's output included, is never a change to the layer."""
+    layer = tmp_path / "microblog"
+    subprocess.run(["git", "init", "-q", str(layer / "project")], check=True)
+    _write(layer / "body.toml", "id = 'microblog'", 50)
+    _write(layer / "LAYER.md", "doc", 100)
+    _write(layer / "project" / "app.db", "a run's database", 200)
+    _write(layer / "project" / "README.md", "the project's own", 200)
+    assert documents.changed_after(layer / "LAYER.md", layer) == []
+    assert documents.markdown(layer) == [layer / "LAYER.md"]
+    assert documents.of_the_layer(layer, [layer / "project" / "app.db", layer / "body.toml"]) \
+        == [layer / "body.toml"]
+
+
 def test_a_dead_path_line_or_symbol_is_named_and_a_word_is_never_a_claim(tmp_path):
     layer = tmp_path / "python"
     _write(layer / "toolbelt.toml", "packages = []\n[tool]\nname = 1\n", 50)
@@ -90,3 +105,22 @@ def test_a_slash_alone_is_no_claim_and_the_daemons_lock_is_named_before_it_exist
                     "`toolbelts/python.nix`: no such path"]
 
 
+
+
+def test_a_document_the_project_came_with_is_its_own_and_one_an_agent_wrote_is_not(tmp_path):
+    """A cloned project's README is for its readers and never gains the agents' header; what an
+    agent adds to the project, committed or not, is the agents'."""
+    project = tmp_path / "project"
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    _write(project / "README.md", "# The project\n", 50)
+    subprocess.run(["git", "-C", str(project), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Someone", "-c",
+                    "user.email=someone@example.com", "commit", "-qm", "init"], check=True)
+    _write(project / "NOTES.md", "notes\n", 60)
+    subprocess.run(["git", "-C", str(project), "add", "NOTES.md"], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Claude (tab-2)", "-c",
+                    f"user.email={documents.AGENT_EMAIL}", "commit", "-qm", "notes"], check=True)
+    _write(project / "DRAFT.md", "draft\n", 70)
+    assert documents.the_projects_own(project, project / "README.md")
+    assert not documents.the_projects_own(project, project / "NOTES.md")
+    assert not documents.the_projects_own(project, project / "DRAFT.md")

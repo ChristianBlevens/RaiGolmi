@@ -54,14 +54,16 @@ def _layer_files(directory: Path) -> list[Path]:
     """What the layer is made of. When the layer is its own repository, git's own answer, so
     a build's ignored output is not the layer; otherwise every file not hidden. Only the
     layer's own `.git` is asked, never one above it: the definitions are every agent's to
-    write."""
+    write. A repository inside the layer is a project of its own, a body's working copy, and
+    none of it is the layer's."""
     if git.is_repo(directory):
         listed = git.run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                          directory).stdout
         return [directory / name for name in listed.split("\0") if name]
     files = []
     for root, dirs, names in os.walk(directory):
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        dirs[:] = [d for d in dirs
+                   if not d.startswith(".") and not (Path(root) / d / ".git").exists()]
         files.extend(Path(root) / n for n in names if not n.startswith("."))
     return files
 
@@ -82,12 +84,34 @@ def of_the_layer(directory: Path, paths: list[Path]) -> list[Path]:
         ignored = {directory / name for name in proc.stdout.split("\0") if name}
         return [p for p in candidates if p not in ignored]
     return [p for p in paths
-            if not any(part.startswith(".") for part in p.relative_to(directory).parts)]
+            if not any(part.startswith(".") for part in p.relative_to(directory).parts)
+            and not _in_a_project(directory, p)]
+
+
+def _in_a_project(directory: Path, path: Path) -> bool:
+    """Whether `path` is inside a repository of its own under `directory`."""
+    return any((parent / ".git").exists() for parent in path.parents
+               if parent != directory and parent.is_relative_to(directory))
 
 
 def markdown(directory: Path) -> list[Path]:
     """Every document in a layer or working copy, by the same answer as its files."""
     return sorted(f for f in _layer_files(directory) if f.suffix == ".md" and f.is_file())
+
+
+# Every agent commits as this (`agents/claude/agent-session.sh`).
+AGENT_EMAIL = "agent@raigolmi.local"
+
+
+def the_projects_own(working_copy: Path, doc: Path) -> bool:
+    """A document the project came with rather than one an agent wrote: git first saw it in a
+    commit no agent made. It is the project's, for its readers, and is never held to the
+    agents' header."""
+    if not git.is_repo(working_copy):
+        return False
+    added = git.run(["log", "--diff-filter=A", "--format=%ae", "--",
+                     str(doc.relative_to(working_copy))], working_copy).stdout.split()
+    return bool(added) and added[-1] != AGENT_EMAIL
 
 
 def changed_after(doc: Path, directory: Path) -> list[str]:

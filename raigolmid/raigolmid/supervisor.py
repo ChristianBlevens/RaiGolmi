@@ -43,7 +43,7 @@ from .runtime import ContainerInfo, ContainerRuntime
 EVIDENCE_LINES = 400
 
 HOST_SURFACES = frozenset({labels.Role.SELECTOR, labels.Role.CONTROL, labels.Role.NOTIFY,
-                           labels.Role.CATALOG})
+                           labels.Role.CATALOG, labels.Role.WELCOME})
 SANDBOX_PARTS = frozenset({labels.Role.BODY, labels.Role.VIEW, labels.Role.ANCHOR})
 # Not the one-shots, which their caller runs to completion, nor the face tried off the user's
 # screen, which is the machine tab's experiment (`Session.try_face`).

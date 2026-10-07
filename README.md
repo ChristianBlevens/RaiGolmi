@@ -67,15 +67,22 @@ until the new one has started properly, then it's removed to save space.
 
 ### The first start
 
-The terminal at the bottom of the screen asks you for three things, in order:
+The screen welcomes you and says what each of the small tabs at its edges holds. Put your
+mouse on the bottom one: the terminal there walks you through three sign-ins. Each happens in
+a browser, and whatever you need there is put on your clipboard first. In the window on
+Windows, that's your browser on Windows. On a computer running RaiGolmi on its own, get one
+first: open the selector at the left edge, press **Catalog**, turn on **Server**, search for
+`sign-in`, **Download** *Sign-in Browser*, then click it under Faces. It's only Firefox, full
+screen, and the bottom tab brings the terminal back over it.
 
-1. **Your Claude Code token.** Run `claude setup-token` on any computer with Claude Code
-   (on Windows, `winget install Anthropic.ClaudeCode` in a terminal gets it), then paste
-   the token in with a right-click. This is the only one you have to give it.
+1. **Your Claude Code token.** Claude Code makes it here: its sign-in address is on your
+   clipboard. Open it, sign in, and paste the code the page shows back with a right-click.
+   This is the only one you have to give.
 2. **A GitHub sign-in**, so agents can push to your repos and you can share things in the
-   catalog.
+   catalog. Its one-time code is on your clipboard: paste it at github.com/login/device.
 3. **A claude.ai sign-in**, so you can answer agents from your phone when they're working
-   on their own.
+   on their own. Its address is on your clipboard: open it, sign in, and paste the code it
+   shows back with a right-click.
 
 Press Ctrl+C to skip either sign-in. They'll be offered again later.
 
@@ -119,12 +126,13 @@ on), any apps in nixpkgs (Nix's huge package collection), set up however you lik
 
 ### Working on a project with an agent
 
-You've got a Python API you've been meaning to speed up. You ask the machine tab to set it
-up as a body. It writes one that builds and runs the project the same way it would deploy,
-plus a *toolbelt*, the tools the agent and your editor work on it with: here, Python and a
-language server.
+You've got a Python API on GitHub you've been meaning to speed up. You give the machine tab
+its link and say you want to work on it. It clones it into a new body, which builds and runs
+the project the same way it would deploy, and makes a *toolbelt*, the tools the agent and your
+editor work on it with: here, Python and a language server. A brand new project works the same
+way: describe it, and it starts one.
 
-You pick the body in the selector, and a new tab opens for it in the terminal. You tell that
+A new tab opens for the body in the terminal, already on the project. You tell that
 tab the search endpoint is slow. It opens a sandbox, runs the project and its tests, finds
 the slow query, fixes it, and opens the page in your desktop's browser so you can see it
 working. Then it commits to the project's git repo as itself. You read the commit and merge
@@ -251,7 +259,7 @@ A body and a toolbelt for it:
 # ~/raigolmi/bodies/myapi/body.toml
 id = "myapi"
 dockerfile = "Dockerfile"
-working_copy = "~/projects/myapi"
+working_copy = "project"    # the project itself, in this body's directory
 command = ["python", "-m", "myapi"]
 ports = [8000]
 

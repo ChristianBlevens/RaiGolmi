@@ -13,7 +13,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pty
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -93,8 +96,10 @@ def _follow_status() -> int:
 
     client = _client()
     lock = threading.Lock()
+    shown = [""]
 
     def draw(text: str) -> None:
+        shown[0] = text
         columns = shutil.get_terminal_size().columns
         lines = [line[:columns] for line in text.splitlines()]
         with lock:
@@ -124,6 +129,10 @@ def _follow_status() -> int:
         draw(f"raigolmid is not answering: {why}\n"
              "`systemctl --user status raigolmid` says why; this redraws once it is back.")
 
+    # The pane is made before the window has its size, so what was cut to the first width is
+    # drawn again at each new one; on a thread, because the handler may interrupt a draw.
+    signal.signal(signal.SIGWINCH,
+                  lambda *_: threading.Thread(target=draw, args=(shown[0],), daemon=True).start())
     follow(client, ("",), fetch, lost)
     return 0
 
@@ -602,10 +611,337 @@ def cmd_boot(_args) -> int:
         runtime.close()
 
 
+def _step(step: str | None, title: str, command: str) -> str:
+    """A first-start sign-in's heading. The first of them comes after the welcome, on a screen
+    of its own once Enter is pressed, because the two together do not fit the terminal.
+    Returns the heading."""
+    if step is None:
+        print(f"── {title} ──\n")
+        return title
+    number, total = step.split("/")
+    if number == "1":
+        print(f"Welcome to RaiGolmi. {total} sign-in{'s' if total != '1' else ''} first; after "
+              "that, everything is done by\ntalking to the machine tab. Each sign-in happens in "
+              "a browser: what you need there is put\non your clipboard, and what the page gives "
+              "back is pasted here with a right-click.\n\n"
+              "In a window on Windows, use your browser there.\n"
+              "On a computer of its own, get a browser first: put your mouse on the tab at the "
+              "left\nedge, press Catalog, turn on Server, search for sign-in, and press "
+              "Download on\nSign-in Browser. Then click Sign-in Browser under Faces: it fills "
+              "the screen once it\nhas started (the first start takes a few minutes), and the "
+              "tab at the bottom brings\nthis terminal back over it.\n")
+        # The one key this waits on, as a bar of its own: plain text is skimmed past.
+        print(f"\033[1;7m   ▶  Press Enter to start step 1 of {total}   \033[0m ",
+              end="", flush=True)
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\nnothing done; run `{command}` when you are ready")
+            raise SystemExit(1)
+        print("\033[H\033[2J", end="")
+    heading = f"Step {number} of {total}: {title}"
+    print(f"── {heading} ──\n")
+    return heading
+
+
+def _to_clipboard(text: str, what: str) -> str:
+    """`text` on the clipboard, which the window carries to Windows' own and the machine to
+    its face's (`raigolmid/clipboard.py`); what to tell the user."""
+    # wl-copy leaves a child serving the clipboard, holding whatever it was given: a pipe would
+    # be waited on until something else is copied, so its complaints go to a file.
+    with tempfile.TemporaryFile(mode="w+") as errors:
+        try:
+            subprocess.run(["wl-copy", "--", text], check=True, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=errors)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            errors.seek(0)
+            reason = errors.read().strip() or str(exc)
+            return f"{what} could not be put on your clipboard ({reason}): it is {text}"
+    return f"{what} is on your clipboard"
+
+
+# The address Claude Code shows for its sign-in. It is drawn as an OSC 8 hyperlink, whose
+# target ends at an escape or a BEL rather than at whitespace.
+SIGN_IN_ADDRESS = re.compile(r"https://[^\s\x00-\x1f\x7f]+/oauth/authorize[^\s\x00-\x1f\x7f]*")
+SECRET = re.compile(rb"sk-ant-[A-Za-z0-9_-]+")
+SECRET_REST = re.compile(rb"[A-Za-z0-9_-]+")
+SCREEN_ESCAPE = re.compile(r"\x1b\[([0-?]*)[ -/]*([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b.")
+
+
+def _drawn(stream: str, columns: int, lines: int) -> str:
+    """The screen a stream leaves on a terminal `columns` by `lines`, as its rows of text.
+
+    Claude Code draws by moving the cursor: over a space it already drew, down to a line it
+    keeps, back up to redraw a frame. Read as plain text that run glues one line onto the
+    next, so it is played onto a grid, as the terminal does, and the grid is what was shown.
+    Only what moves the cursor or writes a cell is followed; colours and links are skipped."""
+    grid = [[" "] * columns for _ in range(lines)]
+    row = col = 0
+
+    def scroll() -> None:
+        grid.pop(0)
+        grid.append([" "] * columns)
+
+    at = 0
+    for found in SCREEN_ESCAPE.finditer(stream + "\x1b["):
+        for char in stream[at:found.start()]:
+            if char == "\r":
+                col = 0
+            elif char == "\n":
+                if row == lines - 1:
+                    scroll()
+                else:
+                    row += 1
+            elif char == "\b":
+                col = max(col - 1, 0)
+            elif char >= " ":
+                if col == columns:
+                    col = 0
+                    if row == lines - 1:
+                        scroll()
+                    else:
+                        row += 1
+                grid[row][col] = char
+                col += 1
+        at = found.end()
+        params, final = found.group(1), found.group(2)
+        if final is None:
+            continue
+        numbers = [int(n) if n.isdigit() else 0 for n in params.split(";")]
+        n = max(numbers[0], 1)
+        if final == "A":
+            row = max(row - n, 0)
+        elif final == "B":
+            row = min(row + n, lines - 1)
+        elif final == "C":
+            col = min(col + n, columns - 1)
+        elif final == "D":
+            col = max(col - n, 0)
+        elif final == "G":
+            col = min(n, columns) - 1
+        elif final in "Hf":
+            row = min(n, lines) - 1
+            col = min(max(numbers[1], 1) if len(numbers) > 1 else 1, columns) - 1
+        elif final == "K":
+            start, end = {0: (col, columns), 1: (0, col + 1), 2: (0, columns)}.get(
+                numbers[0], (col, columns))
+            grid[row][start:end] = [" "] * (end - start)
+        elif final == "J":
+            if numbers[0] in (2, 3):
+                grid = [[" "] * columns for _ in range(lines)]
+            elif numbers[0] == 0:
+                grid[row][col:] = [" "] * (columns - col)
+                for below in range(row + 1, lines):
+                    grid[below] = [" "] * columns
+    return "\n".join("".join(cells).rstrip() for cells in grid)
+
+
+class _Masked:
+    """A stream with every Anthropic secret in it drawn as dots, the way `rai.prompt` draws
+    a pasted one, however the reads split it: each read is matched together with the bytes
+    before it, and one that ended inside a secret dots the rest of it at the next's start."""
+
+    def __init__(self) -> None:
+        self.before = b""
+        self.inside = False
+
+    def __call__(self, data: bytes) -> bytes:
+        from rai.prompt import MASK
+
+        dot = MASK.encode()
+        out = []
+        start = 0
+        if self.inside:
+            rest = SECRET_REST.match(data)
+            start = rest.end() if rest else 0
+            out.append(dot * start)
+            self.inside = start == len(data)
+        joined = self.before + data
+        for found in SECRET.finditer(joined):
+            begin = max(found.start() - len(self.before), start)
+            end = found.end() - len(self.before)
+            if end <= begin:
+                continue
+            out.append(data[start:begin])
+            out.append(dot * (end - begin))
+            start = end
+            self.inside = found.end() == len(joined)
+        out.append(data[start:])
+        self.before = joined[-len(b"sk-ant-"):]
+        return b"".join(out)
+
+
+# A read that ends inside an escape sequence, where nothing may be written between its parts.
+MID_ESCAPE = re.compile(rb"\x1b(?:\[[0-?]*[ -/]*)?$|\x1b\][^\x07\x1b]*\x1b?$")
+
+
+class _Bar:
+    """The top rows of the pane, held for the step's heading and what to do now while another
+    program draws below them: a scroll region keeps its output under the bar, and the program
+    is told the pane is that much shorter, so neither can scroll the other away."""
+
+    def __init__(self, heading: str, longest: list[str]) -> None:
+        size = shutil.get_terminal_size()
+        self.heading = heading
+        self.columns, self.lines = size.columns, size.lines
+        self.text_rows = max(-(-len(text) // self.columns) for text in longest)
+        self.rows = 1 + self.text_rows + 1
+        self.below = self.lines - self.rows
+        self.text = ""
+
+    def open(self, text: str) -> bytes:
+        return (f"\033[{self.rows + 1};{self.lines}r\033[{self.lines};1H".encode()
+                + self.draw(text))
+
+    def draw(self, text: str | None = None) -> bytes:
+        """The bar drawn again, with `text` from now on, the cursor left where it was."""
+        if text is not None:
+            self.text = text
+        room = self.text_rows * self.columns - 1
+        shown = self.text if len(self.text) <= room else self.text[:room - 1] + "…"
+        rows = "".join(f"\033[{row};1H\033[2K" for row in range(1, self.rows + 1))
+        return (f"\0337{rows}\033[1;1H\033[1m{self.heading[:self.columns]}\033[0m"
+                f"\033[2;1H\033[1;7m{shown.ljust(room)}\033[0m\0338").encode()
+
+    def close(self) -> bytes:
+        return f"\033[r\033[{self.lines};1H\r\n".encode()
+
+
+def _claude_sign_in(argv: list[str], home: str, command: str, heading: str) -> tuple[int, str]:
+    """Claude Code's own sign-in (`claude <argv>`) in a scratch agent container whose home is
+    `home`: it shows an address to open in any browser, which is put on the clipboard, and
+    takes the code the page gives back. It runs in a terminal this process owns, the pane's
+    width and the height under `heading`'s bar (`_Bar`), which says what to do at each point
+    because Claude Code's banner pushes the step's own explanation off the screen. The Enter
+    that sends the code is answered at once in the bar: claude.ai takes seconds to accept it
+    and Claude Code says nothing until it has. Ctrl+C ends it by removing its container, since
+    `setup-token` ignores the key. Returns its exit code and the screen it left (`_drawn`)."""
+    from raigolmid import hostimages
+    from raigolmid.runtime.docker_runtime import DockerRuntime
+
+    runtime = DockerRuntime()
+    try:
+        image = hostimages.ensure(runtime, hostimages.agent())
+    except hostimages.HostImageError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return 1, ""
+    finally:
+        runtime.close()
+    name = f"rai-sign-in-{os.getpid()}"
+    waiting = "▶  Claude Code is starting. Its sign-in address goes on your clipboard when it shows below."
+    copied = ("▶  The address is on your clipboard. Paste it into your browser and sign in, then "
+              "copy the code the page shows, right-click here to paste it, and press Enter.")
+    checking = "▶  Checking the code with claude.ai..."
+    refused = "▶  That code was not accepted. Press Enter to try again: the address goes back on your clipboard."
+    bar = _Bar(heading, [waiting, copied, checking, refused])
+    typed = [False]
+    said = [""]
+    shown = [""]
+    retries = [0]
+    pending = [False]
+    masked = _Masked()
+
+    def screen(fd: int) -> bytes:
+        data = os.read(fd, 4096)
+        said[0] += data.decode("utf-8", errors="replace")
+        text = None
+        # A refused code is retried by Enter on the same address (`keys`); a new address is
+        # put on the clipboard in turn.
+        refusals = SCREEN_ESCAPE.sub("", said[0]).count("Enter to retry")
+        if refusals != retries[0]:
+            retries[0] = refusals
+            text = refused
+        found = SIGN_IN_ADDRESS.findall(said[0])
+        if found and found[-1] != shown[0]:
+            shown[0] = found[-1]
+            told = _to_clipboard(found[-1], "The address")
+            text = copied if told == "The address is on your clipboard" else f"▶  {told}"
+        data = masked(data)
+        # Redrawn after whatever Claude Code drew, which may have cleared the screen.
+        if MID_ESCAPE.search(data):
+            if text is not None:
+                bar.text = text
+            pending[0] = True
+            return data
+        pending[0] = False
+        return data + bar.draw(text)
+
+    def keys(fd: int) -> bytes:
+        data = os.read(fd, 1024)
+        if b"\x03" in data:
+            ended = subprocess.run(["docker", "rm", "-f", name], stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True)
+            if ended.returncode != 0:
+                os.write(sys.stdout.fileno(), bar.draw(
+                    f"▶  {command}: docker rm -f {name}: {ended.stderr.strip()}"))
+        for byte in data:
+            if byte in b"\r\n":
+                if bar.text == refused and not typed[0]:
+                    # The clipboard holds the refused code by now, not the address.
+                    told = _to_clipboard(shown[0], "The address")
+                    os.write(sys.stdout.fileno(), bar.draw(
+                        copied if told == "The address is on your clipboard" else f"▶  {told}"))
+                elif typed[0] and not pending[0]:
+                    os.write(sys.stdout.fileno(), bar.draw(checking))
+                typed[0] = False
+            else:
+                typed[0] = True
+        return data
+
+    sys.stdout.flush()
+    os.write(sys.stdout.fileno(), bar.open(waiting))
+    try:
+        code = os.waitstatus_to_exitcode(pty.spawn(
+            ["sh", "-c", 'stty cols "$1" rows "$2" && shift 2 && exec "$@"', "sh",
+             str(bar.columns), str(bar.below),
+             "docker", "run", "--rm", "-it", "--name", name, "--user",
+             f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/login", "-v", f"{home}:/login",
+             "--entrypoint", "claude", image, *argv], master_read=screen, stdin_read=keys))
+    finally:
+        os.write(sys.stdout.fileno(), bar.close())
+    return code, _drawn(said[0], bar.columns, bar.below)
+
+
+def _claude_refuses(key: str, value: str, beside: Path) -> str | None:
+    """Why Claude Code cannot work on credential `key=value`, or None when it can: one
+    prompt in a scratch agent container, answered only with that credential."""
+    from raigolmid import hostimages
+    from raigolmid.runtime.docker_runtime import DockerRuntime
+
+    runtime = DockerRuntime()
+    try:
+        image = hostimages.ensure(runtime, hostimages.agent())
+    except hostimages.HostImageError as exc:
+        return str(exc)
+    finally:
+        runtime.close()
+    with tempfile.TemporaryDirectory(dir=beside, prefix=".token-check-") as scratch:
+        env = Path(scratch) / "env"
+        fd = os.open(env, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(f"{key}={value}\n")
+        home = Path(scratch) / "home"
+        home.mkdir()
+        try:
+            answer = subprocess.run(
+                ["docker", "run", "--rm", "--env-file", str(env), "--user",
+                 f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/h", "-v", f"{home}:/h",
+                 "--entrypoint", "claude", image, "-p", "Reply with the single word: ok"],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            return "Claude Code did not answer within 90 s"
+    said = (answer.stdout + answer.stderr).strip()
+    if answer.returncode == 0 and re.sub(r"[^a-z]", "", said.lower()) == "ok":
+        return None
+    return said.splitlines()[-1] if said else f"claude exited {answer.returncode}"
+
+
 def cmd_credential(args) -> int:
     """The one secret this machine keeps. A new user meets this in the AI terminal,
     which opens on it when no credential is set — there is nobody else to ask, and a machine
-    whose agents cannot start should say so where the user already is."""
+    whose agents cannot start should say so where the user already is. The token is made
+    here by Claude Code's `claude setup-token`, so a browser is all it asks for; an API key
+    is pasted."""
     from raigolmid import credential
     from rai.prompt import masked
 
@@ -619,23 +955,54 @@ def cmd_credential(args) -> int:
         print(f"{key} is set in {path}")
         return 0
 
-    key = "ANTHROPIC_API_KEY" if args.api_key else "CLAUDE_CODE_OAUTH_TOKEN"
-    print("RaiGolmi runs every agent on one Claude Code credential.\n"
-          "On any machine signed in to Claude, run `claude setup-token` and paste the token\n"
-          "here with a right-click. It is stored on this machine only, in {path},\n"
-          "readable by you alone, and it is masked as you type it.\n"
-          .format(path=path))
-    # ⚠ Flushed first: the question is written straight to the terminal, so anything still
-    # sitting in stdout's buffer would arrive after the question it was meant to explain.
-    sys.stdout.flush()
-    # Masked rather than unechoed: a credential does not belong in the scrollback of a window
-    # the user reopens all day, and a prompt that showed *nothing* could not tell a paste that
-    # worked from one that never happened (`rai/prompt.py`).
-    try:
-        value = masked(f"{key}: ")
-    except (EOFError, KeyboardInterrupt):
-        print("\nnothing stored; run `rai credential --set` when you have a token")
-        return 1
+    if args.api_key:
+        key = "ANTHROPIC_API_KEY"
+        _step(args.step, "your Anthropic API key", "rai credential --set --api-key")
+        print(f"Paste your API key with a right-click. It is kept on this machine only, in "
+              f"{path},\nreadable by you alone, and masked as you paste it.\n")
+        # ⚠ Flushed first: the question is written straight to the terminal, so anything still
+        # sitting in stdout's buffer would arrive after the question it was meant to explain.
+        sys.stdout.flush()
+        # Masked rather than unechoed: a credential does not belong in the scrollback of a
+        # window the user reopens all day, and a prompt that showed *nothing* could not tell
+        # a paste that worked from one that never happened (`rai/prompt.py`).
+        try:
+            value = masked(f"{key}: ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nnothing stored; run `rai credential --set --api-key` when you have a key")
+            return 1
+    else:
+        key = "CLAUDE_CODE_OAUTH_TOKEN"
+        heading = _step(args.step, "your Claude Code token", "rai credential --set")
+        print("Every agent here is Claude Code, running on one token from your Claude plan, "
+              "which\nClaude Code makes now. Its address is put on your clipboard in a moment: "
+              "paste it\ninto your browser, sign in, copy the code the page shows, and "
+              "right-click here to\npaste it. The token is kept on this machine only, in "
+              f"{path},\nreadable by you alone, and dotted out where it is shown.\n")
+        sys.stdout.flush()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=path.parent, prefix=".setup-token-") as home:
+            code, drawn = _claude_sign_in(["setup-token"], home, "rai credential", heading)
+        if code != 0:
+            print(f"rai credential: claude setup-token exited {code}; nothing stored, run "
+                  "`rai credential --set` to try again", file=sys.stderr)
+            return 1
+        tokens = set(re.findall(r"sk-ant-[A-Za-z0-9_-]+", drawn))
+        if len(tokens) != 1:
+            print(f"rai credential: claude setup-token finished but drew "
+                  f"{len(tokens)} tokens where one was meant; nothing stored, run "
+                  "`rai credential --set` to try again", file=sys.stderr)
+            return 1
+        value = tokens.pop()
+        # Read off the screen, so proven before it is kept: a token cut by a terminal
+        # narrower than it, or joined to what was drawn beside it, is refused here, not by
+        # every agent after.
+        print("Checking the token with Claude Code...", flush=True)
+        refused = _claude_refuses(key, value, path.parent)
+        if refused:
+            print(f"rai credential: the token read off the screen was refused ({refused}); "
+                  "nothing stored, run `rai credential --set` to try again", file=sys.stderr)
+            return 1
     try:
         credential.write(path, key, value)
     except credential.CredentialError as exc:
@@ -647,8 +1014,7 @@ def cmd_credential(args) -> int:
 
 def cmd_claude_login(args) -> int:
     """The claude.ai sign-in Remote Control needs (`raigolmid/claude_login.py`), by Claude
-    Code's own `claude auth login` in a scratch agent container: it shows an address to open in
-    any browser and takes the code the page gives back. Its home is a directory made here,
+    Code's own `claude auth login` (`_claude_sign_in`). Its home is a directory made here,
     beside where the sign-in is kept, and removed once the sign-in is read out of it."""
     from raigolmid import claude_login
 
@@ -661,34 +1027,17 @@ def cmd_claude_login(args) -> int:
             return 1
         print(f"a claude.ai sign-in is set in {path}")
         return 0
-    print("Every tab reaches your phone through Claude Code's Remote Control, which needs\n"
-          "your claude.ai sign-in. Open the address below in any browser, sign in, and\n"
-          "paste the code it shows here. Ctrl+C skips this for now; `rai claude-login\n"
-          "--login` asks again.\n")
+    heading = _step(args.step, "your claude.ai sign-in", "rai claude-login --login")
+    print("Every tab can be followed and answered from the Claude app on your phone, which\n"
+          "needs your claude.ai sign-in. Its address is put on your clipboard in a moment:\n"
+          "paste it into your browser, sign in, copy the code the page shows, and right-click\n"
+          "here to paste it. Ctrl+C skips this for now; `rai claude-login --login` asks again.\n")
     sys.stdout.flush()
-    from raigolmid import hostimages
-    from raigolmid.runtime.docker_runtime import DockerRuntime
-
-    runtime = DockerRuntime()
-    try:
-        image = hostimages.ensure(runtime, hostimages.agent())
-    except hostimages.HostImageError as exc:
-        print(f"rai claude-login: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        runtime.close()
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=path.parent, prefix=".claude-login-") as home:
-        try:
-            result = subprocess.run(
-                ["docker", "run", "--rm", "-it", "--user", f"{os.getuid()}:{os.getgid()}",
-                 "-e", "HOME=/login", "-v", f"{home}:/login", "--entrypoint", "claude",
-                 image, "auth", "login"])
-        except KeyboardInterrupt:
-            print("\nnot signed in")
-            return 1
-        if result.returncode != 0:
-            print(f"rai claude-login: claude auth login exited {result.returncode}; nothing "
+        code, _ = _claude_sign_in(["auth", "login"], home, "rai claude-login", heading)
+        if code != 0:
+            print(f"rai claude-login: claude auth login exited {code}; not signed in, nothing "
                   "stored", file=sys.stderr)
             return 1
         try:
@@ -702,12 +1051,22 @@ def cmd_claude_login(args) -> int:
     return 0
 
 
+GH_NOISE = ("! Failed to copy one-time code to clipboard", "No clipboard utilities available",
+            "- gh config set -h github.com git_protocol", "✓ Configured git protocol",
+            "! Authentication credentials saved in plain text",
+            "Open this URL to continue in your web browser")
+GH_TOKEN_LINE = "rai-registry-token "
+# gh's one-time code, which goes to the clipboard; its address is said with it.
+GH_CODE = re.compile(r"one-time code: (\S+)")
+
+
 def cmd_registry_token(args) -> int:
     """The GitHub account a catalog upload opens its pull request from, signed in the
     way `gh auth login` signs in: a one-time code shown here and entered at github.com in any
     browser, since the machine has none of its own. gh runs with no terminal, so it asks
-    nothing and prints only the code and the address; its config lives and dies with its
-    container, and the token it was given is kept once, in `Paths.registry_token`."""
+    nothing; its lines pass through here as it prints them, less `GH_NOISE`. Its config lives
+    and dies with its container, and the token it was given is kept once, in
+    `Paths.registry_token`."""
     from raigolmid import credential
 
     path = Paths.from_env().registry_token
@@ -719,9 +1078,11 @@ def cmd_registry_token(args) -> int:
             return 1
         print(f"a GitHub sign-in is set in {path}")
         return 0
-    print("Catalog uploads are pull requests from your GitHub account. Sign in: open the\n"
-          "address below in any browser and enter the code. Ctrl+C skips this for now;\n"
-          "`rai registry-token --login` asks again.\n")
+    _step(args.step, "your GitHub sign-in", "rai registry-token --login")
+    print("Agents push to your repositories, and the catalog shares what you make, through\n"
+          "your GitHub account. A one-time code is put on your clipboard in a moment: open\n"
+          "https://github.com/login/device in your browser, paste it, and approve.\n"
+          "Ctrl+C skips this for now; `rai registry-token --login` asks again.\n")
     sys.stdout.flush()
     from raigolmid import hostimages
     from raigolmid.runtime.docker_runtime import DockerRuntime
@@ -735,25 +1096,36 @@ def cmd_registry_token(args) -> int:
     finally:
         runtime.close()
     try:
-        result = subprocess.run(
+        gh = subprocess.Popen(
             # Ctrl+C must end gh, or the container waits on for a code nobody will enter: a
             # shell as pid 1 ignores the signal docker forwards, and `--init` (tini) passes it
             # only to the shell, which waits for gh, unless told to signal the whole group.
             ["docker", "run", "--rm", "--init", "-e", "TINI_KILL_PROCESS_GROUP=1",
              "--tmpfs", "/tmp", "-e", "GH_CONFIG_DIR=/tmp/gh",
              "-e", "HOME=/tmp", image, "sh", "-c",
-             "gh auth login --hostname github.com --git-protocol https --web </dev/null >&2 "
-             "&& gh auth token"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+             "gh auth login --hostname github.com --git-protocol https --web </dev/null 2>&1 "
+             f"&& echo {GH_TOKEN_LINE}$(gh auth token)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True)
+        token = ""
+        for line in gh.stdout:
+            if line.startswith(GH_TOKEN_LINE):
+                token = line.removeprefix(GH_TOKEN_LINE).strip()
+            elif code := GH_CODE.search(line):
+                print(f"{_to_clipboard(code[1], f'The code {code[1]}')}: paste it at "
+                      "https://github.com/login/device.", flush=True)
+            elif not line.strip().startswith(GH_NOISE):
+                print(line, end="", flush=True)
+        returncode = gh.wait()
     except KeyboardInterrupt:
         print("\nnot signed in")
         return 1
-    if result.returncode != 0:
-        print(f"rai registry-token: gh exited {result.returncode}; nothing stored",
+    if returncode != 0 or not token:
+        print(f"rai registry-token: gh exited {returncode}; nothing stored",
               file=sys.stderr)
         return 1
     try:
-        credential.write(path, "GITHUB_TOKEN", result.stdout.strip(), credential.REGISTRY_KEYS)
+        credential.write(path, "GITHUB_TOKEN", token, credential.REGISTRY_KEYS)
     except credential.CredentialError as exc:
         print(f"rai registry-token: {exc}", file=sys.stderr)
         return 1
@@ -1062,15 +1434,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--set", action="store_true", help="ask for a token and store it")
     p.add_argument("--api-key", action="store_true",
                    help="store an Anthropic Console API key instead of a Claude Code token")
+    p.add_argument("--step", help="which of the first start's sign-ins this is, as `1/3`")
     p.set_defaults(fn=cmd_credential)
 
     p = sub.add_parser("registry-token", help="the GitHub sign-in a catalog upload uses")
     p.add_argument("--login", action="store_true", help="sign in to GitHub with a one-time code")
+    p.add_argument("--step", help="which of the first start's sign-ins this is, as `2/3`")
     p.set_defaults(fn=cmd_registry_token)
 
     p = sub.add_parser("claude-login",
                        help="the claude.ai sign-in every tab's Remote Control uses")
     p.add_argument("--login", action="store_true", help="sign in to claude.ai")
+    p.add_argument("--step", help="which of the first start's sign-ins this is, as `3/3`")
     p.set_defaults(fn=cmd_claude_login)
 
     p = sub.add_parser("agent-activity",

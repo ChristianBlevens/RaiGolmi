@@ -156,6 +156,7 @@ def _talking(session: Session, questions: Questions, channels: Channels,
         "toolbelt_swap": swap,
         "channel_take": lambda: channels.take(tab_id),
         "channel_state": lambda: channels.state(tab_id),
+        "midturn": lambda: channels.take_midturn(tab_id),
         "agent_activity": activity,
         "agent_session_started": lambda: session.agent_session_started(tab_id),
     }
@@ -181,7 +182,6 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
         "job_wait": lambda name, timeout=jobs.WAIT_MOST: session.jobs.wait(tab_id, name,
                                                                            timeout),
         "jobs": lambda: session.jobs.list(tab_id),
-        "midturn": lambda: channels.take_midturn(tab_id),
         "rebuild_body": lambda: session.rebuild_body(
             here(), why=f"{tab_id}'s request").to_dict(),
         "restart_body": lambda: session.restart_body(here()),
@@ -193,6 +193,8 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
             session.face_input(tab_id, action, text, x, y, button, trial),
         "try_face": lambda face: session.try_face(tab_id, face),
         "stop_trial": lambda: session.stop_trial(tab_id),
+        "face_windows": lambda: session.face_windows(tab_id),
+        "restart_face": lambda: session.restart_face(tab_id),
         "seed_face_settings": lambda face, source: session.seed_face_settings(
             tab_id, face, source),
         "history": lambda n=50: session.history(here(), n),
