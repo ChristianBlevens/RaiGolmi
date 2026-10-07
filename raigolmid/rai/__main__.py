@@ -807,7 +807,8 @@ class _Bar:
         return f"\033[r\033[{self.lines};1H\r\n".encode()
 
 
-def _claude_sign_in(argv: list[str], home: str, command: str, heading: str) -> tuple[int, str]:
+def _claude_sign_in(argv: list[str], home: str, command: str, heading: str,
+                    echo: bool) -> tuple[int, str]:
     """Claude Code's own sign-in (`claude <argv>`) in a scratch agent container whose home is
     `home`: it shows an address to open in any browser, which is put on the clipboard, and
     takes the code the page gives back. It runs in a terminal this process owns, the pane's
@@ -815,7 +816,9 @@ def _claude_sign_in(argv: list[str], home: str, command: str, heading: str) -> t
     because Claude Code's banner pushes the step's own explanation off the screen. The Enter
     that sends the code is answered at once in the bar: claude.ai takes seconds to accept it
     and Claude Code says nothing until it has. Ctrl+C ends it by removing its container, since
-    `setup-token` ignores the key. Returns its exit code and the screen it left (`_drawn`)."""
+    `setup-token` ignores the key. `echo` draws what is typed or pasted, for a prompt that
+    reads with echo off and draws nothing (`auth login`'s). Returns its exit code and the
+    screen it left (`_drawn`)."""
     from raigolmid import hostimages
     from raigolmid.runtime.docker_runtime import DockerRuntime
 
@@ -839,6 +842,7 @@ def _claude_sign_in(argv: list[str], home: str, command: str, heading: str) -> t
     shown = [""]
     retries = [0]
     pending = [False]
+    echoed = [0]
     masked = _Masked()
 
     def screen(fd: int) -> bytes:
@@ -874,7 +878,18 @@ def _claude_sign_in(argv: list[str], home: str, command: str, heading: str) -> t
             if ended.returncode != 0:
                 os.write(sys.stdout.fileno(), bar.draw(
                     f"▶  {command}: docker rm -f {name}: {ended.stderr.strip()}"))
+        drawn = bytearray()
         for byte in data:
+            if echo:
+                if byte in b"\r\n":
+                    drawn += b"\r\n"
+                    echoed[0] = 0
+                elif byte == 0x7f and echoed[0]:
+                    drawn += b"\b \b"
+                    echoed[0] -= 1
+                elif byte >= 0x20 and byte != 0x7f:
+                    drawn.append(byte)
+                    echoed[0] += 1
             if byte in b"\r\n":
                 if bar.text == refused and not typed[0]:
                     # The clipboard holds the refused code by now, not the address.
@@ -886,6 +901,8 @@ def _claude_sign_in(argv: list[str], home: str, command: str, heading: str) -> t
                 typed[0] = False
             else:
                 typed[0] = True
+        if drawn:
+            os.write(sys.stdout.fileno(), bytes(drawn))
         return data
 
     sys.stdout.flush()
@@ -982,7 +999,8 @@ def cmd_credential(args) -> int:
         sys.stdout.flush()
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=path.parent, prefix=".setup-token-") as home:
-            code, drawn = _claude_sign_in(["setup-token"], home, "rai credential", heading)
+            code, drawn = _claude_sign_in(["setup-token"], home, "rai credential", heading,
+                                           echo=False)
         if code != 0:
             print(f"rai credential: claude setup-token exited {code}; nothing stored, run "
                   "`rai credential --set` to try again", file=sys.stderr)
@@ -1035,7 +1053,8 @@ def cmd_claude_login(args) -> int:
     sys.stdout.flush()
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=path.parent, prefix=".claude-login-") as home:
-        code, _ = _claude_sign_in(["auth", "login"], home, "rai claude-login", heading)
+        code, _ = _claude_sign_in(["auth", "login"], home, "rai claude-login", heading,
+                                  echo=True)
         if code != 0:
             print(f"rai claude-login: claude auth login exited {code}; not signed in, nothing "
                   "stored", file=sys.stderr)
