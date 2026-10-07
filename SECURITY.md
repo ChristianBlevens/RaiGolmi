@@ -25,6 +25,6 @@ on its own.
 
 ## How to report one
 
-There's no private channel. Open an ordinary issue with what you did, what happened, and the
-release you run (`%LOCALAPPDATA%\RaiGolmi\release.txt`) or the commit you built from. A fix
-may or may not come from here; a fork or a pull request that fixes it is just as welcome.
+Report it privately from the repository's **Security** tab (*Report a vulnerability*), with
+what you did, what happened, and the release you run (`%LOCALAPPDATA%\RaiGolmi\release.txt`)
+or the commit you built from. A fix may or may not come from here; a fork or a pull request that fixes it is just as welcome.
