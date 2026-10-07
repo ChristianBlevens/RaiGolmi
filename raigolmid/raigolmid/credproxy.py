@@ -514,8 +514,10 @@ def is_off_limits(address: str) -> bool:
     ip = ipaddress.ip_address(address.split("%")[0])
     # `::ffff:10.0.2.2` connects to 10.0.2.2.
     ip = getattr(ip, "ipv4_mapped", None) or ip
+    # A kernel with IPv6 disabled has no `ipv6_route`, and so no IPv6 route.
+    ipv6_route = Path("/proc/net/ipv6_route")
     networks = uplink_networks(Path("/proc/net/route").read_text(),
-                               Path("/proc/net/ipv6_route").read_text())
+                               ipv6_route.read_text() if ipv6_route.exists() else "")
     if any(ip in network for network in networks if network.version == ip.version):
         return True
     return is_this_machine(address)
