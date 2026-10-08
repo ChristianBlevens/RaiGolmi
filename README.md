@@ -1,36 +1,30 @@
-<!-- purpose: the public face: what RaiGolmi is and how a user installs, starts and uses it, casual reader first, then the narrated uses, then the reference
+<!-- purpose: the public face: what RaiGolmi is and how a user installs, starts and uses it. Lead use first (AI agents developing your projects, attended or on their own), then the desktop as the second use, then the reference
 not-here: design, settled calls, development state and measurements (development notes, kept outside the repository)
 shape: bounded
-audited: 25171 2026-10-05
+audited: 33030 2026-10-08
 -->
 # RaiGolmi
 
-RaiGolmi is a Linux distro that comes with nothing. There's no desktop, no apps, no editor,
-no theme, nobody's opinion about how your computer should look. What it does have is an AI
-agent that can build all of that for you, and change it whenever you want, down to anything
-you can describe.
+RaiGolmi is a whole machine for AI agents to develop your projects on, with you or on their
+own for hours. Each project gets an agent, a sandbox that runs it exactly as it deploys, the
+tools to work on it, and, once you have a desktop, a real screen to test it on. You can hand
+the agents your projects, tell them where to stop and for how long, and go to bed.
 
-You can use it as a completely personal desktop that you shape by asking for things. You can
-use it as a place where AI agents work on your code with you, with their own sandboxes, tools
-and procedures. Or you can hand the agents a goal, tell them when to stop, and leave them
-working on their own. Whatever the agents change, a small core underneath stays put, so
-there's always a way back.
+Agents get further when they have a place to work rather than a chat window that can only
+suggest what you should go and do. RaiGolmi gives them a machine where they can run anything,
+see and click through what they built, and recover when something breaks. The decisions you
+keep for yourself wait for you, the ones they make are written down so you can overturn them,
+and a small core underneath stays put whatever they change.
 
-Using it doesn't take knowing any of that. It opens in one window, asks you to sign in to
-Claude and GitHub, and from then on you talk to it. The rest is there for the agents: a whole
-machine of their own, with sandboxes, tools, documents that carry a project from one session
-to the next, and room to run for hours. That's what gets the most out of an AI, rather than a
-chat window that can only suggest what you should go and do.
-
-![A desktop built in RaiGolmi: a day page that keeps what you write, with verbs that open a
-browser, an editor, notes, files, a shell or Claude](.github/screenshot.png)
-
-*One desktop someone built from nothing by asking for it, from the catalog. The small tabs at
-the edges are RaiGolmi's own: the selector, the AI terminal and the history.*
+<!-- A screenshot of an orchestration run belongs here: the AI terminal with managed (◇) tabs,
+the history, or a run report. -->
 
 On Windows it's a normal app window: setup installs everything it needs, and you never have to
 manage the VM the whole OS runs in. That VM is why the agents can be given everything: nothing
 outside it is at risk. It can also go on its own drive and boot on a real PC.
+
+Underneath, it's a Linux distro that comes with nothing, so the same agents can also build you
+a desktop of your own from scratch, if you want one.
 
 It's a personal project, shared as it is. It works well on the PC it was built on, and it
 hasn't met many others yet, so if something goes wrong, see
@@ -98,11 +92,11 @@ Press Ctrl+C to skip either sign-in. They'll be offered again later.
 The screen has three edges with a small tab on each. Put your mouse on a tab and it slides
 open, and move away to close it.
 
-- **Left, the selector.** Pick which desktop (a *face*) you're in and which project (a
-  *body*: your project, set up to build and run exactly as it would deploy) you're working
-  on. The catalog opens from here too.
 - **Bottom, the AI terminal.** This is where the agents are, one tab each. You'll spend most
-  of your time talking to the one called **machine**.
+  of your time here, starting with the tab called **machine**.
+- **Left, the selector.** Pick which project (a *body*: your project, set up to build and run
+  exactly as it would deploy) you're working on, and which desktop (a *face*) you're in. The
+  catalog opens from here too.
 - **Top, the history.** Everything the agents and the machine have done.
 
 Tap **Super** to open the selector, or press **Super + `** for the terminal.
@@ -111,10 +105,76 @@ That's it. From here you just ask for what you want.
 
 ## Some ways to use it
 
+### Working on a project with an agent
+
+You've got a Python API on GitHub you've been meaning to speed up. You give the machine tab
+its link and say you want to work on it. It clones it into a new body, which builds and runs
+the project the same way it would deploy, and makes a *toolbelt*, the tools the agent and your
+editor work on it with: here, Python and a language server. A brand new project works the same
+way: describe it, and it starts one.
+
+A new tab opens for the body in the terminal, already on the project. You tell that tab the
+search endpoint is slow. It opens a sandbox, runs the project and its tests, finds the slow
+query, fixes it, and opens the page in your desktop's browser so you can see it working. Then
+it commits to the project's git repo as itself. You read the commit and merge it if you like
+it.
+
+Each project gets one tab, which keeps knowing that project well; Claude Code's own subagents
+can split up the work inside it when that helps. If you've got three projects going, each one
+gets its own tab, and they can all work at the same time.
+
+### Letting it run on its own
+
+It's late, and you've got a couple of projects with work left on them. You tell the machine
+tab: *"Orchestrate the notes-api and myapi work. Stop if the API design needs my call, and
+stop after 4 hours."* Then you go to bed.
+
+The machine tab takes over both tabs, and they get a ◇ in the terminal. When they have
+questions, they ask the machine tab instead of you. It decides everything you didn't keep
+for yourself, and writes each decision down so you can overturn it. When a tab's
+conversation gets too long, its work is handed to a new tab that starts from its
+`SESSION-START.md`. If the usage limit cuts one off, it resumes once the limit resets. If
+something breaks along the way, the janitor fixes it (see below).
+
+At 2am the notes-api tab hits the design question you said was yours. It stops and waits
+for you, and since every tab is a Remote Control session (Claude's way of carrying on a
+session from the Claude app), if you're up you can answer it from your phone. Otherwise
+it's there in the morning. At the 4-hour mark the rest wrap up, and the machine
+tab writes its report on the run. You read it in the catalog, under Documents, Runs.
+
+### Testing on a real screen
+
+Agents don't stop at passing tests. Once you have a desktop (a *face*: download one from the
+catalog, or ask the machine tab for one), a body's tab can open its project's page in that
+desktop's browser, take screenshots to see what you'd see, and, once you've stepped away from
+the keyboard, click and type through it the way you would, one tab at a time. Before
+showing you a desktop it built, the machine tab tries it off your screen first.
+
+If you'd rather they kept their hands off, turn on **Don't drive my current face** at the top
+of the selector. They can still take screenshots.
+
+### When something breaks
+
+A container keeps dying, a tab gets stuck, or your editor window crashes. You don't have to do
+anything. A **⚙** tab shows up at the bottom. This is the janitor. It reads the logs and the
+machine's state, works out what went wrong, fixes it, and tells you in its tab what it found
+and what it did.
+
+If the fix involves a choice about how you use the machine, it asks you first. It keeps
+notes on every failure and what fixed it, so the next time the same thing happens on your
+machine it already knows.
+
 ### Your own desktop, from scratch
 
-You don't have to be a developer for any of this. RaiGolmi works fine as a desktop you build
-up yourself.
+RaiGolmi comes with no desktop, no apps, no editor and no theme, so the desktop you work in
+is yours to describe, and you don't have to be a developer to do it. It works fine as a
+personal desktop you build up by asking.
+
+![A desktop built in RaiGolmi: a day page that keeps what you write, with verbs that open a
+browser, an editor, notes, files, a shell or Claude](.github/screenshot.png)
+
+*One desktop someone built from nothing by asking for it, from the catalog. The small tabs at
+the edges are RaiGolmi's own: the selector, the AI terminal and the history.*
 
 The first time you boot it there's nothing on the screen but the three tabs. You open the
 terminal and tell the machine tab you want a dark tiling desktop with Firefox, a file
@@ -130,52 +190,6 @@ one.
 Each desktop is its own thing, and nothing about it is fixed. It can use any
 wlroots-based compositor (the program that draws your windows: sway, river, labwc and so
 on), any apps in nixpkgs (Nix's huge package collection), set up however you like.
-
-### Working on a project with an agent
-
-You've got a Python API on GitHub you've been meaning to speed up. You give the machine tab
-its link and say you want to work on it. It clones it into a new body, which builds and runs
-the project the same way it would deploy, and makes a *toolbelt*, the tools the agent and your
-editor work on it with: here, Python and a language server. A brand new project works the same
-way: describe it, and it starts one.
-
-A new tab opens for the body in the terminal, already on the project. You tell that
-tab the search endpoint is slow. It opens a sandbox, runs the project and its tests, finds
-the slow query, fixes it, and opens the page in your desktop's browser so you can see it
-working. Then it commits to the project's git repo as itself. You read the commit and merge
-it if you like it.
-
-If you've got three projects going, each one gets its own tab, and they can all work at the
-same time.
-
-### Letting it run on its own
-
-It's late, and you've got a couple of projects with work left on them. You tell the machine
-tab: *"Orchestrate the notes-api and myapi work. Stop if the API design needs my call, and
-stop after 4 hours."* Then you go to bed.
-
-The machine tab takes over both tabs, and they get a ◇ in the terminal. When they have
-questions, they ask the machine tab instead of you. It decides everything you didn't keep
-for yourself, and writes each decision down so you can overturn it. When a tab's
-conversation gets too long, its work is handed to a new tab that starts from its
-`SESSION-START.md`. If the usage limit cuts one off, it resumes once the limit resets.
-
-At 2am the notes-api tab hits the design question you said was yours. It stops and waits
-for you, and since every tab is a Remote Control session (Claude's way of carrying on a
-session from the Claude app), if you're up you can answer it from your phone. Otherwise
-it's there in the morning. At the 4-hour mark the rest wrap up, and the machine
-tab writes its report on the run. You read it in the catalog, under Documents, Runs.
-
-### When something breaks
-
-You're working, and your desktop's editor window crashes, or a container keeps dying. You
-don't have to do anything. A **⚙** tab shows up at the bottom. This is the janitor. It
-reads the logs and the machine's state, works out what went wrong, fixes it, and tells you
-in its tab what it found and what it did.
-
-If the fix involves a choice about how you use the machine, it asks you first. It keeps
-notes on every failure and what fixed it, so the next time the same thing happens on your
-machine it already knows.
 
 ### Sharing desktops (and everything else)
 
@@ -229,9 +243,9 @@ others.
 
 | Layer | What it is | Its file |
 |---|---|---|
-| **face** | Your whole desktop: a compositor running fullscreen, its apps, and your editor. | `faces/<id>/face.toml` |
-| **toolbelt** | The tools that work on a project, like compilers, language servers, debuggers and a shell, as a list of Nix packages. | `toolbelts/<id>/toolbelt.toml` |
 | **body** | A project, exactly as it would deploy: its own image and its own command, with no dev tools in it. Its working copy is a git repo. | `bodies/<id>/body.toml` |
+| **toolbelt** | The tools that work on a project, like compilers, language servers, debuggers and a shell, as a list of Nix packages. | `toolbelts/<id>/toolbelt.toml` |
+| **face** | Your whole desktop: a compositor running fullscreen, its apps, and your editor. | `faces/<id>/face.toml` |
 
 When an agent needs to run a project it opens a **sandbox**: the body running as it would
 in production, with a toolbelt attached beside it. The toolbelt sees the body's files and
@@ -241,26 +255,8 @@ Under the layers is the **host**: an immutable Fedora image with the daemon (`ra
 the three edges and the AI terminal. Agents can't change it. It's only replaced by an update
 or a build, and the previous one stays in the boot menu until the new one has started.
 
-Here's roughly what the machine tab writes for the two examples above. A face:
-
-```toml
-# ~/raigolmi/faces/writing/face.toml
-id = "writing"
-
-[desktop]
-compositor = "sway"         # built from faces/_compositors/sway/Containerfile
-config_dir = "desktop/"     # holds sway.conf, the bar, the theme
-apps = ["firefox"]          # Nix packages
-browser = "firefox"
-
-[editor]
-package = "neovim"
-config_dir = "editor/"
-command = ["foot", "--app-id=raigolmi-editor", "nvim", "--listen", "{socket}",
-           "--cmd", "set rtp^={glue}", "-u", "{config}/init.lua"]
-```
-
-A body and a toolbelt for it:
+Here's roughly what the machine tab writes for the examples above. A body and a toolbelt for
+it:
 
 ```toml
 # ~/raigolmi/bodies/myapi/body.toml
@@ -289,6 +285,25 @@ packages = ["bashInteractive", "coreutils", "python3", "util-linux", "libcap", "
             "pyright"]
 ```
 
+A face:
+
+```toml
+# ~/raigolmi/faces/writing/face.toml
+id = "writing"
+
+[desktop]
+compositor = "sway"         # built from faces/_compositors/sway/Containerfile
+config_dir = "desktop/"     # holds sway.conf, the bar, the theme
+apps = ["firefox"]          # Nix packages
+browser = "firefox"
+
+[editor]
+package = "neovim"
+config_dir = "editor/"
+command = ["foot", "--app-id=raigolmi-editor", "nvim", "--listen", "{socket}",
+           "--cmd", "set rtp^={glue}", "-u", "{config}/init.lua"]
+```
+
 The full rules for writing each one are in [`agents/guide/`](agents/guide/). It's the same
 guide every agent reads before it writes a layer.
 
@@ -302,10 +317,9 @@ that part well.
 - **`raigolmi`** isn't an agent. It's a shell with the machine's live status at the top:
   which face, body and toolbelt are selected, the running sandboxes, and which agents are
   busy. The `rai` command works here.
-- **`machine`** is for the machine itself. Go here to make or change a face, make a
-  toolbelt or a new body, change how the machine works, or hand other tabs over to run on
-  their own. It's the tab that makes and changes faces. It can even change the plugins and
-  instructions the other agents start with.
+- **`machine`** is for the machine itself. Go here to start a new body, make a toolbelt, make
+  or change a face, change how the machine works, or hand other tabs over to run on their own.
+  It can even change the plugins and instructions the other agents start with.
 - **A body's tab** is for that one project. It works only on that project's code, its
   sandbox and its toolbelt. It opens when you select the body.
 - **`⚙` the janitor** is for fixing the machine when something breaks. It opens by itself,
@@ -322,14 +336,38 @@ it, so the same question won't need you twice. A question you leave for 30 minut
 
 When an agent needs permission for something the machine does for it, a menu pops up in
 its tab. You can say yes or no just this once, for this project, or everywhere. Inside its
-own container an agent doesn't ask: it runs whatever commands it likes there. The **×** on a tab archives its
-conversation. For `machine` and your selected body, that gives you a fresh tab with a clean
-slate. To pick an old conversation back up, type `/resume` in a tab of the same project and
-press **Ctrl+A**: every archived one is listed there.
+own container an agent doesn't ask: it runs whatever commands it likes there. The **×** on a
+tab archives its conversation. For `machine` and your selected body, that gives you a fresh
+tab with a clean slate. To pick an old conversation back up, type `/resume` in a tab of the
+same project and press **Ctrl+A**: every archived one is listed there.
 
 Drag to select text: it's copied right away and stays selected where it is. The wheel
 scrolls with it, and a key or a click ends it. Right-click to paste, and press Ctrl+Enter for
 a new line.
+
+### Working on its own, in more detail
+
+You hand tabs over to the machine tab in plain words. You can give it a point where you want
+a tab to stop for you, a number of hours, or both. From then on:
+
+- a managed tab's questions go to the machine tab, which answers them and steers the work.
+  It stands in for you on every decision you didn't keep with your stop, design questions
+  included, and records each one in the run's record so you can overturn it;
+- to ask a managed tab something, ask the machine tab: it passes your question on, the tab
+  reads it at its next step even mid-task, and the machine tab brings you the answer;
+- when a tab's conversation reaches its budget, it's handed to a new tab that starts from
+  the project's `SESSION-START.md`, and the machine tab does the same for itself;
+- a tab cut off by a usage limit or an API error is resumed;
+- every tab, the machine tab and the janitor included, is a Claude Code Remote Control
+  session named after its project, so you can follow any of them from your phone;
+- a tab that reaches your stop is held for you, and typing in the tab takes it back;
+- when the time runs out, each tab finishes up and is given back;
+- each time the machine tab hands itself over, it files a progress report on that stretch,
+  so a run of any length keeps its whole record;
+- once the last tab is back, the machine tab writes a report, which you'll find in the
+  catalog under Documents, Runs, next to the progress reports.
+
+Every handover, hold and ending shows up in the history.
 
 ### The janitor, in more detail
 
@@ -366,30 +404,6 @@ note, which is closed when it's fixed, and what worked goes into a running list 
 for your machine. It only repairs things. Ask it for a feature and it'll send you to the
 right tab.
 
-### Working on its own, in more detail
-
-You hand tabs over to the machine tab in plain words. You can give it a point where you want
-a tab to stop for you, a number of hours, or both. From then on:
-
-- a managed tab's questions go to the machine tab, which answers them and steers the work.
-  It stands in for you on every decision you didn't keep with your stop, design questions
-  included, and records each one in the run's record so you can overturn it;
-- to ask a managed tab something, ask the machine tab: it passes your question on, the tab
-  reads it at its next step even mid-task, and the machine tab brings you the answer;
-- when a tab's conversation reaches its budget, it's handed to a new tab that starts from
-  the project's `SESSION-START.md`, and the machine tab does the same for itself;
-- a tab cut off by a usage limit or an API error is resumed;
-- every tab, the machine tab and the janitor included, is a Claude Code Remote Control
-  session named after its project, so you can follow any of them from your phone;
-- a tab that reaches your stop is held for you, and typing in the tab takes it back;
-- when the time runs out, each tab finishes up and is given back;
-- each time the machine tab hands itself over, it files a progress report on that stretch,
-  so a run of any length keeps its whole record;
-- once the last tab is back, the machine tab writes a report, which you'll find in the
-  catalog under Documents, Runs, next to the progress reports.
-
-Every handover, hold and ending shows up in the history.
-
 ### The history
 
 Put your mouse on the top tab to see tabs finishing, agents asking you things, handovers,
@@ -403,23 +417,18 @@ your answer, and your preferences are updated with it.
 
 ### The catalog and settings
 
-Open the catalog from the selector. It lists your faces, bodies and toolbelts, plus
+Open the catalog from the selector. It lists your bodies, toolbelts and faces, plus
 **Documents** you can edit: your settings, your preferences, the permissions you answered
 "always" (edit it to take one back), the instructions every tab starts with, each
 project's `SESSION-START.md`, each layer's doc, the janitor's incidents, and run reports.
-**Thoughts** has the agents' thought docs, to read. Turn on **Server** to see what other people have shared. Use
-**Download** and **Install** to get something, **Upload** to share something you made, and
-**Delete** to remove it.
+**Thoughts** has the agents' thought docs, to read. Turn on **Server** to see what other
+people have shared. Use **Download** and **Install** to get something, **Upload** to share
+something you made, and **Delete** to remove it.
 
 Every key, colour and size is in the **Settings** document there, along with the keyboard,
 the display scale, the model the agents run and their conversation budget. Edit it and save.
 Keys and looks change right away, and the model and budget at a tab's next start. If a save
 doesn't parse, it's refused and you're told why.
-
-At the top of the selector, **Don't drive my current face** stops agents from clicking and
-typing on your screen. With it off, an agent can use your desktop the way you would, once
-you've stepped away from the keyboard, and one tab at a time. Agents can take screenshots
-either way.
 
 ### Files and clipboard on Windows
 
@@ -493,12 +502,13 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 
 ### Good to know
 
+- Agents commit as `Claude (<tab>)`, and merging is up to you.
+- Tabs left to work on their own spend your Claude plan's usage while they do.
 - A face's first start builds its image and takes a few minutes, with a blank screen. After
   that, switching faces takes under a second.
 - There's no XWayland, so X11-only programs don't run in a face. WebKit-based browsers don't
   work either. Firefox does, and so does Chromium with a few flags.
 - The clipboard between Windows and the machine carries text only.
-- Agents commit as `Claude (<tab>)`, and merging is up to you.
 - The app isn't signed, and it watches the keyboard so keys like Super reach the machine.
   That combination can make antivirus software suspicious of it. It's built by the
   `publish` workflow from this repository's source, which you can read or build yourself.
