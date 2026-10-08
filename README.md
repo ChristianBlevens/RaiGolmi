@@ -1,7 +1,7 @@
 <!-- purpose: the public face: what RaiGolmi is and how a user installs, starts and uses it. Lead use first (AI agents developing your projects, attended or on their own), then the desktop as the second use, then the reference
 not-here: design, settled calls, development state and measurements (development notes, kept outside the repository)
 shape: bounded
-audited: 33030 2026-10-08
+audited: 32895 2026-10-08
 -->
 # RaiGolmi
 
@@ -15,9 +15,6 @@ suggest what you should go and do. RaiGolmi gives them a machine where they can 
 see and click through what they built, and recover when something breaks. The decisions you
 keep for yourself wait for you, the ones they make are written down so you can overturn them,
 and a small core underneath stays put whatever they change.
-
-<!-- A screenshot of an orchestration run belongs here: the AI terminal with managed (◇) tabs,
-the history, or a run report. -->
 
 On Windows it's a normal app window: setup installs everything it needs, and you never have to
 manage the VM the whole OS runs in. That VM is why the agents can be given everything: nothing
@@ -208,7 +205,7 @@ git instead.
 
 ## Everything else
 
-### Where it came from
+### The path to now
 
 I saw [Omarchy](https://omarchy.org) and tried it out, and it didn't feel like it was really
 aimed at developers, even though that was kind of the vibe behind it. So I started thinking
