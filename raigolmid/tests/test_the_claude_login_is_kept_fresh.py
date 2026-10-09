@@ -3,6 +3,7 @@ its life, or at once when a tab is refused on it, by Claude Code's own `auth log
 renewal that fails is said."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import stat
@@ -101,12 +102,17 @@ def test_a_tab_refused_on_it_has_it_renewed_at_once(tmp_path, auth_login):
     path, events = tmp_path / "claude-login.json", EventLog(tmp_path / "events.jsonl")
     _written(path, _login(expires_in=28800))
     refresher = claude_login.Refresher(path, events, runtime, epoch=1, agent_image=_image(runtime))
-    refresher.on_event(events.emit("claude_login.refused", tab="tab-1"))
+    refresher.tick(NOW + 60)
+    assert runs == [], "nothing refused yet"
+    first = events.emit("claude_login.refused", tab="tab-1")
+    refresher.on_event(first)
     refresher.tick(NOW + 60)
     assert len(runs) == 1
     assert claude_login.read(path)["claudeAiOauth"]["accessToken"] == "new-access"
+    # Refused in the same moment, and seen only once the renewal was done.
+    refresher.on_event(dataclasses.replace(first, tab="tab-2"))
     refresher.tick(NOW + 120)
-    assert len(runs) == 1, "one refusal, one renewal"
+    assert len(runs) == 1, "one renewal answers every refusal made before it"
 
 
 def test_a_renewal_that_fails_is_said_and_tried_again_later(tmp_path, auth_login):

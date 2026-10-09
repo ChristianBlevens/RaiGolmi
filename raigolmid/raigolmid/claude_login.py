@@ -220,8 +220,10 @@ class Refresher:
         self.renewal = renewal if renewal is not None else Renewal()
         self._retry_at = 0.0
         self._sub = events.subscribe()
-        # A tab was refused on the sign-in since the last renewal began.
-        self._refused = False
+        # When a tab was last refused on the sign-in, and when the last renewal began: one
+        # renewal answers every refusal made before it.
+        self._refused_at = 0.0
+        self._renewing_since = 0.0
 
     def run(self, stop: threading.Event) -> None:
         ticked = 0.0
@@ -229,13 +231,16 @@ class Refresher:
             for event in self._sub.drain(timeout=TICK_SECONDS):
                 self.on_event(event)
             now = time.time()
-            if self._refused or now >= ticked + TICK_SECONDS:
+            if self._refused() or now >= ticked + TICK_SECONDS:
                 ticked = now
                 self.tick(now)
 
     def on_event(self, event: Event) -> None:
         if event.type == "claude_login.refused":
-            self._refused = True
+            self._refused_at = max(self._refused_at, event.ts)
+
+    def _refused(self) -> bool:
+        return self._refused_at > self._renewing_since
 
     def tick(self, now: float) -> None:
         if not self.path.exists() or now < self._retry_at:
@@ -247,12 +252,13 @@ class Refresher:
             if ends is not None and ends / 1000 <= now:
                 raise LoginEnded("its refresh token has expired")
             written = self.path.stat().st_mtime
-            if not self._refused and now < written + (oauth["expiresAt"] / 1000 - written) / 2:
+            if not self._refused() and now < written + (oauth["expiresAt"] / 1000 - written) / 2:
                 return
+            began = time.time()
             with self.renewal.running():
                 write(self.path, refreshed(read(self.path), self.runtime, self.epoch,
                                           self.path.parent, self.agent_image))
-            self._refused = False
+            self._renewing_since = began
         except LoginEnded as exc:
             self.path.unlink()
             self.events.emit("claude_login.lost", error=str(exc))
