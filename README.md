@@ -353,7 +353,8 @@ a tab to stop for you, a number of hours, or both. From then on:
 - to ask a managed tab something, ask the machine tab: it passes your question on, the tab
   reads it at its next step even mid-task, and the machine tab brings you the answer;
 - when a tab's conversation reaches its budget, it's handed to a new tab that starts from
-  the project's `SESSION-START.md`, and the machine tab does the same for itself;
+  the project's `SESSION-START.md`, and the machine tab does the same for itself at its own,
+  lower budget, since it wakes only now and then and each wake re-reads its whole context;
 - a tab cut off by a usage limit or an API error is resumed;
 - every tab, the machine tab and the janitor included, is a Claude Code Remote Control
   session named after its project, so you can follow any of them from your phone;
@@ -423,7 +424,7 @@ people have shared. Use **Download** and **Install** to get something, **Upload*
 something you made, and **Delete** to remove it.
 
 Every key, colour and size is in the **Settings** document there, along with the keyboard,
-the display scale, the model the agents run and their conversation budget. Edit it and save.
+the display scale, the model the agents run and their conversation budgets. Edit it and save.
 Keys and looks change right away, and the model and budget at a tab's next start. If a save
 doesn't parse, it's refused and you're told why.
 
