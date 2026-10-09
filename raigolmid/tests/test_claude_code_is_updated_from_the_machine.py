@@ -1,5 +1,6 @@
 """`rai claude-update`: the agent image takes a newer Claude Code than the release pins, every
-tab follows it, and a build that fails leaves the machine on the one it had."""
+tab follows it, and a build that fails leaves the machine on the one it had. The machine tab
+can ask for it too, and no other tab can."""
 from __future__ import annotations
 
 import time
@@ -7,7 +8,11 @@ import time
 import pytest
 
 from raigolmid import claudecode, hostimages, naming
+from raigolmid.channel import Channels
 from raigolmid.hostimages import HostImageError
+from raigolmid.questions import Questions
+from raigolmid.scopes import build_tab_methods
+from raigolmid.session import SessionError
 
 from tests.harness import Harness
 
@@ -75,3 +80,17 @@ def test_a_failed_build_keeps_the_claude_code_the_machine_had(h):
     with pytest.raises(HostImageError):
         h.session.update_claude_code()
     assert not h.paths.claude_code.exists()
+
+
+def test_the_machine_tab_updates_and_moves_as_its_turn_ends_and_no_other_tab_can(h):
+    machine, body = h.tab(None), h.tab("myapi")
+    questions, channels = Questions(h.events, h.paths), Channels(h.session, h.events)
+    with pytest.raises(SessionError):
+        build_tab_methods(h.session, questions, channels, body)["update_claude_code"]()
+    assert not h.paths.claude_code.exists()
+
+    h.session.agent_activity(machine, busy=True)
+    report = build_tab_methods(h.session, questions, channels, machine)["update_claude_code"]()
+    assert report["version"] == "2.1.295" and machine in report["working"]
+    h.session.agent_activity(machine, busy=False)
+    _settles(lambda: _image_of(h, machine) == report["image"])

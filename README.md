@@ -587,8 +587,8 @@ Run it from the `raigolmi` tab's shell.
   and draws it with D3D11.
 - **Agents:** Claude Code, every one of them. It comes on the disk, in the agent image, under
   Anthropic's own terms (see [NOTICE](NOTICE)). Each release pins a version that's been run with
-  RaiGolmi; `rai claude-update` takes a newer one without waiting for the next release, and a
-  later release that pins past it takes over.
+  RaiGolmi; `rai claude-update`, or asking the machine tab, takes a newer one without waiting
+  for the next release, and a later release that pins past it takes over.
 
 ## License
 

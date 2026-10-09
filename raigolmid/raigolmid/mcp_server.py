@@ -368,6 +368,14 @@ def build_server(client: ApiClient):
     def restart_fresh(tab: str, documents_ready: bool = False) -> dict[str, Any]:
         return call("restart_fresh", tab=tab, documents_ready=documents_ready)
 
+    @tool(server, description="Machine tab only, when the user asks: move every agent to the "
+                             "newest Claude Code, or back to the one this release pins with "
+                             "`pinned`, as `rai claude-update` does. It builds the agent image, "
+                             "a minute or two; idle tabs then restart on their conversations, "
+                             "and working ones, you included, as their turns end.")
+    def update_claude_code(pinned: bool = False) -> dict[str, Any]:
+        return call("update_claude_code", pinned=pinned)
+
     @tool(server, description="Machine tab only: say your /work/SESSION-START.md is ready for "
                              "your next conversation, once the daemon has asked at your "
                              "context budget, handing over `report`, the user's progress "

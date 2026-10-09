@@ -575,7 +575,9 @@ def methods(session: "Session", questions: Questions, channels: Channels,
     return {name: only_machine(verb) for name, verb in (
         *((n, getattr(verbs, n)) for n in ("manage", "managed", "managed_tab", "direct",
                                            "answer_question", "restart_fresh", "hold")),
-        ("ready_to_restart", ready_to_restart), ("report_run", report_run))}
+        ("ready_to_restart", ready_to_restart), ("report_run", report_run),
+        # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
+        ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)))}
 
 
 def hand_on(session: "Session", tab: str) -> dict[str, Any]:

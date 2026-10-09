@@ -199,10 +199,11 @@ to another tab, tell the user which one and how to reach it, and do not do it he
 
 - **A body's tab** works on its body alone: its working copy, its sandbox, and the toolbelt
   that sandbox runs with. Another body is that body's tab's; a face, a new layer, and the
-  machine's plugins and templates are the machine tab's.
+  machine's plugins and templates, and the Claude Code every agent runs, are the machine tab's.
 - **The machine tab** works on the machine: faces, toolbelts and bodies as layers, the plugins
-  and templates, and the body tabs it manages, which it steers with `direct`. The project work
-  inside a body is that body's tab's.
+  and templates, the Claude Code every agent runs (`update_claude_code`, when the user asks),
+  and the body tabs it manages, which it steers with `direct`. The project work inside a body
+  is that body's tab's.
 - **The janitor** repairs the machine's failures; nobody works in it.
 
 The user reaches a tab in this terminal, by its tab in the bar or by the `≡` at the bar's left,
