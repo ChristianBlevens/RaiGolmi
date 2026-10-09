@@ -316,9 +316,11 @@ that part well.
   busy. The `rai` command works here.
 - **`machine`** is for the machine itself. Go here to start a new body, make a toolbelt, make
   or change a face, change how the machine works, or hand other tabs over to run on their own.
-  It can even change the plugins and instructions the other agents start with.
+  It can even change the plugins and instructions the other agents start with. It can also
+  download, install and delete layers from the registry. Uploading stays yours, in the catalog.
 - **A body's tab** is for that one project. It works only on that project's code, its
-  sandbox and its toolbelt. It opens when you select the body.
+  sandbox and its toolbelt. It opens when you select the body. It can repair its own sandbox
+  and check what its project holds on disk and in memory.
 - **`⚙` the janitor** is for fixing the machine when something breaks. It opens by itself,
   and you don't work in it (see below).
 
@@ -336,7 +338,10 @@ its tab. You can say yes or no just this once, for this project, or everywhere. 
 own container an agent doesn't ask: it runs whatever commands it likes there. The **×** on a
 tab archives its conversation. For `machine` and your selected body, that gives you a fresh
 tab with a clean slate. To pick an old conversation back up, type `/resume` in a tab of the
-same project and press **Ctrl+A**: every archived one is listed there.
+same project and press **Ctrl+A**: every archived one is listed there. A tab can also end its
+own conversation, at its budget or whenever a fresh start would serve the work better. It
+gets its `SESSION-START.md` ready, and a new tab takes the work over from there. If you were
+watching the old tab, the new one comes into view.
 
 Drag to select text: it's copied right away and stays selected where it is. The wheel
 scrolls with it, and a key or a click ends it. Right-click to paste, and press Ctrl+Enter for
@@ -376,7 +381,10 @@ responding. It also catches a tab that's stuck: one working for ten minutes with
 conversation moving, or for half an hour without anything in its work changing. It looks at
 what the tab was running, leaves a real long wait alone, and otherwise stops the tab's turn and
 tells it what went wrong. A turn that fails in a way retrying won't fix, like a tab that lost
-its sign-in, comes to it too.
+its sign-in, comes to it too. It can see everything it needs to diagnose the machine: every
+container, the windows on your screen, a screenshot of your desktop. It's the only tab that
+can close another tab, and only one that no restart or repair brings back. A tab the machine
+tab manages is never one of them.
 
 Each project's tab also keeps a budget: how much disk and memory a regular run of its project
 takes, with nothing stale. It isn't a limit. When the project goes past it, the tab is told and
