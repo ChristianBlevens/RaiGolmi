@@ -425,6 +425,16 @@ class Agents:
         self.broker = credproxy.Broker(paths.agent_credentials, paths.proxy_secret,
                                        paths.proxy_authority, runtime,
                                        paths.registry_token, paths.claude_login)
+        # The agent image this daemon last made sure of; a tab on another is moved onto it
+        # once idle (`Session._renew`). None until the first.
+        self.current_image: str | None = None
+
+    def image(self) -> str:
+        """The agent image's tag, built first if it is not here. The judge and the sign-in's
+        refresh run Claude Code from it too, so a newer one chosen reaches them as well."""
+        self.current_image = hostimages.ensure(self.runtime,
+                                               hostimages.agent(self.paths.claude_code))
+        return self.current_image
 
     # --- context --------------------------------------------------------
     @property
@@ -468,7 +478,7 @@ class Agents:
             )
         login = self._login_files(spec.tab.tab_id)
         credentials = self.credentials(spec.tab.tab_id, login=login is not None)
-        image = hostimages.ensure(self.runtime, hostimages.agent())
+        image = self.image()
         home = self.home(spec.tab.tab_id)
         if fresh_home and home.exists():
             raise AgentError(

@@ -79,7 +79,7 @@ def test_the_agent_image_copies_everything_the_install_packages_and_no_more(whee
     that the install never reads rebuilds the image for nothing."""
     from raigolmid import hostimages
     monkeypatch.setenv(hostimages.SOURCE_ENV, str(REPO))
-    copied = {p.relative_to(REPO) for p in hostimages.agent()._copied()}
+    copied = {p.relative_to(REPO) for p in hostimages.agent(None)._copied()}
     packaged = {Path(m) if m.startswith("ui/") else Path("raigolmid") / m
                 for m in wheel.namelist() if ".dist-info/" not in m}
     missing = packaged - copied

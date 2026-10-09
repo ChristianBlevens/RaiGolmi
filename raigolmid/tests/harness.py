@@ -330,7 +330,7 @@ def standalone(tmp_path: Path, monkeypatch):
     monkeypatch.setenv(hostimages.SOURCE_ENV, str(sources))
     events = EventLog(tmp_path / "events.jsonl", epoch=1)
     runtime = FakeRuntime()
-    runtime.add_image(hostimages.agent().tag())
+    runtime.add_image(hostimages.agent(None).tag())
     credentials = tmp_path / "agent-credentials"
     credentials.write_text("CLAUDE_CODE_OAUTH_TOKEN=test-token\n")
     credentials.chmod(0o600)
@@ -341,7 +341,8 @@ def standalone(tmp_path: Path, monkeypatch):
     broker = Broker(credentials, tmp_path / "proxy-secret", tmp_path / "proxy-ca", runtime,
                     paths.registry_token, paths.claude_login)
     return events, questions, Judge(events, runtime, tmp_path / "preferences.md", broker,
-                                    1), runtime
+                                    1, lambda: hostimages.ensure(runtime, hostimages.agent(None))
+                                    ), runtime
 
 
 def launcher_broker(paths: Paths) -> "ApiServer":

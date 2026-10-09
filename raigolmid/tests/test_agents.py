@@ -319,7 +319,7 @@ def test_a_tab_whose_agent_cannot_start_is_not_left_behind(h):
     """Otherwise it stays `starting` for good, each retry adds another, and status claims
     an agent that will never exist. The agent image failing to build is one way it cannot."""
     from raigolmid import hostimages
-    tag = hostimages.agent().tag()
+    tag = hostimages.agent(None).tag()
     del h.runtime._images[tag]
     h.runtime.build_failures.add(tag)
     closed = h.tab("myapi")

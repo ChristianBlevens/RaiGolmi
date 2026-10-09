@@ -28,8 +28,9 @@ import json
 import queue
 import threading
 from pathlib import Path
+from typing import Callable
 
-from . import docwrite, hostimages, labels, naming
+from . import docwrite, labels, naming
 from .credproxy import Broker
 from .docwrite import StaleDocument
 from .events import Event, EventLog
@@ -125,12 +126,14 @@ class Judge:
     """Subscribed at construction, so no question asked after the daemon starts is missed."""
 
     def __init__(self, events: EventLog, runtime: ContainerRuntime, doc: Path,
-                 broker: Broker, epoch: int) -> None:
+                 broker: Broker, epoch: int, image: Callable[[], str]) -> None:
         self.events = events
         self.runtime = runtime
         self.doc = doc
         self.broker = broker
         self.epoch = epoch
+        # The agent image's tag, built if it is not here (`Agents.image`).
+        self.image = image
         self._sub = events.subscribe()
         self._jobs: queue.Queue[Event] = queue.Queue()
 
@@ -222,7 +225,7 @@ class Judge:
         return docwrite.read(self.doc)[0] or ""
 
     def _ask(self, prompt: str) -> str:
-        image = hostimages.ensure(self.runtime, hostimages.agent())
+        image = self.image()
         # Left by a daemon that stopped mid-run, it would refuse every run after it.
         self.runtime.remove(naming.judge(), force=True)
         result = self.runtime.run_to_completion(ContainerSpec(

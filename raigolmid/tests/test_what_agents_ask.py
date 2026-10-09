@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from raigolmid import settings
+from raigolmid import hostimages, settings
 from raigolmid.paths import Paths
 from raigolmid.api import ApiServer, build_methods, with_marks
 from raigolmid.channel import Channels
@@ -57,7 +57,8 @@ def api(tmp_path, monkeypatch):
     h = Harness(tmp_path, monkeypatch)
     h.session.select("body", "myapi")
     questions, channels = Questions(h.events, h.paths), Channels(h.session, h.events)
-    judge = Judge(h.events, h.runtime, h.paths.preferences, h.session.agents.broker, 1)
+    judge = Judge(h.events, h.runtime, h.paths.preferences, h.session.agents.broker, 1,
+                  h.session.agents.image)
     viewing = Viewing(h.events, h.paths.viewing)
     servers = [ApiServer(h.paths.api_socket,
                          build_methods(h.session, h.events, questions, channels, viewing,
@@ -216,7 +217,8 @@ def test_what_is_asked_and_an_overturn_held_outlive_the_daemon(tmp_path, monkeyp
     judge = Judge(events, runtime, tmp_path / "preferences.md",
                   Broker(tmp_path / "agent-credentials", tmp_path / "proxy-secret",
                          tmp_path / "proxy-ca", runtime, tmp_path / "registry-token",
-                         tmp_path / "claude-login.json"), 2)
+                         tmp_path / "claude-login.json"), 2,
+                  lambda: hostimages.ensure(runtime, hostimages.agent(None)))
     assert list(restarted.items()) == [done, held, waiting]
     assert restarted.tab_state("tab-1") == "asking"
     assert restarted.ask("tab-2", "Next?") not in (done, held, waiting)

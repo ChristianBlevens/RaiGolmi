@@ -30,7 +30,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from . import hostimages, labels, naming
 from .events import EventLog
@@ -118,13 +118,13 @@ def from_claude_home(home: Path, with_account: bool = True) -> dict[str, Any]:
 
 
 def refreshed(login: dict[str, Any], runtime: ContainerRuntime, epoch: int,
-              beside: Path) -> dict[str, Any]:
+              beside: Path, agent_image: Callable[[], str]) -> dict[str, Any]:
     """The login renewed by Claude Code's `auth login` in a scratch agent container whose home
     is a directory made in `beside`. The account is the login's: a refresh does not change
     whose it is."""
     oauth = login["claudeAiOauth"]
     try:
-        image = hostimages.ensure(runtime, hostimages.agent())
+        image = agent_image()
         # Left by a daemon that stopped mid-run, it would refuse every run after it.
         runtime.remove(naming.claude_refresh(), force=True)
         with tempfile.TemporaryDirectory(dir=beside, prefix=".claude-refresh-") as home:
@@ -201,11 +201,14 @@ class Refresher:
     has ended. A new one is said by the daemon's file watch (`claude_login.stored`)."""
 
     def __init__(self, path: Path, events: EventLog, runtime: ContainerRuntime,
-                 epoch: int, renewal: Renewal | None = None) -> None:
+                 epoch: int, agent_image: Callable[[], str],
+                 renewal: Renewal | None = None) -> None:
         self.path = path
         self.events = events
         self.runtime = runtime
         self.epoch = epoch
+        # The agent image's tag, built if it is not here (`Agents.image`).
+        self.agent_image = agent_image
         self.renewal = renewal if renewal is not None else Renewal()
         self._retry_at = 0.0
 
@@ -226,7 +229,7 @@ class Refresher:
                 return
             with self.renewal.running():
                 write(self.path, refreshed(read(self.path), self.runtime, self.epoch,
-                                          self.path.parent))
+                                          self.path.parent, self.agent_image))
         except LoginEnded as exc:
             self.path.unlink()
             self.events.emit("claude_login.lost", error=str(exc))

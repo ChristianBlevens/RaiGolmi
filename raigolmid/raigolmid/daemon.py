@@ -139,7 +139,7 @@ class Daemon:
         self.maintenance = Maintenance(self.session, self.events)
         self.questions = Questions(self.events, paths)
         self.judge = Judge(self.events, runtime, paths.preferences, self.session.agents.broker,
-                           self.epoch)
+                           self.epoch, self.session.agents.image)
         self.channels = Channels(self.session, self.events)
         self.coordinator = Coordinator(self.session, self.events, self.questions)
         self.limits = Limits(self.session, self.events)
@@ -151,7 +151,8 @@ class Daemon:
         self.remote_control = RemoteControl(self.session, self.events)
         renewal = claude_login.Renewal()
         self.claude_login = claude_login.Refresher(self.paths.claude_login, self.events,
-                                                   runtime, self.epoch, renewal)
+                                                   runtime, self.epoch,
+                                                   self.session.agents.image, renewal)
         # The credential stays here; every agent container is given a placeholder.
         self.credproxy = CredentialProxy(
             self.session.agents.broker, self.events,
@@ -298,8 +299,7 @@ class Daemon:
                               face.directory.parent, face.desktop.compositor)))
         # And the agent's, before the first tab asks for it; the face-mount helper's, before
         # the first face shows a body.
-        self._try("hostimages", "agent image",
-                  lambda: hostimages.ensure(runtime, hostimages.agent()))
+        self._try("hostimages", "agent image", self.session.agents.image)
         self._try("hostimages", "face-mount image",
                   lambda: hostimages.ensure(runtime, hostimages.face_mount()))
         self._try("hostimages", "door image",

@@ -570,6 +570,7 @@ Run it from the `raigolmi` tab's shell.
 | `rai rebuild` / `rai repair` | Rebuild a body, or tear a sandbox down and rebuild it |
 | `rai events [-f]` | The event log, read from disk if the daemon is down; `-f` follows it |
 | `rai ai restart <tab>` / `rai ai kill <tab>` | Restart a tab's agent, or stop it |
+| `rai claude-update [--pinned]` | Move every agent to the newest Claude Code, or back to the one this release pins. Idle tabs restart on their conversations right away, and working ones as their turns end |
 | `rai diagnose` | Bundle the logs and state into one file you can send |
 | `rai credential --set`, `rai registry-token --login`, `rai claude-login --login` | Redo the three first-start steps (`--api-key` with `--set` takes a Console API key instead, billed per token, and Remote Control doesn't work with one) |
 
@@ -585,7 +586,9 @@ Run it from the `raigolmi` tab's shell.
 - **Windows app:** a .NET 8 launcher that runs QEMU from MSYS2 with virgl GPU acceleration
   and draws it with D3D11.
 - **Agents:** Claude Code, every one of them. It comes on the disk, in the agent image, under
-  Anthropic's own terms (see [NOTICE](NOTICE)).
+  Anthropic's own terms (see [NOTICE](NOTICE)). Each release pins a version that's been run with
+  RaiGolmi; `rai claude-update` takes a newer one without waiting for the next release, and a
+  later release that pins past it takes over.
 
 ## License
 

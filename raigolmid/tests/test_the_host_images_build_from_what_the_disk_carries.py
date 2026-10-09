@@ -58,7 +58,7 @@ def test_every_image_raigolmid_builds_does_so_from_the_shipped_tree():
     and not left out of it by `.containerignore`, so an image cannot fail on first boot for
     a file the disk does not carry."""
     for image in (hostimages.selector, hostimages.control, hostimages.notify, hostimages.welcome,
-                  hostimages.agent, hostimages.face_mount):
+                  lambda: hostimages.agent(None), hostimages.face_mount):
         relative = image().containerfile.relative_to(hostimages.DEFAULT_SOURCE)
         assert (ROOT / relative).exists() and not _ignored(str(relative)), relative
         for src, _ in _copies(ROOT / relative):

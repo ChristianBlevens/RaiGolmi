@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import (activity, boot, compatibility, compose, credential, documents, flakes, git,
-               hostsurfaces, keep, labels, naming)
+from . import (activity, boot, claudecode, compatibility, compose, credential, documents,
+               flakes, git, hostimages, hostsurfaces, keep, labels, naming)
 from .agents import AgentError, Agents, AgentSpec, definition_protection
 from .anchors import DEFAULT_ANCHOR_IMAGE, Anchors
 from .catalog import Catalog
@@ -1089,40 +1089,80 @@ class Session:
                 self.events.emit("agent.busy", tab=tab_id, channel_seq=channel_seq)
             else:
                 self.events.emit("agent.idle", tab=tab_id, done=done, error=error)
-                self._reprotect()
+                self._renew()
             return self.status()
 
-    def _reprotect(self) -> None:
-        """Every definition repository is protected in every agent, and an agent's
-        binds are made with its container, so one made before a repository (or a submodule
-        in one) appeared is restarted on its conversation once it is idle. Checked as each
-        turn ends: the turn that made the repository ends here, and the definitions watch
-        never hears inside a `.git`. Queued, because the ending turn's own hook is the
-        caller, inside a container this may replace."""
+    def _renew(self) -> list[str]:
+        """An agent whose container is not what it would be made as now is restarted on its
+        conversation once it is idle; the tabs queued. Two things make one out of date: every
+        definition repository is protected in every agent, and its binds are made with its
+        container, so one made before a repository (or a submodule in one) appeared; and one
+        made from another agent image than the current, a newer Claude Code chosen
+        (`update_claude_code`). Checked as each turn ends: the turn that made the repository
+        ends here, and the definitions watch never hears inside a `.git`. Queued, because the
+        ending turn's own hook is the caller, inside a container this may replace."""
+        queued = []
         for tab_id, tab in self.intent.tabs.items():
-            if tab.busy or tab.status != "running" or not self._unprotected(tab_id):
+            if tab.busy or tab.status != "running":
                 continue
-            self.events.emit("agent.reprotecting", tab=tab_id)
+            reason = self._outdated(tab_id)
+            if reason is None:
+                continue
+            self.events.emit("agent.renewing", tab=tab_id, reason=reason)
             self.queues.submit(Unit(labels.Role.AGENT, tab_id).queue,
-                               lambda t=tab_id: self._reprotect_one(t), "reprotect")
+                               lambda t=tab_id: self._renew_one(t), "renew")
+            queued.append(tab_id)
+        return queued
 
-    def _unprotected(self, tab_id: str) -> bool:
+    def _outdated(self, tab_id: str) -> str | None:
+        """Why this tab's running agent is out of date, or None when it is not."""
         container = self.runtime.inspect(naming.agent(tab_id))
-        return (container is not None and container.running
-                and container.labels.get(labels.GIT_PROTECTED)
-                != definition_protection(self._agent_spec(self.intent.tabs[tab_id])))
+        if container is None or not container.running:
+            return None
+        if (container.labels.get(labels.GIT_PROTECTED)
+                != definition_protection(self._agent_spec(self.intent.tabs[tab_id]))):
+            return "protection"
+        current = self.agents.current_image
+        if current is not None and container.image != current:
+            return "image"
+        return None
 
-    def _reprotect_one(self, tab_id: str) -> None:
+    def _renew_one(self, tab_id: str) -> None:
         """Nobody waits on the queued job, so its failure is said here or not at all. A tab
         busy again by now is left to its own turn's end."""
         try:
             with self._lock:
                 tab = self.intent.tabs.get(tab_id)
-                if tab is not None and not tab.busy and self._unprotected(tab_id):
+                if tab is not None and not tab.busy and self._outdated(tab_id) is not None:
                     self.restart_agent(tab_id, resume=True)
         except Exception as exc:
-            self.events.emit("agent.reprotect_failed", tab=tab_id,
+            self.events.emit("agent.renew_failed", tab=tab_id,
                              error=f"{type(exc).__name__}: {exc}")
+
+    def update_claude_code(self, pinned: bool = False) -> dict[str, Any]:
+        """`rai claude-update`: the agent image moves to the newest Claude Code, or back to
+        the release's with `pinned`, and every tab follows it, an idle one now and a working
+        one as its turn ends (`_renew`). Built outside the session's lock, since a build takes
+        minutes and the tabs go on working meanwhile. A build that fails puts the earlier
+        choice back, so the next tab to start is not refused for it."""
+        containerfile = hostimages.agent(None).containerfile
+        newest = None if pinned else claudecode.latest()
+        earlier = claudecode.chosen(self.paths.claude_code)
+        claudecode.choose(self.paths.claude_code, newest, containerfile)
+        try:
+            image = self.agents.image()
+        except Exception:
+            claudecode.choose(self.paths.claude_code, earlier, containerfile)
+            raise
+        version = (claudecode.newer_than_pin(self.paths.claude_code, containerfile)
+                   or claudecode.pinned(containerfile))
+        self.events.emit("claude_code.chosen", version=version, image=image)
+        with self._lock:
+            moving = self._renew()
+            working = sorted(t for t, tab in self.intent.tabs.items()
+                             if tab.busy and self._outdated(t) is not None)
+        return {"version": version, "pinned": claudecode.pinned(containerfile),
+                "image": image, "moving": moving, "working": working}
 
     def close_tab(self, tab_id: str) -> dict[str, Any]:
         """The user closes a tab: its sandbox stops and its home, with the conversation in it,

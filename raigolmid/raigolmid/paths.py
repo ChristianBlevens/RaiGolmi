@@ -86,6 +86,12 @@ class Paths:
         return self.state / "protection.json"
 
     @property
+    def claude_code(self) -> Path:
+        """The Claude Code newer than the release's that the agent image installs, when one was
+        asked for (`claudecode.py`). In `/var`, so it outlives a reboot and an upgrade."""
+        return self.state / "claude-code.json"
+
+    @property
     def jobs(self) -> Path:
         """Each tab's long jobs and the launcher that runs each (`jobs.py`)."""
         return self.state / "jobs.json"

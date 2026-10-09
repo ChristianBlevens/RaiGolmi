@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import layerfiles, naming, superseded
+from . import claudecode, layerfiles, naming, superseded
 from .queues import BuildLock, BuildOutcome
 from .runtime.base import ContainerRuntime
 
@@ -55,6 +55,8 @@ class HostImage:
     name: str
     context: Path
     containerfile: Path
+    # Build arguments go into the tag: an image built with other ones is another image.
+    buildargs: tuple[tuple[str, str], ...] = ()
 
     def digest(self) -> str:
         """The Containerfile and every file it copies, by path and bytes: a change to what
@@ -71,6 +73,8 @@ class HostImage:
         for f in self._copied():
             h.update(str(f.relative_to(self.context)).encode() + b"\0")
             h.update(f.read_bytes() + b"\0")
+        for name, value in self.buildargs:
+            h.update(f"--build-arg {name}={value}".encode() + b"\0")
         return "sha256:" + h.hexdigest()
 
     def _copied(self) -> list[Path]:
@@ -116,12 +120,19 @@ def catalog() -> HostImage:
     return HostImage("catalog", root, root / "ui" / "catalog" / "Containerfile")
 
 
-def agent() -> HostImage:
+def agent(choice: Path | None) -> HostImage:
     """The agent container. The host carries no agent CLI, so the image is
     built here like the host's own surfaces; its Dockerfile copies `raigolmid/` and `ui/`, so
-    the context is the whole source root."""
+    the context is the whole source root. `choice` is `Paths.claude_code`, a newer Claude Code
+    than the release's when the user asked for one; None is the release's, which the disk bakes."""
     root = source_root()
-    return HostImage("claude", root, root / "agents" / "claude" / "Dockerfile")
+    containerfile = root / "agents" / "claude" / "Dockerfile"
+    try:
+        version = claudecode.newer_than_pin(choice, containerfile) if choice is not None else None
+    except claudecode.ClaudeCodeError as exc:
+        raise HostImageError(str(exc)) from exc
+    return HostImage("claude", root, containerfile,
+                     ((claudecode.ARG, version),) if version is not None else ())
 
 
 def face_mount() -> HostImage:
@@ -152,8 +163,8 @@ def face_compositor(faces_root: Path, compositor: str) -> HostImage:
 def shipped() -> list[HostImage]:
     """Every image the disk carries: the machine's own. A face's compositor is the face's,
     built on the machine when it first starts (`face_compositor`)."""
-    return [selector(), control(), notify(), catalog(), welcome(), agent(), face_mount(), door(),
-            gh()]
+    return [selector(), control(), notify(), catalog(), welcome(), agent(None), face_mount(),
+            door(), gh()]
 
 
 # Loaded at most once per process: the archive holds every image, and a second load of it
@@ -197,7 +208,7 @@ def ensure(runtime: ContainerRuntime, image: HostImage) -> str:
         if runtime.image(tag) is not None:
             superseded.drop_older(runtime, tag)
             return tag
-        if image.context.is_relative_to(DEFAULT_SOURCE):
+        if image.context.is_relative_to(DEFAULT_SOURCE) and not image.buildargs:
             # Its sources are the disk's own, so the archive was built from them: this is a
             # disk whose archive and tree disagree, and the build below only hides it.
             logger.warning("%s carries no %s although its sources are the disk's own; "
@@ -212,7 +223,7 @@ def ensure(runtime: ContainerRuntime, image: HostImage) -> str:
         started = time.monotonic()
         result = runtime.build(context=str(image.context),
                                dockerfile=str(image.containerfile.relative_to(image.context)),
-                               tag=tag)
+                               tag=tag, buildargs=dict(image.buildargs) or None)
         return BuildOutcome(digest=tag, succeeded=result.succeeded, image=tag,
                             log=result.log, duration=time.monotonic() - started)
 

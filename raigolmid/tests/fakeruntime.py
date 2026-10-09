@@ -65,6 +65,7 @@ class FakeRuntime(ContainerRuntime):
         # it, `not found` with no name.
         self.unbuildable: set[str] = set()
         self.builds_pulled: list[bool] = []
+        self.builds_buildargs: list[dict[str, str] | None] = []
         self._ids = itertools.count(1)
         self._pids = itertools.count(1000)
         self._events: list[dict[str, Any]] = []
@@ -508,6 +509,7 @@ class FakeRuntime(ContainerRuntime):
         """
         self.build_count += 1
         self.builds_pulled.append(pull)
+        self.builds_buildargs.append(buildargs)
         if self.build_should_fail or tag in self.build_failures:
             return BuildResult(image_id="", log="fake build failure", succeeded=False)
 

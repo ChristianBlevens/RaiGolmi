@@ -477,6 +477,27 @@ def cmd_rebuild(args) -> int:
     return 0 if report["result"] in ("rebuilt", "already_current") else 1
 
 
+def cmd_claude_update(args) -> int:
+    """The agent image onto the newest Claude Code, or back to the release's with `--pinned`.
+    The daemon asks npm and builds; nothing is said until it has, which is a minute or two."""
+    if not args.json:
+        print("Going back to the release's Claude Code" if args.pinned else
+              "Asking npm for the newest Claude Code", "and building the agent image with it…")
+    report = _client().call("update_claude_code", pinned=args.pinned)
+    if args.json:
+        _print(report)
+        return 0
+    which = "the release's" if report["version"] == report["pinned"] else (
+        f"newer than the release's {report['pinned']}")
+    print(f"Claude Code {report['version']} ({which}) is the agent image {report['image']}.")
+    if report["moving"]:
+        print(f"Restarting on their conversations now: {', '.join(report['moving'])}.")
+    if report["working"]:
+        print(f"Moving as their turns end: {', '.join(report['working'])}.")
+    print("Every other tab starts on it.")
+    return 0
+
+
 def cmd_history(args) -> int:
     _print(_client().call("history", instance_id=args.instance, n=args.n))
     return 0
@@ -824,7 +845,7 @@ def _claude_sign_in(argv: list[str], home: str, command: str, heading: str,
 
     runtime = DockerRuntime()
     try:
-        image = hostimages.ensure(runtime, hostimages.agent())
+        image = hostimages.ensure(runtime, hostimages.agent(Paths.from_env().claude_code))
     except hostimages.HostImageError as exc:
         print(f"{command}: {exc}", file=sys.stderr)
         return 1, ""
@@ -927,7 +948,7 @@ def _claude_refuses(key: str, value: str, beside: Path) -> str | None:
 
     runtime = DockerRuntime()
     try:
-        image = hostimages.ensure(runtime, hostimages.agent())
+        image = hostimages.ensure(runtime, hostimages.agent(Paths.from_env().claude_code))
     except hostimages.HostImageError as exc:
         return str(exc)
     finally:
@@ -1406,6 +1427,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("rebuild")
     p.add_argument("instance", metavar="sandbox")
     p.set_defaults(fn=cmd_rebuild)
+
+    p = sub.add_parser("claude-update",
+                       help="move the agents to the newest Claude Code, or back with --pinned")
+    p.add_argument("--pinned", action="store_true",
+                   help="go back to the Claude Code this release pins")
+    p.set_defaults(fn=cmd_claude_update)
 
     p = sub.add_parser("history")
     p.add_argument("instance", metavar="sandbox")

@@ -40,8 +40,10 @@ RUN groupmod -g "${GID}" -n "${USERNAME}" node \
 
 # Pinned beside `mcp` (raigolmid/pyproject.toml): the channel rests on how this version speaks
 # the handshake era, so a new one is taken deliberately: the image is rebuilt on the machine
-# whenever raigolmid changes, and an unpinned install takes whatever is newest that day.
-RUN npm install -g @anthropic-ai/claude-code@2.1.283
+# whenever raigolmid changes, and an unpinned install takes whatever is newest that day. The
+# default is the release's; `rai claude-update` builds a newer one (`claudecode.py`).
+ARG CLAUDE_CODE_VERSION=2.1.283
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
 # `rai` is how the agent reaches raigolmid, and the only way it reaches anything. Exactly what
 # the install packages (`pyproject.toml`'s `packages`), because the image's digest is every file
