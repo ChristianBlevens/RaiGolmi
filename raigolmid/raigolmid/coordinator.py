@@ -58,7 +58,8 @@ from . import api, documents, history, limits
 from .channel import Channels
 from .events import Event, EventLog
 from .intent import Run, TabIntent
-from .questions import Questions
+from .library import Library, run_id, save_from_tab
+from .questions import PERMISSIONS_ABSENT, Questions, parse_permissions
 from .session import SessionError
 from .transcript import context_tokens, latest_transcript, main_rows
 
@@ -224,14 +225,17 @@ def restart_asked_message(tokens: int, budget: int) -> str:
         "turn; the new tab takes over once it ends.")
 
 
-def machine_restart_message(continues: str) -> str:
+def machine_restart_message(continues: str, report: str | None) -> str:
+    filed = (f"{continues}'s stretch is filed with its progress report, `{report}`, which "
+             "`document` reads" if report is not None
+             else f"{continues}'s stretch is filed with its progress report")
     return (
         f"You are the machine tab, taking over from {continues} in a fresh conversation the "
         "daemon opened at its context budget, while the user is away. Read "
         f"/work/{documents.SESSION_START}, call `managed` for where each tab you manage "
         f"stands now, and carry on managing them. Keep /work/{documents.RUN_RECORD}, the "
-        f"record of this stretch of the run: {continues}'s stretch is filed with its progress "
-        f"report. ~/{documents.THOUGHTS} is this conversation's own record.")
+        f"record of this stretch of the run: {filed}. ~/{documents.THOUGHTS} is this "
+        "conversation's own record.")
 
 
 def report_message(run: Run, record: list[str], tabs: dict[str, dict[str, Any]]) -> str:
@@ -468,7 +472,8 @@ class Coordinator:
                 self.events.emit("coordinator.restart_failed", tab=tab_id, error=str(exc))
                 return
             self.events.emit("coordinator.machine_restarted", tab=successor.tab_id, deliver={
-                "content": machine_restart_message(tab_id), "meta": {"from": "daemon"}})
+                "content": machine_restart_message(tab_id, self._last_report()),
+                "meta": {"from": "daemon"}})
             return
         if handover in ("asked", "unanswered"):
             return          # its push is on its way, or the janitor has it
@@ -490,6 +495,13 @@ class Coordinator:
         self.events.emit(RESTART_ASKED, tab=tab_id, deliver={
             "content": restart_asked_message(tokens or budget, budget),
             "meta": {"from": "daemon"}})
+
+    def _last_report(self) -> str | None:
+        """The catalog id of the run's latest progress report, if it has one."""
+        run = self.session.intent.run
+        if run is None or run.checkpoints == 0:
+            return None
+        return run_id(self.session.progress_report(run, run.checkpoints))
 
     def _pending_of(self, tabs: set[str]) -> list[dict[str, Any]]:
         return [i for i in self.questions.pending()
@@ -541,6 +553,7 @@ def methods(session: "Session", questions: Questions, channels: Channels,
             caller: str) -> dict[str, Callable[..., Any]]:
     """The machine tab's verbs on its own socket, refused on any other tab's."""
     verbs = Verbs(session, questions, channels)
+    library = Library(session.paths, session, parse_permissions, PERMISSIONS_ABSENT)
 
     def only_machine(verb: Callable[..., Any]) -> Callable[..., Any]:
         def call(*args: Any, **kwargs: Any) -> Any:
@@ -572,12 +585,23 @@ def methods(session: "Session", questions: Questions, channels: Channels,
     def report_run(report: str) -> dict[str, Any]:
         return session.report_run(caller, report, record())
 
+    def document_save(id: str, text: str, version: str | None = None) -> dict[str, Any]:
+        """Every tab reads the catalog (`library.served_to_tabs`); the machine's documents are
+        the machine tab's to change, through the same checks as the user's own save."""
+        tab = session.intent.tabs.get(caller)
+        if tab is None or not tab.machine:
+            raise SessionError("the catalog's documents are the machine tab's to change: "
+                               "message it (`to` \"machine\") with the change; your own "
+                               "project's documents are in /work")
+        return save_from_tab(library, id, text, version)
+
     return {name: only_machine(verb) for name, verb in (
         *((n, getattr(verbs, n)) for n in ("manage", "managed", "managed_tab", "direct",
                                            "answer_question", "restart_fresh", "hold")),
         ("ready_to_restart", ready_to_restart), ("report_run", report_run),
         # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
-        ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)))}
+        ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)))
+    } | {"document_save": document_save}
 
 
 def hand_on(session: "Session", tab: str) -> dict[str, Any]:

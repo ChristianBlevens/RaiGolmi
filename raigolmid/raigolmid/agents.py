@@ -287,6 +287,8 @@ with `docker commit`.
   `screenshot` and `face_input` with `trial`.
 - Each face's apps keep their own settings; `seed_face_settings` starts one face's from
   another's.
+- `documents` and `document` read the user's catalog: every document an agent reads, the runs'
+  reports and every tab's thoughts included. The machine tab changes them with `document_save`.
 - `ask_user` puts to the user, in this tab, a choice that is theirs. End your turn: their answer
   is your next message. A question written only in your reply reaches nobody.
 

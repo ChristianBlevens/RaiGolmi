@@ -26,11 +26,12 @@ from typing import Any, Callable
 from . import api, hostsurfaces, jobs, naming, permissions
 from .api import ApiServer
 from .channel import Channels
+from .library import Library, served_to_tabs
 from . import coordinator
 from .events import EventLog
 from .intent import JANITOR
 from .paths import Paths
-from .questions import Questions
+from .questions import PERMISSIONS_ABSENT, Questions, parse_permissions
 from .session import Session, SessionError
 
 SOCKET = "raigolmid.sock"
@@ -162,10 +163,15 @@ def _talking(session: Session, questions: Questions, channels: Channels,
     }
 
 
+def _library(session: Session) -> Library:
+    return Library(session.paths, session, parse_permissions, PERMISSIONS_ABSENT)
+
+
 def build_tab_methods(session: Session, questions: Questions, channels: Channels,
                       tab_id: str) -> dict[str, Callable[..., Any]]:
     here = lambda: instance_of(session, tab_id)                     # noqa: E731
     return {
+        **served_to_tabs(_library(session)),
         "version": lambda: {"protocol": api.PROTOCOL_VERSION, "epoch": session.epoch},
         "status": lambda: tab_status(session, questions, channels, tab_id),
         "list_items": lambda kind=None: session.list_items(kind),
@@ -213,6 +219,7 @@ def build_machine_methods(full: dict[str, Callable[..., Any]], session: Session,
                           questions: Questions,
                           channels: Channels) -> dict[str, Callable[..., Any]]:
     return {**{name: full[name] for name in MACHINE},
+            **served_to_tabs(_library(session)),
             "index": session.machine_index,
             # Any sandbox's body, which is the janitor's to repair too.
             "restart_body": lambda instance: session.restart_body(instance),

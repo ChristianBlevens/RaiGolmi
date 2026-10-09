@@ -176,6 +176,20 @@ def build_server(client: ApiClient):
     def index() -> dict[str, Any]:
         return call("index")
 
+    @tool(server, description="The user's catalog: every document an agent reads, each with "
+                             "its id, its group (Settings, Machine, Layers, Projects, Janitor, "
+                             "Runs, Thoughts, Shipped) and whether it can be edited. Runs holds "
+                             "every run's reports and records; Thoughts, every tab's thought "
+                             "doc and the archived ones. Read one with `document`.")
+    def documents() -> list[dict[str, Any]]:
+        return call("documents")
+
+    @tool(server, description="One catalog document by its id from `documents`: its text and "
+                             "the version a save names. A document not written yet opens on "
+                             "the text its reader uses without it.")
+    def document(id: str) -> dict[str, Any]:
+        return call("document", id=id)
+
     register_declare(server)
 
     @tool(server, description="The faces, toolbelts and bodies as the user's selector shows "
@@ -368,6 +382,15 @@ def build_server(client: ApiClient):
     def restart_fresh(tab: str, documents_ready: bool = False) -> dict[str, Any]:
         return call("restart_fresh", tab=tab, documents_ready=documents_ready)
 
+    @tool(server, description="Machine tab only: save a catalog document by its id, with "
+                             "the `version` `document` gave, the way the user's own save in "
+                             "the catalog does: a document with rules (the settings, the "
+                             "permissions, a primer) is refused with why if it breaks them, "
+                             "and a save over a newer write is refused. Runs, Thoughts and "
+                             "Shipped are shown and never edited.")
+    def document_save(id: str, text: str, version: str | None = None) -> dict[str, Any]:
+        return call("document_save", id=id, text=text, version=version)
+
     @tool(server, description="Machine tab only, when the user asks: move every agent to the "
                              "newest Claude Code, or back to the one this release pins with "
                              "`pinned`, as `rai claude-update` does. It builds the agent image, "
@@ -480,6 +503,20 @@ def build_machine_server(client: ApiClient):
                              "face, toolbelt and body. Generated at each call.")
     def index() -> dict[str, Any]:
         return call("index")
+
+    @tool(server, description="The user's catalog: every document an agent reads, each with "
+                             "its id, its group (Settings, Machine, Layers, Projects, Janitor, "
+                             "Runs, Thoughts, Shipped) and whether it can be edited. Runs holds "
+                             "every run's reports and records; Thoughts, every tab's thought "
+                             "doc and the archived ones. Read one with `document`.")
+    def documents() -> list[dict[str, Any]]:
+        return call("documents")
+
+    @tool(server, description="One catalog document by its id from `documents`: its text and "
+                             "the version a save names. A document not written yet opens on "
+                             "the text its reader uses without it.")
+    def document(id: str) -> dict[str, Any]:
+        return call("document", id=id)
 
     register_declare(server)
 

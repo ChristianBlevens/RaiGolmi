@@ -111,7 +111,7 @@ class Library:
         # A run's report and record are what happened while the user was away, kept as written.
         if p.runs.is_dir():
             for path in sorted(p.runs.glob("*.md"), reverse=True):
-                add(Document(f"run/{path.name}", "Runs", path.stem, path, False))
+                add(Document(run_id(path), "Runs", path.stem, path, False))
 
         # A thought is what an AI was thinking; editing one would make history unreliable.
         for tab_id in sorted(self.session.intent.tabs):
@@ -163,3 +163,25 @@ class Library:
             doc.check(text)
         docwrite.write(doc.path, text, version)
         return self.read(id)
+
+
+def run_id(path: Path) -> str:
+    """A run's file as the catalog names it, which is how a tab reads it (`document`)."""
+    return f"run/{path.name}"
+
+
+def served_to_tabs(library: Library) -> dict[str, Callable[..., Any]]:
+    """The catalog as every tab, the janitor included, is served it: each document listed and
+    read by its id. Saving is the machine tab's alone (`coordinator.methods`), since the
+    machine's documents are its work and a body tab's own are in its `/work`."""
+    return {"documents": library.list, "document": lambda id: _for_tab(library.read(id))}
+
+
+def save_from_tab(library: Library, id: str, text: str, version: str | None) -> dict[str, Any]:
+    return _for_tab(library.write(id, text, version))
+
+
+def _for_tab(read: dict[str, Any]) -> dict[str, Any]:
+    """Without the host path: most documents are not mounted in a tab, so the id is how it
+    names one."""
+    return {k: v for k, v in read.items() if k != "path"}

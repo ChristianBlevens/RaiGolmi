@@ -42,6 +42,7 @@ from .faces import FaceError, Faces
 from .facemounts import FaceMounts, FaceMountError
 from .instances import Instance, Instances, RebuildResult
 from .jobs import Jobs
+from .library import run_id
 from .intent import JANITOR, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent
 from .launcher import LauncherError, LauncherOutputHeld, LauncherUnreachable
 from .paths import Paths
@@ -1679,7 +1680,7 @@ class Session:
         if mine.is_file():
             kept = self.paths.runs / f"{name}-record-{stretch:02d}.md"
             os.replace(mine, kept)
-        return {"record": str(kept) if kept else None, "daemon_record": str(daemon)}
+        return {"record": run_id(kept) if kept else None, "daemon_record": run_id(daemon)}
 
     def checkpoint_run(self, machine_tab: str, report: str, record: list[str],
                        read_at: float) -> dict[str, Any]:
@@ -1696,7 +1697,7 @@ class Session:
                                    "hands you a tab")
             stretch = run.checkpoints + 1
             self.paths.runs.mkdir(parents=True, exist_ok=True)
-            path = self.paths.runs / f"{_run_name(run)}-progress-{stretch:02d}.md"
+            path = self.progress_report(run, stretch)
             path.write_text(f"# The run's progress, stretch {stretch}, "
                             f"{_span(run.since or run.started, time.time())}\n\n"
                             f"{report.strip()}\n", encoding="utf-8")
@@ -1705,7 +1706,11 @@ class Session:
             self.store.save(self.intent)
         self.events.emit("run.checkpoint", tab=machine_tab, started=run.started,
                          stretch=stretch, report=path.name)
-        return {"report": str(path), **filed}
+        return {"report": run_id(path), **filed}
+
+    def progress_report(self, run: Run, stretch: int) -> Path:
+        """Where a stretch's progress report is filed."""
+        return self.paths.runs / f"{_run_name(run)}-progress-{stretch:02d}.md"
 
     def report_run(self, machine_tab: str, report: str, record: list[str]) -> dict[str, Any]:
         """The machine tab's report on the run that is over, kept under `Paths.runs` beside
@@ -1735,8 +1740,9 @@ class Session:
             self.store.save(self.intent)
         self.events.emit("run.reported", tab=machine_tab, started=run.started, ended=run.ended,
                          report=path.name)
-        return {"report": str(path), **filed, "status": "reported",
-                "next": "The user reads it in the catalog, under Documents, Runs."}
+        return {"report": run_id(path), **filed, "status": "reported",
+                "next": "The user reads it in the catalog, under Documents, Runs; any tab "
+                        "reads it with `document`."}
 
     def managed_tabs(self) -> set[str]:
         return {t.tab_id for t in self.intent.tabs.values() if t.managed}

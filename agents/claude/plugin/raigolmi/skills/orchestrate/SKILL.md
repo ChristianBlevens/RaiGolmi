@@ -46,7 +46,8 @@ audited: 7102 2026-10-05
 ## Starting or resuming a run
 
 1. Read the project's `SESSION-START.md` and its across-sessions entry: that is the run's
-   starting state. Read the last run's report only for what it says is open.
+   starting state. Read the last run's report (`documents`, group Runs, then `document`)
+   only for what it says is open.
 2. `manage` the body's tab and start `run.md`.
 3. Resumed after a handover: `managed_tab` lists the directions already on their way
    (`directions_queued`); never send one twice.
