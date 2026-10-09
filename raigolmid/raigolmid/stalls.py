@@ -11,8 +11,8 @@ copy of its own, so only a body tab is read for spinning; a job it runs printing
 
 Each is said once per episode as `tab.stalled` or `tab.spinning`, which the janitor takes
 (`janitor.py`) with the evidence: the transcript's last calls, the background tasks the tab
-named as waited on (`agent_stop.py`), and the processes in its agent's container and its
-sandbox's toolbelt — read from the host, since the janitor has no shell in a sandbox. A wait that is real — a long test the tab is rightly
+named as waited on (`agent_stop.py`), and the processes in its agent's container and a body
+tab's sandbox toolbelt — read from the host, since the janitor has no shell in a sandbox. A wait that is real — a long test the tab is rightly
 waiting on — is said too, and the janitor's look leaves it alone: one look is the price of
 never missing a hang. The janitor's own stall has nobody to take it, so it is unstuck here.
 
@@ -225,7 +225,7 @@ class Stalls:
     def _evidence(self, body: str | None, tab_id: str, home: Path,
                   since: float) -> dict[str, Any]:
         """What the janitor judges by, read-only: what the tab last called and waits on, and
-        what runs in its agent's container and its sandbox's toolbelt, where those calls ran."""
+        what runs in its agent's container and a body tab's sandbox toolbelt, where those calls ran."""
         sandbox = None if body is None else naming.instance_id(body, tab_id)
         containers = [naming.agent(tab_id)] + ([] if sandbox is None else [naming.view(sandbox)])
         processes = {}

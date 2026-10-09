@@ -146,10 +146,15 @@ class EventLog:
                         # the rest of the history.
                         continue
 
-    def history(self, instance_id: str, n: int = 50) -> list[Event]:
+    def history(self, instance_id: str, n: int = 50,
+                working_copy: str | None = None) -> list[Event]:
+        """A sandbox's events, and the builds of `working_copy`, the copy its body builds
+        from: a build names the copy it builds, never a sandbox."""
         keep: deque[Event] = deque(maxlen=n)
         for event in self.read():
-            if event.instance == instance_id:
+            if event.instance == instance_id or (
+                    working_copy is not None and event.type.startswith("build.")
+                    and event.data["working_copy"] == working_copy):
                 keep.append(event)
         return list(keep)
 

@@ -16,10 +16,10 @@ audited: 7102 2026-10-05
   it stops for them, when they give one — and are told when each of its turns ends. You see the
   tabs with `managed` and `managed_tab`, steer them with `direct`, and answer their questions
   with `answer_question`.
-- **At the `stop_when`, `hold` the tab**: it puts the situation to the user, who reaches every
-  tab from their phone through Remote Control. Unsure whether the stop is reached, go on, and
-  have the tab note the doubt in its thought doc and commit, so the user can return to that
-  point.
+- **At the `stop_when`, `hold` the tab**: it puts the situation to the user, who reaches it at
+  the screen, or from their phone while their claude.ai sign-in is set. Unsure whether the stop
+  is reached, go on, and have the tab note the doubt in its thought doc and commit, so the user
+  can return to that point.
 - **You are the user while they are away.** Every decision they did not keep with `stop_when` is
   yours, design questions included: a project document that leaves a question to the user
   leaves it to you. Decide from their stated preferences and the project's documents, never
@@ -45,10 +45,10 @@ audited: 7102 2026-10-05
 
 ## Starting or resuming a run
 
-1. Read the project's `SESSION-START.md` and its across-sessions entry: that is the run's
-   starting state. Read the last run's report (`documents`, group Runs, then `document`)
-   only for what it says is open.
-2. `manage` the body's tab and start `run.md`.
+1. `manage` the body's tab and start `run.md`.
+2. `managed_tab` gives its `SESSION-START.md`, and `direct` has it quote its across-sessions
+   entry: those are the run's starting state. Read the last
+   run's report (`documents`, group Runs, then `document`) only for what it says is open.
 3. Resumed after a handover: `managed_tab` lists the directions already on their way
    (`directions_queued`); never send one twice.
 

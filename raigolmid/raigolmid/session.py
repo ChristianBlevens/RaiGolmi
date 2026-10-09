@@ -17,6 +17,7 @@ intent, the instances and the queues, and it is where the rules that span them l
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import re
 import shlex
@@ -282,9 +283,13 @@ class Session:
         if tab is None:
             raise SessionError(f"no tab {tab_id}")
         layers = self.list_items()
-        found = documents.index(
-            self._place(tab).working_copy, self.agents.home(tab_id),
-            self._layers_of(layers))
+        rows = self._layers_of(layers)
+        if tab.body is not None:
+            # A body tab has the faces read-only: a face doc it cannot write is not expected
+            # of it, and one that is written is still its to read.
+            rows = [r for r in rows
+                    if r.kind != "faces" or (r.directory / documents.LAYER_DOC).is_file()]
+        found = documents.index(self._place(tab).working_copy, self.agents.home(tab_id), rows)
         return {**found, "layers": layers}
 
     def machine_index(self) -> dict[str, Any]:
@@ -543,7 +548,7 @@ class Session:
                         timeout=180)
 
     # --- sandboxes, opened by agents -------------------------------------------------
-    def sandbox_open(self, tab_id: str, toolbelt_id: str) -> dict[str, Any]:
+    def sandbox_open(self, tab_id: str, toolbelt_id: str) -> None:
         """A tab opens its sandbox — the body on the tab's own working copy, with the
         toolbelt it names — when it needs to run something. At most one per tab, held by the
         tab's reference until it closes. The face tab's is the active sandbox: the one the
@@ -583,7 +588,6 @@ class Session:
             self.store.save(self.intent)
             self.events.emit("sandbox.opened", tab=tab_id, instance=place.sandbox,
                              toolbelt=toolbelt.id)
-            return self.status()
 
     def check_toolbelt_swap(self, tab_id: str, toolbelt_id: str) -> bool:
         """What `toolbelt_swap` would refuse, asked before the user is: a permission for a
@@ -598,7 +602,7 @@ class Session:
             self._toolbelt_for(tab, place, toolbelt_id)
             return self.intent.instances[place.sandbox].toolbelt != toolbelt_id
 
-    def toolbelt_swap(self, tab_id: str, toolbelt_id: str) -> dict[str, Any]:
+    def toolbelt_swap(self, tab_id: str, toolbelt_id: str) -> None:
         """The toolbelt swapped in place: the body keeps running and the views
         are recreated, which ends whatever ran in the toolbelt's container. The active
         sandbox is the one the user works in, so its swap waits on their permission, asked
@@ -612,7 +616,7 @@ class Session:
             want = self.intent.instances[place.sandbox]
             toolbelt = self._toolbelt_for(tab, place, toolbelt_id)
             if want.toolbelt == toolbelt.id:
-                return self.status()
+                return
         # Build first: the image is fetched while the old view still serves, and
         # only a fetched toolbelt becomes the sandbox's. The fetch touches no container of the
         # sandbox, so it is off its queue; the intent is written under the lock and never on the
@@ -630,7 +634,6 @@ class Session:
                 self._show(place.sandbox)
             self.events.emit("toolbelt.swapped", tab=tab_id, instance=place.sandbox,
                              toolbelt=toolbelt.id)
-            return self.status()
 
     def toolbelts_for(self, tab_id: str) -> dict[str, dict[str, Any]]:
         """Every toolbelt with whether this tab's sandbox may run it, and why not."""
@@ -936,7 +939,8 @@ class Session:
 
     def hold(self, tab_id: str, situation: str) -> dict[str, Any]:
         """A managed tab stopped for the user, until their own words in it release it
-        (`release`). It is on Remote Control already, as every tab is (`Agents.start`)."""
+        (`release`). It is on Remote Control while the user's claude.ai sign-in is set, as
+        every tab is then (`remotecontrol.py`)."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
@@ -1024,7 +1028,7 @@ class Session:
                     self.store.save(self.intent)
                 return "quit"
             mark_crashed(self.events, tab_id, tab, self._open_sandbox_of(tab),
-                         exit_code=exit.container.exit_code, log=str(exit.evidence))
+                         exit_code=exit.container.exit_code, log=exit.evidence)
             try:
                 return self.supervisor.settle(exit, lambda: self._reopen(tab_id))
             finally:
@@ -1406,8 +1410,21 @@ class Session:
         return self.index.search(query, limit)
 
     def history(self, instance_id: str, n: int = 50) -> list[dict[str, Any]]:
-        import json
-        return [json.loads(e.to_json()) for e in self.events.history(instance_id, n)]
+        """A sandbox's lifecycle and its body's builds. A sandbox id names its body, and the
+        body's working copy is what its builds are keyed by; a body no longer defined, or
+        with no directory, has no copy built, so only the sandbox's own events are read."""
+        body_id, _ = naming.split(instance_id)
+        body = self.catalogue.bodies.get(body_id) if body_id is not None else None
+        root = body.source_root if body is not None else None
+        copy = str(root) if root is not None else None
+        return [json.loads(e.to_json()) for e in self.events.history(instance_id, n, copy)]
+
+    def tab_history(self, tab_id: str, n: int = 50) -> list[dict[str, Any]]:
+        """A tab's sandbox's history, open or not: a sandbox that failed to open is released,
+        and its failed build is what the tab most needs to read."""
+        with self._lock:
+            sandbox = self._place(self._tab(tab_id)).sandbox
+        return self.history(sandbox, n)
 
     def _on_sandbox_exit(self, unit: Unit, container_id: str) -> str:
         """A sandbox's body, view or anchor that exits on its own.

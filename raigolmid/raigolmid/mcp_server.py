@@ -33,9 +33,9 @@ INSTRUCTIONS = """\
 You are working inside a RaiGolmi agent container, scoped to one sandbox. `index` is
 where to start: the documents for this tab and every layer on the machine.
 
-Durable changes go in the definition files, never into a running container: edit the
-body's Dockerfile or dependency files and call `rebuild_body`, or edit the toolbelt's
-package list. Nothing is persisted with `docker commit`.
+Durable changes go in the definition files, never into a running container: a body's
+Dockerfile or dependency files, then `rebuild_body` when your sandbox has a body, or a
+toolbelt's package list. Nothing is persisted with `docker commit`.
 
 To run anything, open your sandbox first with `sandbox_open` and the toolbelt the work
 needs. You may experiment in it with `exec` — those writes land in the body's writable
@@ -114,7 +114,8 @@ def as_seen_inside(value: Any, mounts: list[tuple[str, str]]) -> Any:
     if isinstance(value, list):
         return [as_seen_inside(v, mounts) for v in value]
     if isinstance(value, dict):
-        return {k: as_seen_inside(v, mounts) for k, v in value.items()}
+        # Keys too: `builds` is keyed by working copy.
+        return {as_seen_inside(k, mounts): as_seen_inside(v, mounts) for k, v in value.items()}
     return value
 
 
@@ -123,6 +124,21 @@ def container_mounts() -> list[tuple[str, str]]:
     nothing to translate, and the answers are left as the host's."""
     raw = os.environ.get("RAIGOLMI_MOUNTS")
     return [] if raw is None else [(host, inside) for host, inside in json.loads(raw)]
+
+
+class SeenInside:
+    """raigolmid as this container sees it: every answer, refusal and channel item in the
+    paths the agent reaches (`as_seen_inside`)."""
+
+    def __init__(self, client: ApiClient) -> None:
+        self.client = client
+        self.mounts = container_mounts()
+
+    def call(self, method: str, **params: Any) -> Any:
+        try:
+            return as_seen_inside(self.client.call(method, **params), self.mounts)
+        except ApiError as exc:
+            raise ApiError(as_seen_inside(str(exc), self.mounts), kind=exc.kind) from exc
 
 
 def register_declare(server) -> None:
@@ -151,15 +167,13 @@ def register_declare(server) -> None:
 def build_server(client: ApiClient):
     from mcp.server.mcpserver import MCPServer
 
-    mounts = container_mounts()
+    client = SeenInside(client)
     server = MCPServer(
         name="raigolmi",
         version="0.1.0",
         instructions=INSTRUCTIONS,
     )
-
-    def call(method: str, **params: Any) -> Any:
-        return as_seen_inside(client.call(method, **params), mounts)
+    call = client.call
 
     @tool(server, description="What is running on this machine, scoped to your sandbox: "
                              "its body, toolbelt, health, and the state of any build. "
@@ -534,11 +548,9 @@ def build_server(client: ApiClient):
 def build_machine_server(client: ApiClient):
     from mcp.server.mcpserver import MCPServer
 
-    mounts = container_mounts()
+    client = SeenInside(client)
     server = MCPServer(name="raigolmi", version="0.1.0", instructions=MACHINE_INSTRUCTIONS)
-
-    def call(method: str, **params: Any) -> Any:
-        return as_seen_inside(client.call(method, **params), mounts)
+    call = client.call
 
     @tool(server, description="The whole machine: selection, every sandbox and its health, "
                              "builds, queues, every agent tab, the face and host surfaces.")
@@ -712,6 +724,7 @@ def serve_with_channel(client: ApiClient, server) -> None:
     from mcp.server.runner import serve_loop
     from mcp.server.stdio import stdio_server
 
+    client = SeenInside(client)
     lowlevel = server._lowlevel_server
     ready = anyio.Event()
     state: dict[str, Any] = {}

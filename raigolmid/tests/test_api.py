@@ -106,8 +106,10 @@ def test_history_is_scoped_to_one_instance(api):
 
     history = client.call("history", instance_id=webui)
     assert history
-    assert all(e["instance"] == webui for e in history), \
-        "an agent must see its own instance's history, not the whole machine's"
+    copy = str(h.session.catalogue.bodies["webui"].source_root)
+    assert all(e.get("instance") == webui or e.get("working_copy") == copy
+               for e in history), \
+        "an agent must see its own instance's history and its body's builds, not the machine's"
 
 
 def test_the_socket_is_owner_only(api):

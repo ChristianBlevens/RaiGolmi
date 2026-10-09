@@ -29,7 +29,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from . import labels
@@ -99,10 +98,11 @@ def unit_of(role: str, attributes: dict[str, str]) -> Unit | None:
 
 @dataclass(frozen=True, slots=True)
 class Exit:
-    """A container that exited on its own, with where its evidence was written."""
+    """A container that exited on its own, with its crash log's name in `Paths.crashes`: what
+    `crash_logs` reads, and never a host path, which no container could open."""
     unit: Unit
     container: ContainerInfo
-    evidence: Path
+    evidence: str
 
 
 class Supervisor:
@@ -126,7 +126,7 @@ class Supervisor:
         evidence = self._evidence(unit, info)
         self.events.emit("container.exited", **unit.scope(), kind=unit.kind, unit=unit.name,
                          container=container, exit_code=info.exit_code,
-                         evidence=str(evidence))
+                         evidence=evidence)
         return Exit(unit, info, evidence)
 
     def settle(self, exit: Exit, restart: Callable[[], str | None]) -> str:
@@ -174,9 +174,9 @@ class Supervisor:
 
     def _unfixable(self, exit: Exit, message: str) -> None:
         self.unfixable(exit.unit, exit.container.name, message,
-                       exit_code=exit.container.exit_code, evidence=str(exit.evidence))
+                       exit_code=exit.container.exit_code, evidence=exit.evidence)
 
-    def _evidence(self, unit: Unit, info: ContainerInfo) -> Path:
+    def _evidence(self, unit: Unit, info: ContainerInfo) -> str:
         """Docker refusing the logs is recorded as the answer (`diagnostic_log`): this exists
         to explain a failure and may not fail on it. Named for the container that died, so
         two exits a second apart keep two logs."""
@@ -187,4 +187,4 @@ class Supervisor:
                                     f"-{info.id[:12]}.log")
         log.write_text(f"exit code: {info.exit_code}\n{output}")
         self._prune()
-        return log
+        return log.name

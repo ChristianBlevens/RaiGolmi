@@ -86,6 +86,8 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
         instance, note = instance_of(session, tab_id), None
     except SessionError as exc:
         instance, note = None, str(exc)
+    # Builds are keyed by the working copy built: a tab's are its own body's copy's only.
+    own_copy = session.working_copy(tab_id)
     out: dict[str, Any] = {
         "instance": instance,
         "tab": next((a for a in full["agents"] if a["tab"] == tab_id), None),
@@ -95,7 +97,8 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
                     "on_face": instance is not None
                     and full["session"]["focused_instance"] == instance},
         "definition_errors": full.get("definition_errors", []),
-        "builds": full.get("builds", {}),
+        "builds": {key: build for key, build in full["builds"].items()
+                   if own_copy is not None and key == str(own_copy)},
     }
     if tab_id != JANITOR:
         out["toolbelts"] = session.toolbelts_for(tab_id)
@@ -128,7 +131,8 @@ def _talking(session: Session, questions: Questions, channels: Channels,
         # A tab the user handed over has their yes to everything it does.
         if (session.intent.focused_instance != session.intent.sandbox_of(tab_id)
                 or session.intent.hands_off(tab_id)):
-            return session.toolbelt_swap(tab_id, toolbelt)
+            session.toolbelt_swap(tab_id, toolbelt)
+            return tab_status(session, questions, channels, tab_id)
         # The active sandbox is the one the user works in: refused now if it could not
         # be done at all, and otherwise done on their yes.
         if not session.check_toolbelt_swap(tab_id, toolbelt):
@@ -156,7 +160,8 @@ def _talking(session: Session, questions: Questions, channels: Channels,
 
     return {
         "ask": ask,
-        "sandbox_open": lambda toolbelt: session.sandbox_open(tab_id, toolbelt),
+        "sandbox_open": lambda toolbelt: (session.sandbox_open(tab_id, toolbelt),
+                                          tab_status(session, questions, channels, tab_id))[1],
         "toolbelt_swap": swap,
         "channel_take": lambda: channels.take(tab_id),
         "channel_state": lambda: channels.state(tab_id),
@@ -224,7 +229,7 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
         "restart_face": lambda: session.restart_face(tab_id),
         "seed_face_settings": lambda face, source: session.seed_face_settings(
             tab_id, face, source),
-        "history": lambda n=50: session.history(here(), n),
+        "history": lambda n=50: session.tab_history(tab_id, n),
         "logs": lambda tail=100: api._logs(session, here(), tail),
         "search_packages": lambda query, limit=20: session.search_packages(query, limit),
         # Tabs message each other; the janitor does not (`messages.py`).

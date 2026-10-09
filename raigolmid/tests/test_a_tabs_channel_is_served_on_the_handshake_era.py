@@ -21,7 +21,8 @@ SERVER = textwrap.dedent("""
                 raise ApiError(f"unknown method {method!r}")
             if not Client.taken:
                 Client.taken = True
-                return {"seq": 1, "content": "hello", "meta": {"seq": "1"}}
+                return {"seq": 1, "content": "hello from /host/work/app",
+                        "meta": {"seq": "1", "incident": "/host/work/app"}}
             return None
 
     mcp_server.serve_with_channel(Client(), mcp_server.build_machine_server(Client()))
@@ -39,9 +40,12 @@ def _send(proc, message: dict) -> None:
 
 def test_the_modern_probe_is_refused_and_the_handshake_carries_the_channel():
     raigolmid = Path(__file__).resolve().parents[1]
+    # The daemon's host paths reach the agent as the paths its container mounts them at.
     proc = subprocess.Popen([sys.executable, "-B", "-c", SERVER], cwd=raigolmid, text=True,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, env={"PYTHONPATH": str(raigolmid)})
+                            stderr=subprocess.PIPE, env={
+                                "PYTHONPATH": str(raigolmid),
+                                "RAIGOLMI_MOUNTS": json.dumps([["/host/work", "/work"]])})
     try:
         _send(proc, {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {
             "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}})
@@ -55,7 +59,8 @@ def test_the_modern_probe_is_refused_and_the_handshake_carries_the_channel():
         _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         pushed = _line(proc)
         assert pushed["method"] == "notifications/claude/channel"
-        assert pushed["params"] == {"content": "hello", "meta": {"seq": "1"}}
+        assert pushed["params"] == {"content": "hello from /work/app",
+                                    "meta": {"seq": "1", "incident": "/work/app"}}
     finally:
         proc.kill()
         proc.wait()

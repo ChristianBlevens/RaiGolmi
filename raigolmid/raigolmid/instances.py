@@ -237,7 +237,11 @@ class Instances:
             return BuildOutcome(digest=digest, succeeded=True, image=tag, log="",
                                 duration=time.monotonic() - started)
 
-        self.events.emit("build.started", body=body.id, digest=digest, tag=tag)
+        # A build is of one working copy, and may serve every sandbox on it (`BuildLock`), so
+        # its events name the copy rather than a sandbox; `EventLog.history` reads them by it.
+        copy = str(body.source_root)
+        self.events.emit("build.started", body=body.id, working_copy=copy, digest=digest,
+                         tag=tag)
         assert body.dockerfile is not None and body.build_context is not None
         result = self.runtime.build(
             context=str(body.build_context),
@@ -249,12 +253,12 @@ class Instances:
         )
         duration = time.monotonic() - started
         if not result.succeeded:
-            self.events.emit("build.failed", body=body.id, digest=digest,
+            self.events.emit("build.failed", body=body.id, working_copy=copy, digest=digest,
                              seconds=round(duration, 2), log=result.log[-4000:])
             return BuildOutcome(digest=digest, succeeded=False, image="",
                                 log=result.log, duration=duration)
-        self.events.emit("build.complete", body=body.id, digest=digest, tag=tag,
-                         seconds=round(duration, 2))
+        self.events.emit("build.complete", body=body.id, working_copy=copy, digest=digest,
+                         tag=tag, seconds=round(duration, 2))
         superseded.drop_older(self.runtime, tag)
         return BuildOutcome(digest=digest, succeeded=True, image=tag, log=result.log,
                             duration=duration)

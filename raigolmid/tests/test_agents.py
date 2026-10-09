@@ -11,7 +11,7 @@ import pytest
 
 from raigolmid.channel import Channels
 from raigolmid.questions import Questions
-from raigolmid import credproxy, naming
+from raigolmid import api, credproxy, naming
 from raigolmid.agents import AgentError, AgentSpec
 from raigolmid.intent import TabIntent
 from raigolmid.session import SessionError
@@ -133,7 +133,8 @@ def test_an_agent_that_exits_on_its_own_is_announced_and_reopened(h):
 
     crashed = h.events_of("agent.crashed")[-1]
     assert crashed.tab == tab and crashed.data["exit_code"] == 1
-    assert Path(crashed.data["log"]).read_text().startswith("exit code: 1\n")
+    # A name `crash_logs` reads, never a host path a tab's history would carry.
+    assert api._crash_logs(h.session, crashed.data["log"])["log"].startswith("exit code: 1\n")
     assert h.session.intent.tabs[tab].status == "running"
     container = h.runtime.inspect(naming.agent(tab))
     assert container.running and container.id != dead
@@ -159,7 +160,8 @@ def test_the_reopened_agent_exiting_on_its_own_goes_to_the_janitor(h):
     [unfixable] = h.events_of("container.unfixable")
     assert (unfixable.tab, unfixable.data["kind"], unfixable.data["exit_code"]) == \
         (tab, "agent", 2)
-    assert Path(unfixable.data["evidence"]).read_text().startswith("exit code: 2\n")
+    assert api._crash_logs(h.session, unfixable.data["evidence"])["log"].startswith(
+        "exit code: 2\n")
     assert "container.unfixable" in TAKEN and "container.exited" not in TAKEN
     logs = {e.data["log"] for e in h.events_of("agent.crashed")}
     assert len(logs) == 2, "each crash keeps its own evidence, however close together"
@@ -229,6 +231,75 @@ def test_a_tabs_status_names_no_other_tab_or_sandbox(h):
     assert status["tab"]["tab"] == mine
     assert status["instance"] is None and status["session"]["instances"] == []
     assert status["session"]["on_face"] is False
+
+
+def test_a_tabs_status_names_no_other_bodys_build(h):
+    """Builds are keyed by the working copy built, a host path: another body's names its
+    project, so a tab's status carries its own body's build alone."""
+    import threading
+    from raigolmid.queues import BuildOutcome
+    from raigolmid.scopes import build_tab_methods
+
+    h.session.select("body", "webui")
+    other_copy = h.session.working_copy(h.tab("webui"))
+    mine = h.tab("myapi")
+    own_copy = h.session.working_copy(mine)
+    assert other_copy != own_copy
+    release = threading.Event()
+
+    def held() -> BuildOutcome:
+        release.wait(10)
+        return BuildOutcome(digest="d", succeeded=True, image="i", log="", duration=0.0)
+
+    builds = [threading.Thread(target=h.session.builds.build, args=(str(copy), "d", held))
+              for copy in (other_copy, own_copy)]
+    for build in builds:
+        build.start()
+    try:
+        deadline = time.time() + 5
+        while len(h.session.builds.state()) < 2 and time.time() < deadline:
+            time.sleep(0.01)
+        methods = build_tab_methods(h.session, Questions(h.events, h.paths),
+                                    Channels(h.session, h.events), mine)
+        assert set(methods["status"]()["builds"]) == {str(own_copy)}
+    finally:
+        release.set()
+        for build in builds:
+            build.join()
+
+
+def test_sandbox_open_answers_a_tab_with_its_own_status(h):
+    """`sandbox_open` and `toolbelt_swap` answer the tab that called them, never with the
+    machine's status, which names every sandbox and its working copy."""
+    from raigolmid.scopes import build_tab_methods
+
+    h.session.select("body", "webui")
+    other = h.tab("webui")
+    h.session.sandbox_open(other, "python-dev")
+    other_copy = str(h.session.working_copy(other))
+    mine = h.tab("myapi")
+    methods = build_tab_methods(h.session, Questions(h.events, h.paths),
+                                Channels(h.session, h.events), mine)
+    for answer in (methods["sandbox_open"]("python-dev"), methods["toolbelt_swap"]("no-lsp")):
+        assert answer["instance"] == naming.instance_id("myapi", mine)
+        assert other not in str(answer) and other_copy not in str(answer)
+
+
+def test_a_failed_build_is_in_the_tabs_history_though_its_sandbox_did_not_open(h):
+    """A sandbox whose body did not build is released with the failure, and the build's log
+    is what the tab most needs: its history is its place's, open or not."""
+    from raigolmid.scopes import build_tab_methods
+
+    h.session.select("body", "myapi")
+    tab = h.tab("myapi")
+    methods = build_tab_methods(h.session, Questions(h.events, h.paths),
+                                Channels(h.session, h.events), tab)
+    h.runtime.build_should_fail = True
+    with pytest.raises(SessionError, match="did not build"):
+        methods["sandbox_open"]("python-dev")
+
+    assert [e["type"] for e in methods["history"]() if e["type"] == "build.failed"] \
+        == ["build.failed"]
 
 
 def test_a_tab_acts_only_on_its_own_sandbox(h):
@@ -524,6 +595,54 @@ def test_a_refusal_reaches_the_agent_in_its_own_words(reason):
     assert reason in str(raised.value)
 
 
+class _Answering:
+    """The daemon answering every call with one host-path answer."""
+
+    def __init__(self, answer):
+        self.answer = answer
+
+    def call(self, method, **params):
+        return self.answer
+
+
+HOST = [["/host/work", "/work"]]
+
+
+def test_a_refusal_naming_a_host_path_names_the_path_the_agent_sees(monkeypatch):
+    import asyncio
+    from mcp.server.mcpserver.exceptions import ToolError
+    from raigolmid.mcp_server import build_server
+
+    monkeypatch.setenv("RAIGOLMI_MOUNTS", json.dumps(HOST))
+    server = build_server(_Refusing("/host/work/src is not a working copy"))
+    with pytest.raises(ToolError) as raised:
+        asyncio.run(server.call_tool("status", {}))
+    assert "/work/src is not a working copy" in str(raised.value)
+    assert "/host/work" not in str(raised.value)
+
+
+def test_an_answer_keyed_by_a_host_path_is_keyed_as_the_agent_sees_it(monkeypatch):
+    """`status.builds` is keyed by working copy."""
+    import asyncio
+    from raigolmid.mcp_server import build_server
+
+    monkeypatch.setenv("RAIGOLMI_MOUNTS", json.dumps(HOST))
+    server = build_server(_Answering({"builds": {"/host/work": {"state": "building"}}}))
+    payload = json.loads(asyncio.run(server.call_tool("status", {})).content[0].text)
+    assert payload == {"builds": {"/work": {"state": "building"}}}
+
+
+def test_what_arrives_mid_turn_names_the_paths_the_agent_sees(monkeypatch, capsys):
+    import argparse
+    import rai.__main__ as rai_main
+
+    monkeypatch.setenv("RAIGOLMI_MOUNTS", json.dumps(HOST))
+    monkeypatch.setattr(rai_main, "_client", lambda: _Answering(["built /host/work/app"]))
+    assert rai_main.cmd_agent_activity(argparse.Namespace(state="tool")) == 0
+    said = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "built /work/app" in said and "/host/work" not in said
+
+
 def test_a_repository_among_the_definitions_is_protected_in_every_agent(h):
     """A body whose working copy is its definition directory keeps its `.git` under the
     definitions, which every agent mounts writable; its hooks and config are read-only
@@ -578,3 +697,11 @@ def test_a_declared_document_is_one_that_exists_in_a_state_it_can_be_in(tmp_path
         with pytest.raises(ToolError) as raised:
             declare(wrong)
         assert said in str(raised.value)
+
+
+def test_a_body_tab_is_not_expected_to_write_a_face_doc_and_the_machine_tab_is(h):
+    face = next(f for f in h.session.catalogue.faces.values() if f.directory is not None)
+    doc = str(face.directory / "LAYER.md")
+    missing = lambda tab: {d["path"] for d in h.session.document_index(tab)["missing"]}  # noqa: E731
+    assert doc not in missing(h.tab("myapi"))
+    assert doc in missing(h.tab(None))

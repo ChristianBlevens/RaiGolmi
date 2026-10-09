@@ -131,8 +131,8 @@ class Messages:
             if m is None or m.to != tab:
                 raise MessageError(
                     f"no message {id} was sent to this tab. `reply` answers a tab's `message`; "
-                    "a direction from the machine tab, the janitor or the user is answered in "
-                    "your turn's own text, which its sender reads when the turn ends")
+                    "the machine tab and the user read your turn's own text when it ends, and "
+                    "the janitor's word needs no answer")
             if m.state == "withdrawn":
                 raise MessageError(f"tab {m.sender} closed; nobody is waiting on {id}")
             if m.state != "open":
@@ -168,7 +168,7 @@ class Messages:
                else intent.tabs.get(to) or intent.body_tab(to))
         if tab is None:
             raise MessageError(f"no open tab is {to!r}: name `machine`, a body with a tab, or "
-                               "a tab id; `status` lists the tabs")
+                               "a tab id")
         if tab.tab_id == JANITOR:
             raise MessageError("the janitor takes the machine's failures, not messages")
         return tab.tab_id

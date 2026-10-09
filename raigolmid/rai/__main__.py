@@ -1245,7 +1245,9 @@ def cmd_agent_activity(args) -> int:
     if args.state == "tool":
         # PostToolUse: what reached the tab while it works, added to the turn as the harness's
         # own context at this tool call (`Channels.take_midturn`); nothing printed otherwise.
-        said = _client().call("midturn")
+        # In the paths the agent reaches, as its channel's pushes are (`mcp_server.SeenInside`).
+        from raigolmid.mcp_server import SeenInside
+        said = SeenInside(_client()).call("midturn")
         if said:
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PostToolUse",

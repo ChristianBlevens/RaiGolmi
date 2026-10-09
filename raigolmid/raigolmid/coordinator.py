@@ -28,9 +28,9 @@ The janitor has no such verb: the daemon gives it a fresh conversation per failu
 
 **A managed tab stops where the user said** (`TabIntent.stop_when`, given as they hand it
 over, and in every message about it): at that goal or decision the machine tab `hold`s it on
-the situation, and the tab puts it to them, at the screen or on their phone through Remote
-Control (`Session.hold`). Nothing of the machine tab's reaches a held tab; the user's own words in it
-release it (`Session.release`), and the machine tab is told.
+the situation, and the tab puts it to them in its conversation (`Session.hold`). Nothing of
+the machine tab's reaches a held tab; the user's own words in it release it
+(`Session.release`), and the machine tab is told.
 
 **And stops when the user's time for it runs out** (`TabIntent.until`): the daemon, not the
 machine tab, pushes the wrap-up then (`time_up_message`, `tick`), and gives the tab back once
@@ -152,8 +152,8 @@ def hold_message(stop_when: str | None, situation: str) -> str:
     stop = f" at {stop_when!r}" if stop_when else ""
     return (f"From the machine tab: you are held for the user{stop}. The situation, as the "
             f"machine tab puts it:\n\n{situation}\n\nPut it to them now, in this "
-            "conversation, which they reach at the screen or from their phone: where the work stands, the choice or the next step that is theirs, the "
-            "options and what you recommend. Then end your turn; their answer is your next "
+            "conversation: where the work stands, the choice or the next step that is theirs, "
+            "the options and what you recommend. Then end your turn; their answer is your next "
             "message. Do nothing more of the work until it comes.")
 
 
