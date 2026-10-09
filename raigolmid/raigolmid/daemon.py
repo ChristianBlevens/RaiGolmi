@@ -126,12 +126,15 @@ class Daemon:
         self.paths.ensure()
         self.lock = Lock(paths.lock)
         self.epoch = self.lock.acquire()
-        settings.install(paths.settings)
+        # A setting a later release brings is added to the user's file here.
+        added = settings.install(paths.settings)
         # The product ships no layers: a machine starts with these empty, and every agent's
         # `/definitions` is the directory above them (`Session.definitions_root`).
         for directory in (*search.faces, *search.toolbelts, *search.bodies):
             directory.mkdir(parents=True, exist_ok=True)
         self.events = EventLog(paths.events, epoch=self.epoch)
+        if added:
+            self.events.emit("settings.added", settings=added)
         self.session = Session(runtime, paths, search, self.events, self.epoch)
         # Before anything in `start` can fail: the janitor hears the daemon's own start.
         self.janitor = Janitor(self.session, self.events)

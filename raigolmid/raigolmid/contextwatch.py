@@ -1,6 +1,6 @@
 """A tab past its context budget is told so, by the janitor, and never cut off.
 
-Every tab keeps to the user's context budget (`settings.toml`, the primer's budget line) by
+Every tab keeps to its context budget (`Session.context_budget`, the primer's budget line) by
 making its documents ready and ending its conversation before it is reached. A tab that misses
 that goes on working: stopping it would lose the work it is in the middle of. So it is
 noticed instead: each `TICK_SECONDS` every running tab's context — the input its latest answer
@@ -12,7 +12,6 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from . import settings
 from .events import EventLog
 from .intent import JANITOR
 from .transcript import context_tokens, latest_transcript
@@ -35,11 +34,11 @@ class ContextWatch:
             self.tick()
 
     def tick(self) -> None:
-        budget = settings.current(self.session.paths, self.events).budget_tokens
         for tab_id, tab in dict(self.session.intent.tabs).items():
             # The janitor's own conversation is one failure long and starts fresh each time.
             if tab_id == JANITOR or tab.status != "running":
                 continue
+            budget = self.session.context_budget(tab_id)
             home = self.session.agents.home(tab_id)
             transcript = latest_transcript(home)
             tokens = context_tokens(home)

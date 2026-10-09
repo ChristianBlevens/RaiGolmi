@@ -54,7 +54,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import api, documents, history, limits, settings
+from . import api, documents, history, limits
 from .channel import Channels
 from .events import Event, EventLog
 from .intent import Run, TabIntent
@@ -483,7 +483,7 @@ class Coordinator:
                 + (reply[0]["said"] if reply else "(none)")))
             return
         tokens = context_tokens(self.session.agents.home(tab_id))
-        budget = settings.current(self.session.paths, self.events).budget_tokens
+        budget = self.session.context_budget(tab_id)
         if tokens is None or tokens < budget:
             return
         self.session.hand_over(tab_id, "asked")
@@ -521,7 +521,7 @@ class Coordinator:
                     f"that conversation starts from, with `managed_tab`. {size} `direct` it to "
                     "fix what is stale or missing, or `restart_fresh` it to hand the work to "
                     "that conversation.")
-        budget = settings.current(self.session.paths, self.events).budget_tokens
+        budget = self.session.context_budget(tab_id)
         return (f"Tab {tab_id} ({body}), which you manage, {ended}. "
                 f"{_context_line(context_tokens(self.session.agents.home(tab_id)), budget)} "
                 "`managed_tab` shows its thought doc and latest turns."
@@ -624,7 +624,6 @@ class Verbs:
         context use."""
         status = api.with_tab_states(self.session.status(), self.questions, self.channels)
         pending = self.questions.pending()
-        budget = settings.current(self.session.paths, self.events).budget_tokens
         out = []
         for agent in status["agents"]:
             if not agent["managed"]:
@@ -639,7 +638,7 @@ class Verbs:
                 "until": intent.until,
                 "held": intent.held,
                 "context_tokens": context_tokens(self.session.agents.home(tab)),
-                "budget_tokens": budget,
+                "budget_tokens": self.session.context_budget(tab),
                 "questions": [{"id": i["id"], "message": i["message"],
                                "choices": list(i["choices"])}
                               for i in pending if i["tab"] == tab and i["kind"] == "question"],

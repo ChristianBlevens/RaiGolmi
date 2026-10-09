@@ -292,8 +292,9 @@ with `docker commit`.
 
 ## Working without the user
 
-Every agent keeps to a {budget}-token context budget, so keep `SESSION-START.md` good enough
-to continue from in a fresh conversation at any point. Your context use is the input your latest answer took —
+Every agent keeps to a {budget}-token context budget, and the machine tab to {machine_budget}
+while it manages tabs with the user away; the daemon holds you to it and says when you pass it.
+So keep `SESSION-START.md` good enough to continue from in a fresh conversation at any point. Your context use is the input your latest answer took —
 the last `usage` in the newest `~/.claude/projects/-work/*.jsonl` — which is what the daemon
 measures; read it there rather than estimating. The user can hand body tabs to the machine tab to manage,
 and is then away: nothing a managed tab or the machine tab does waits on them. A managed tab's
@@ -402,17 +403,19 @@ HEADER = (
     "is audited against its header by the janitor.")
 
 
-def render_template(template: str, path: Path, budget_tokens: int) -> str:
+def render_template(template: str, path: Path, held: settings.Settings) -> str:
     """A primer as a tab reads it; the catalog's save runs it too, so a primer that would stop
-    every tab starting is refused before it is written. `{budget}` is the context budget in the
-    user's settings, so the number an agent reads is the one the machine tab holds it to."""
+    every tab starting is refused before it is written. `{budget}` and `{machine_budget}` are
+    the context budgets in the user's settings, so the numbers an agent reads are the ones the
+    daemon holds it to (`Session.context_budget`)."""
     try:
-        return template.format(template=path, budget=f"{budget_tokens // 1000}k",
+        return template.format(template=path, budget=f"{held.budget_tokens // 1000}k",
+                               machine_budget=f"{held.machine_budget_tokens // 1000}k",
                                header=HEADER)
     except (KeyError, IndexError, ValueError) as exc:
         raise AgentError(f"{path} uses an unknown placeholder {exc}. The ones available "
-                         "are template, budget and header; a literal brace is written "
-                         "doubled."
+                         "are template, budget, machine_budget and header; a literal brace is "
+                         "written doubled."
                          ) from exc
 
 
@@ -450,8 +453,7 @@ class Agents:
         path, default = ((self.janitor_template_path, JANITOR_TEMPLATE) if spec.tab.janitor
                          else (self.template_path, DEFAULT_TEMPLATE))
         template = path.read_text(encoding="utf-8") if path.is_file() else default
-        return render_template(template, path,
-                               settings.current(self.paths, self.events).budget_tokens)
+        return render_template(template, path, settings.current(self.paths, self.events))
 
     def _janitor_documents(self) -> Path:
         root = self.paths.janitor_documents

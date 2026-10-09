@@ -3,11 +3,13 @@
 A value is a setting when the user chose it or it is how their keys are; an engineering timeout is not. Each is read where it is used, at the moment
 it is used, so a save takes effect without a restart: the keys, the keyboard, the display and
 the look by the settings watch (`daemon._watch_settings`, `keyboard.py`, `look.py`), the model and the context
-budget at a tab's next start, the lapse and the history's age at their next check.
+budgets at a tab's next start and the daemon's next check of it (`Session.context_budget`), the lapse
+and the history's age at their next check.
 
 The document ships as `settings.toml` beside this module and is written to the user's config the
 first time the daemon starts (`install`); from then on the file is the only place a value
-lives. A file that is missing, missing a setting, or wrong is an error that names it, because
+lives, and is only ever added to: a setting a later release brings goes in with its shipped
+value. A file that is missing, missing a setting, or wrong is an error that names it, because
 filling the gap would be the daemon inventing an answer; the catalog's save runs `parse`
 first, so a wrong file is refused before it is written, and one written past that check holds
 the last right save in its place (`in_force`).
@@ -44,7 +46,8 @@ SHIPPED = Path(__file__).with_name("settings.toml")
 # shipped document's.
 SCHEMA: dict[str, dict[str, str]] = {
     "keys": {"selector": "key", "ai_terminal": "key"},
-    "agents": {"model": "model", "context_budget_tokens": "whole"},
+    "agents": {"model": "model", "context_budget_tokens": "whole",
+               "machine_budget_tokens": "whole"},
     "keyboard": {"layout": "layout", "variant": "variant", "repeat_rate": "whole",
                  "repeat_delay": "whole"},
     "display": {"scale": "positive"},
@@ -67,6 +70,7 @@ class Settings:
     keys: dict[str, str]
     model: str
     budget_tokens: int
+    machine_budget_tokens: int
     layout: str
     variant: str
     repeat_rate: int
@@ -77,13 +81,67 @@ class Settings:
     kept_seconds: float
 
 
-def install(path: Path) -> None:
-    """The shipped document becomes the user's, once: a file they have is never touched."""
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
+def install(path: Path) -> list[str]:
+    """The shipped document becomes the user's, once. A file they have is only added to: each
+    setting it lacks goes in with its shipped value and comment at the end of its section, and
+    nothing they wrote moves. A file that is not TOML is left for `parse` to refuse. The
+    settings added, as `[section].key`."""
+    shipped = SHIPPED.read_text(encoding="utf-8")
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write(path, shipped)
+        return []
+    text = path.read_text(encoding="utf-8")
+    try:
+        theirs = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return []
+    blocks = _blocks(shipped)
+    added: list[str] = []
+    lines = text.splitlines()
+    for section, keys in SCHEMA.items():
+        missing = [k for k in keys if k not in theirs.get(section, {})]
+        if not missing:
+            continue
+        new = [line for k in missing for line in blocks[section][k]]
+        header = next((i for i, line in enumerate(lines) if line.strip() == f"[{section}]"),
+                      None)
+        if header is None:
+            lines += ["", f"[{section}]", *new]
+        else:
+            end = next((i for i in range(header + 1, len(lines))
+                        if lines[i].lstrip().startswith("[")), len(lines))
+            while end > header + 1 and not lines[end - 1].strip():
+                end -= 1
+            lines[end:end] = new
+        added += [f"[{section}].{k}" for k in missing]
+    if added:
+        _write(path, "\n".join(lines) + "\n")
+    return added
+
+
+def _blocks(document: str) -> dict[str, dict[str, list[str]]]:
+    """Each setting of a document as its lines: the comments directly above it, then it."""
+    blocks: dict[str, dict[str, list[str]]] = {}
+    section, comments = None, []
+    for line in document.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section, comments = stripped[1:-1], []
+            blocks[section] = {}
+        elif stripped.startswith("#"):
+            comments.append(line)
+        elif "=" in stripped and section is not None:
+            blocks[section][stripped.split("=")[0].strip()] = [*comments, line]
+            comments = []
+        else:
+            comments = []
+    return blocks
+
+
+def _write(path: Path, text: str) -> None:
     staged = path.with_name(f".{path.name}.new")
-    staged.write_text(SHIPPED.read_text(encoding="utf-8"), encoding="utf-8")
+    staged.write_text(text, encoding="utf-8")
     staged.replace(path)
 
 
@@ -162,6 +220,7 @@ def parse(text: str, source: str) -> Settings:
     return Settings(
         keys=keys, model=model,
         budget_tokens=_whole(raw, "agents", "context_budget_tokens", source, 1000),
+        machine_budget_tokens=_whole(raw, "agents", "machine_budget_tokens", source, 1000),
         layout=_named(raw, "keyboard", "layout", source, _LAYOUT,
                       "xkb layout names, comma-separated"),
         variant=_named(raw, "keyboard", "variant", source, _VARIANT, "an xkb variant name"),

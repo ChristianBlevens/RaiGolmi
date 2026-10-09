@@ -13,6 +13,9 @@ ai_terminal = "Mod4+grave"
 model = "claude-opus-5-5"
 # the context every agent keeps to; a managed tab at it is restarted fresh by the machine tab
 context_budget_tokens = 400000
+# the machine tab's, while it manages tabs with you away: it wakes once per event, minutes apart,
+# so each wake reads its whole context uncached; at it the machine tab is restarted fresh
+machine_budget_tokens = 250000
 
 [keyboard]
 # xkb layout, or several comma-separated; the host's and the face's

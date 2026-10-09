@@ -21,6 +21,21 @@ def test_the_shipped_document_is_installed_once_and_never_over_the_users(tmp_pat
     assert settings.load(path).model == "their-model"
 
 
+def test_a_setting_a_later_release_brings_is_added_and_nothing_of_theirs_moves(tmp_path):
+    path = tmp_path / "settings.toml"
+    theirs = [line for line in settingsdoc.text(agents={"model": "their-model"}).splitlines()
+              if "machine_budget_tokens" not in line and "machine tab is restarted" not in line
+              and "minutes apart" not in line]
+    path.write_text("\n".join(theirs) + "\n")
+    assert settings.install(path) == ["[agents].machine_budget_tokens"]
+    after = path.read_text().splitlines()
+    assert [line for line in after if line in theirs] == theirs
+    held = settings.load(path)
+    assert (held.model, held.machine_budget_tokens) == (
+        "their-model", settings.load(settings.SHIPPED).machine_budget_tokens)
+    assert settings.install(path) == []
+
+
 @pytest.mark.parametrize("section, key", [
     (section, key) for section, keys in settings.SCHEMA.items() for key in keys])
 def test_a_setting_left_out_is_refused_naming_it(section, key):

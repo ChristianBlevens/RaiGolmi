@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from . import (activity, boot, claudecode, compatibility, compose, credential, documents,
-               flakes, git, hostimages, hostsurfaces, keep, labels, naming)
+               flakes, git, hostimages, hostsurfaces, keep, labels, naming, settings)
 from .agents import AgentError, Agents, AgentSpec, definition_protection
 from .anchors import DEFAULT_ANCHOR_IMAGE, Anchors
 from .catalog import Catalog
@@ -954,6 +954,17 @@ class Session:
             tab.held = None
             self.store.save(self.intent)
         self.events.emit("tab.released", tab=tab_id, body=tab.body)
+
+    def context_budget(self, tab_id: str) -> int:
+        """The context this tab keeps to now, and the one place that is decided; both numbers
+        are the user's settings. The machine tab managing tabs with the user away keeps to its
+        own: it wakes once per event, so each wake reads its whole context uncached. Every
+        other tab, and the machine tab working with the user, keeps to the agents' budget."""
+        held = settings.current(self.paths, self.events)
+        tab = self.intent.tabs.get(tab_id)
+        if tab is not None and tab.machine and self.intent.hands_off(tab_id):
+            return held.machine_budget_tokens
+        return held.budget_tokens
 
     def hand_over(self, tab_id: str, state: str | None) -> None:
         """Where a tab's handover to a fresh conversation stands (`TabIntent.handover`)."""

@@ -260,7 +260,9 @@ def test_a_fresh_restart_readies_the_tabs_documents_then_hands_its_work_to_a_new
 
 def test_the_machine_tab_at_its_budget_while_managing_confirms_then_hands_on_to_a_new_one(h):
     m = Machine(h)
-    settingsdoc.write(h.session.paths.settings, agents={"context_budget_tokens": 100000})
+    # Past its own budget and within the agents': the machine tab managing keeps to its own.
+    settingsdoc.write(h.session.paths.settings, agents={"context_budget_tokens": 200000,
+                                                        "machine_budget_tokens": 100000})
     home = h.session.agents.home(MACHINE)
     _usage(home, 105_000)
     (home / "thoughts.md").write_text("tab-2 is porting the parser\n")
@@ -498,3 +500,15 @@ def test_a_runs_report_after_a_checkpoint_covers_its_last_stretch(h):
         _hear(m, MACHINE)
     filed = m.tab(MACHINE)["report_run"](report="the parser and the lexer are in")
     assert filed["daemon_record"].endswith("-daemon-02.md")
+
+
+def test_the_machine_tab_keeps_to_its_own_budget_only_while_it_manages_and_its_primer_says_both(h):
+    settingsdoc.write(h.session.paths.settings, agents={"context_budget_tokens": 300000,
+                                                        "machine_budget_tokens": 120000})
+    m = Machine(h)
+    assert h.session.context_budget(MACHINE) == h.session.context_budget(BODY) == 300000
+    m.tab(MACHINE)["manage"](tab=BODY)
+    assert h.session.context_budget(MACHINE) == 120000
+    assert h.session.context_budget(BODY) == 300000
+    primer = h.session.agents.render_context(h.session._agent_spec(h.session.intent.tabs[MACHINE]))
+    assert "300k-token context budget" in primer and "machine tab to 120k" in primer
