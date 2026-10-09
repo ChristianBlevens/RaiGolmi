@@ -15,6 +15,11 @@ the way the login does, in a scratch agent container with an empty home: a home 
 login would start Claude Code's own background refresh, spending the same refresh token.
 No other command waits for a refresh before it exits.
 
+It is renewed halfway through the life its token was issued with, counted from when this file
+was written, so a token the API refuses early, or a renewal that fails and is retried, still has
+hours in hand. A tab refused on it (`claude_login.refused`, `remotecontrol.py`) is evidence it is
+spent whatever its expiry says, and it is renewed at once.
+
 It is asked again only when it has ended: its refresh token refused by the OAuth server
 itself (400 or 401, which a retry is refused again) or past `refreshTokenExpiresAt`. The file is then
 removed, so every place that asks whether it is set asks for it again (`claude_login.lost`,
@@ -33,23 +38,25 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from . import hostimages, labels, naming
-from .events import EventLog
+from .events import Event, EventLog
 from .runtime.base import ContainerRuntime, ContainerSpec, Mount, RuntimeError_
 
 REFRESH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_REFRESH_TOKEN"
 SCOPES_ENV = "CLAUDE_CODE_OAUTH_SCOPES"
 # How `auth login` says the token endpoint refused it: axios's own message.
 REFUSED = re.compile(r"status code (\d{3})")
+# How a tab's turn ends when the API refuses the token it was sent with (`agent.idle`'s error).
+TURN_REFUSED = "authentication_failed"
 # The OAuth server's refusal of the grant itself; Cloudflare's is 403, a fault 5xx.
 ENDED_STATUSES = frozenset({"400", "401"})
 HOME_IN_CONTAINER = "/login"
 RUN_TIMEOUT = 120.0
 # Remote Control's scope; a login without it is the agent credential over again.
 SESSIONS_SCOPE = "user:sessions:claude_code"
-# An access token lives hours; these only set how early it is renewed and how soon a failed
-# renewal is tried again, not whether renewal works.
-REFRESH_AHEAD_SECONDS = 3600.0
+# How soon a failed renewal is tried again; it does not decide whether one is.
 RETRY_SECONDS = 300.0
+# How often the file is looked at when no tab has been refused.
+TICK_SECONDS = 30.0
 
 
 class LoginError(RuntimeError):
@@ -197,8 +204,9 @@ class Renewal:
 
 
 class Refresher:
-    """Renews the sign-in before it expires, says so when it cannot, and removes it once it
-    has ended. A new one is said by the daemon's file watch (`claude_login.stored`)."""
+    """Renews the sign-in halfway through its life or at once when a tab was refused on it,
+    says so when it cannot, and removes it once it has ended. A new one is said by the daemon's
+    file watch (`claude_login.stored`)."""
 
     def __init__(self, path: Path, events: EventLog, runtime: ContainerRuntime,
                  epoch: int, agent_image: Callable[[], str],
@@ -211,10 +219,23 @@ class Refresher:
         self.agent_image = agent_image
         self.renewal = renewal if renewal is not None else Renewal()
         self._retry_at = 0.0
+        self._sub = events.subscribe()
+        # A tab was refused on the sign-in since the last renewal began.
+        self._refused = False
 
     def run(self, stop: threading.Event) -> None:
-        while not stop.wait(30.0):
-            self.tick(time.time())
+        ticked = 0.0
+        while not stop.is_set():
+            for event in self._sub.drain(timeout=TICK_SECONDS):
+                self.on_event(event)
+            now = time.time()
+            if self._refused or now >= ticked + TICK_SECONDS:
+                ticked = now
+                self.tick(now)
+
+    def on_event(self, event: Event) -> None:
+        if event.type == "claude_login.refused":
+            self._refused = True
 
     def tick(self, now: float) -> None:
         if not self.path.exists() or now < self._retry_at:
@@ -225,11 +246,13 @@ class Refresher:
             ends = oauth.get("refreshTokenExpiresAt")
             if ends is not None and ends / 1000 <= now:
                 raise LoginEnded("its refresh token has expired")
-            if oauth["expiresAt"] / 1000 - now > REFRESH_AHEAD_SECONDS:
+            written = self.path.stat().st_mtime
+            if not self._refused and now < written + (oauth["expiresAt"] / 1000 - written) / 2:
                 return
             with self.renewal.running():
                 write(self.path, refreshed(read(self.path), self.runtime, self.epoch,
                                           self.path.parent, self.agent_image))
+            self._refused = False
         except LoginEnded as exc:
             self.path.unlink()
             self.events.emit("claude_login.lost", error=str(exc))

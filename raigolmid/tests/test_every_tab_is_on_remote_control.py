@@ -77,3 +77,34 @@ def test_a_lost_sign_in_puts_every_tab_back_on_the_agent_credential_and_continue
         assert not (h.session.agents.home(tab) / ".claude" / ".credentials.json").exists()
     continued = h.events_of("remote_control.continued")
     assert [e.tab for e in continued] == [BODY], "only the tab whose turn was cut"
+
+
+def test_tabs_refused_on_the_sign_in_are_restarted_onto_its_renewal_without_an_agent(h):
+    """Every tab is refused alike, the machine tab and the janitor among them, so the daemon
+    brings them back itself; a tab refused again on the renewal waits for the user."""
+    sign_in(h)
+    rc = RemoteControl(h.session, h.events)
+    rc._sign_in_idle()
+    for tab in (MACHINE, BODY):
+        # What Claude Code leaves in a tab's home once the API refuses it.
+        (h.session.agents.home(tab) / ".claude" / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "", "refreshToken": "", "expiresAt": 0}}))
+        h.events.emit("agent.idle", tab=tab, error=claude_login.TURN_REFUSED)
+    pump(rc)
+    assert sorted(e.tab for e in h.events_of("claude_login.refused")) == [MACHINE, BODY]
+    assert h.events_of("remote_control.continued") == [], "nothing until it is renewed"
+
+    h.events.emit("claude_login.refreshed")
+    pump(rc)
+    for tab in (MACHINE, BODY):
+        held = (h.session.agents.home(tab) / ".claude" / ".credentials.json").read_text()
+        assert "sk-ant-oat01-rail-" in held, "restarted with its placeholders written again"
+    assert sorted(e.tab for e in h.events_of("remote_control.continued")) == [MACHINE, BODY]
+
+    h.events.emit("agent.idle", tab=BODY, error=claude_login.TURN_REFUSED)
+    h.events.emit("agent.idle", tab=MACHINE)
+    h.events.emit("agent.idle", tab=MACHINE, error=claude_login.TURN_REFUSED)
+    pump(rc)
+    assert [e.tab for e in h.events_of("agent.turn_failed")] == [BODY]
+    assert [e.tab for e in h.events_of("claude_login.refused")].count(MACHINE) == 2, (
+        "a tab that worked on the renewal is refused afresh later")

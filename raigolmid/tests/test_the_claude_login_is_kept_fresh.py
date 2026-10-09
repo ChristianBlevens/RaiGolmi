@@ -1,9 +1,10 @@
-"""The claude.ai sign-in is the daemon's to renew (`claude_login.py`): renewed before it
-expires by Claude Code's own `auth login` in a scratch agent container, kept 0600, and a
+"""The claude.ai sign-in is the daemon's to renew (`claude_login.py`): renewed halfway through
+its life, or at once when a tab is refused on it, by Claude Code's own `auth login` in a scratch agent container, kept 0600, and a
 renewal that fails is said."""
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -23,6 +24,12 @@ def _login(expires_in: float) -> dict:
                               "expiresAt": int((NOW + expires_in) * 1000),
                               "scopes": ["user:inference", claude_login.SESSIONS_SCOPE]},
             "oauthAccount": {"organizationUuid": "org-1"}}
+
+
+def _written(path: Path, login: dict, at: float = NOW) -> None:
+    """Written `at`, which is where the halfway mark is counted from."""
+    claude_login.write(path, login)
+    os.utime(path, (at, at))
 
 
 class _Runs(list):
@@ -68,16 +75,15 @@ def auth_login(tmp_path, monkeypatch):
     return runtime, runs
 
 
-def test_it_is_renewed_before_it_expires_and_not_before(tmp_path, auth_login):
+def test_it_is_renewed_halfway_through_its_life_and_not_before(tmp_path, auth_login):
     runtime, runs = auth_login
     path, events = tmp_path / "claude-login.json", EventLog(tmp_path / "events.jsonl")
-    claude_login.write(path, _login(expires_in=2 * claude_login.REFRESH_AHEAD_SECONDS))
+    _written(path, _login(expires_in=28800))
     refresher = claude_login.Refresher(path, events, runtime, epoch=1, agent_image=_image(runtime))
-    refresher.tick(NOW)
+    refresher.tick(NOW + 14399)
     assert runs == []
 
-    claude_login.write(path, _login(expires_in=60))
-    refresher.tick(NOW)
+    refresher.tick(NOW + 14400)
     assert runs == [("old-refresh", "user:inference user:sessions:claude_code")]
     login = claude_login.read(path)
     oauth = login["claudeAiOauth"]
@@ -89,10 +95,24 @@ def test_it_is_renewed_before_it_expires_and_not_before(tmp_path, auth_login):
     assert runtime.inspect(naming.claude_refresh()) is None
 
 
+def test_a_tab_refused_on_it_has_it_renewed_at_once(tmp_path, auth_login):
+    """The API can refuse a token before its stated expiry; a tab refused is the evidence."""
+    runtime, runs = auth_login
+    path, events = tmp_path / "claude-login.json", EventLog(tmp_path / "events.jsonl")
+    _written(path, _login(expires_in=28800))
+    refresher = claude_login.Refresher(path, events, runtime, epoch=1, agent_image=_image(runtime))
+    refresher.on_event(events.emit("claude_login.refused", tab="tab-1"))
+    refresher.tick(NOW + 60)
+    assert len(runs) == 1
+    assert claude_login.read(path)["claudeAiOauth"]["accessToken"] == "new-access"
+    refresher.tick(NOW + 120)
+    assert len(runs) == 1, "one refusal, one renewal"
+
+
 def test_a_renewal_that_fails_is_said_and_tried_again_later(tmp_path, auth_login):
     runtime, runs = auth_login
     path, events = tmp_path / "claude-login.json", EventLog(tmp_path / "events.jsonl")
-    claude_login.write(path, _login(expires_in=60))
+    _written(path, _login(expires_in=60), at=NOW - 28740)
     runs.refuse = 403
     refresher = claude_login.Refresher(path, events, runtime, epoch=1, agent_image=_image(runtime))
     refresher.tick(NOW)
@@ -111,12 +131,12 @@ def test_a_sign_in_that_has_ended_is_removed_so_it_is_asked_again(tmp_path, auth
     runtime, runs = auth_login
     events = EventLog(tmp_path / "events.jsonl")
     refused, expired = tmp_path / "refused.json", tmp_path / "expired.json"
-    claude_login.write(refused, _login(expires_in=60))
+    _written(refused, _login(expires_in=60), at=NOW - 28740)
     runs.refuse = 400
     claude_login.Refresher(refused, events, runtime, epoch=1, agent_image=_image(runtime)).tick(NOW)
-    login = _login(expires_in=2 * claude_login.REFRESH_AHEAD_SECONDS)
+    login = _login(expires_in=28800)
     login["claudeAiOauth"]["refreshTokenExpiresAt"] = int(NOW * 1000)
-    claude_login.write(expired, login)
+    _written(expired, login)
     claude_login.Refresher(expired, events, runtime, epoch=1, agent_image=_image(runtime)).tick(NOW)
 
     assert not refused.exists() and not expired.exists()

@@ -14,7 +14,8 @@ told to continue once what cut them off is over:
   without an error is the account answering again, which resumes the rest.
 - **a transient failure** (`TRANSIENT`) is the tab's own, resumed after `RETRY_SECONDS`.
 - **any other** (a credential, billing, a model or request refused) fails the same way until
-  the user acts, so it is said to them (`agent.turn_failed`) and not resumed.
+  the user acts, so it is said to them (`agent.turn_failed`) and not resumed — except a refusal
+  while the claude.ai sign-in is set, which its renewal fixes (`remotecontrol.py`).
 
 A cut tab is one whose last report was the failure (`activity.Activity.failed`), which is how a
 daemon that starts finds the ones cut off while it was down.
@@ -25,7 +26,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from . import activity
+from . import activity, claude_login
 from .events import Event, EventLog
 
 if TYPE_CHECKING:
@@ -98,7 +99,9 @@ class Limits:
             self._cut[event.tab] = (error, now)
             if error == LIMIT:
                 self._limit(None, now)
-            elif error not in TRANSIENT:
+            elif error not in TRANSIENT and not (
+                    error == claude_login.TURN_REFUSED
+                    and claude_login.is_set(self.session.paths.claude_login)):
                 self.events.emit("agent.turn_failed", tab=event.tab, error=error,
                                  message=f"Tab {event.tab}'s turn ended on an API error "
                                          f"({error}) that continuing will not fix; it waits "
