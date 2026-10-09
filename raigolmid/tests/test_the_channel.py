@@ -158,6 +158,20 @@ def test_a_push_a_restarted_agent_did_not_hear_waits_for_its_new_session(h, c, m
     assert c.take(TAB)["content"] == "first"
 
 
+def test_the_replaced_containers_late_report_neither_hears_a_push_nor_makes_the_new_one_busy(h, c):
+    """The prompt hook of a turn a push started waits on the session's lock while the tab's
+    container is replaced, and reports after it; the push it names died with that turn."""
+    _send(h, "takes over")
+    _up(h)
+    pushed = c.take(TAB)
+    h.session.restart_agent(TAB, resume=True)
+    h.session.agent_activity(TAB, True, channel_seq=pushed["seq"])
+    _up(h)
+    again = c.take(TAB)
+    assert again is not None and again["content"] == "takes over", "pushed into the new session"
+    assert not h.events_of("channel.heard")
+
+
 def test_a_daemon_starting_while_a_session_comes_up_does_not_count_it_up(h, c):
     """Whether a running container's session is up is its own to say: the SessionStart hook
     records its container, and a daemon starting reads that (`activity.py`)."""

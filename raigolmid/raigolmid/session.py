@@ -1093,11 +1093,20 @@ class Session:
         its channel pushed carries the push's `channel_seq`; `done` is a turn that ended with
         nothing asked of the user and nothing on its way to it; `error` is the API error that
         ended one (`limits.py`). A turn ending closes nothing: a tab ends its conversation by
-        saying so (`coordinator.end_conversation`)."""
+        saying so (`coordinator.end_conversation`).
+
+        A report made while the tab's container is replaced waits on this lock and arrives
+        after it: one before the new session's start is the old container's, and is no
+        evidence about the new one — taken, it would mark the new one busy and a push the
+        killed turn never kept as heard (`channel.py`), so it is said and dropped."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
                 raise SessionError(f"no tab {tab_id}")
+            if tab.awaiting_session:
+                self.events.emit("agent.activity_stale", tab=tab_id, busy=busy,
+                                 channel_seq=channel_seq, error=error)
+                return self.status()
             tab.busy = busy
             if not busy:
                 with self._face_free:
