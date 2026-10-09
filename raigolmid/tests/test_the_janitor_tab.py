@@ -421,3 +421,33 @@ def test_crash_logs_lists_and_reads_only_the_crash_directory(h, m):
 def test_the_terminal_marks_the_janitors_window():
     from ui.ai_terminal.terminal import window_name
     assert window_name(JANITOR, "janitor") == "janitor ⚙"
+
+
+def test_the_janitor_closes_a_failing_tab_with_why_and_never_a_managed_one(h, m):
+    tab = h.tab("myapi")
+    with pytest.raises(SessionError, match="needs why"):
+        h.session.close_tab(tab, why=" ")
+    h.session.manage(tab, True, why="test")
+    with pytest.raises(SessionError, match="managed by the machine tab"):
+        h.session.close_tab(tab, why="crashes as it comes back")
+    h.session.manage(tab, False, why="test")
+
+    h.session.close_tab(tab, why="crashes as it comes back")
+
+    assert tab not in h.session.intent.tabs
+    [closed] = [e for e in h.events_of("tab.closed") if e.tab == tab]
+    assert (closed.data["by"], closed.data["why"]) == ("janitor", "crashes as it comes back")
+    from raigolmid.history import _closed
+    assert _closed(closed).startswith("closed by the janitor: crashes as it comes back")
+
+
+def test_the_machine_state_is_what_raigolmid_manages_and_an_unaddressable_sway_is_unasked(h, m):
+    methods = build_methods(h.session, h.events, Questions(h.events, h.paths), m.channels, Viewing(h.events, h.paths.viewing), History(h.events, h.paths))
+    h.runtime.add_image("busybox")
+    h.runtime.run(ContainerSpec(name="someone-elses", image="busybox"))
+    _fail(h, m)
+    h.session.faces.host.swaysock = ""
+    state = methods["machine_state"]()
+    names = [c["name"] for c in state["containers"]]
+    assert naming.agent(JANITOR) in names and "someone-elses" not in names
+    assert "unasked" in state["sway"]

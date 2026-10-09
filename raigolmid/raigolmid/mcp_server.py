@@ -11,8 +11,8 @@ rebuild the last failure to read instead of guessing, and `search_packages` lets
 it find a package name in the nixpkgs index before writing it into a toolbelt.
 Both are things it cannot reconstruct from the repository.
 
-`--scope machine` is the janitor tab's: the machine's state read-only and only the
-repairs the daemon already has. Either scope is also its tab's **channel**: it pushes what
+`--scope machine` is the janitor tab's: the whole machine to diagnose, the daemon's
+repairs, and closing a tab no repair recovers (`scopes.MACHINE`). Either scope is also its tab's **channel**: it pushes what
 `raigolmid` hands it — a failure for the janitor, a question's outcome for any tab — into the
 session (`channel.py`).
 """
@@ -262,6 +262,24 @@ def build_server(client: ApiClient):
     def restart_body() -> dict[str, Any]:
         return client.call("restart_body")
 
+    @tool(server, description="Tear your sandbox down and recreate it from its recorded "
+                             "intent — its anchor, body and view — when a restart or rebuild "
+                             "did not bring it back.")
+    def repair() -> dict[str, Any]:
+        return call("repair")
+
+    @tool(server, description="What your project holds on disk: everything under /work, its "
+                             "build caches, its output (what its git ignores) with the largest "
+                             "paths, its `[budget]`, and what the machine has free.")
+    def disk() -> dict[str, Any]:
+        return call("disk")
+
+    @tool(server, description="Your project's peak working memory over the last minute, its "
+                             "memory budget, and the machine's total and available memory "
+                             "now.")
+    def memory() -> dict[str, Any]:
+        return call("memory")
+
     @tool(server, description="Open a file under /work at a line in the editor on the user's "
                              "screen, to show them something. Only while your sandbox is the "
                              "one on their screen.")
@@ -391,6 +409,34 @@ def build_server(client: ApiClient):
     def document_save(id: str, text: str, version: str | None = None) -> dict[str, Any]:
         return call("document_save", id=id, text=text, version=version)
 
+    @tool(server, description="Machine tab only: every face, toolbelt and body on this "
+                             "machine — `downloaded` (its definition is here) or `installed` "
+                             "(its images are built) — with whose it is and what holds it in "
+                             "use; with `server`, the registry's too (`server`: there, not "
+                             "here), from its index.")
+    def layers(server: bool = False) -> dict[str, Any]:
+        return call("layers", server=server)
+
+    @tool(server, description="Machine tab only: fetch a registry layer's definition into "
+                             "/definitions, by `kind` (face, toolbelt, body) and `id` from "
+                             "`layers`. Refused for one already here.")
+    def layer_download(kind: str, id: str) -> dict[str, Any]:
+        return call("layer_download", kind=kind, id=id)
+
+    @tool(server, description="Machine tab only: build or pull a layer's images, as the "
+                             "user's catalog does. It runs on its own; you are told when it is "
+                             "installed or why it failed.")
+    def layer_install(kind: str, id: str) -> dict[str, Any]:
+        return call("layer_install", kind=kind, id=id)
+
+    @tool(server, description="Machine tab only, when the user asks or for a layer you made "
+                             "that nothing needs: delete a layer, in two calls as the user's "
+                             "catalog does — the first removes its images, the next its "
+                             "definition. Refused while anything uses it. No tab uploads a "
+                             "layer: that is the user's, from their catalog.")
+    def layer_delete(kind: str, id: str) -> dict[str, Any]:
+        return call("layer_delete", kind=kind, id=id)
+
     @tool(server, description="Machine tab only, when the user asks: move every agent to the "
                              "newest Claude Code, or back to the one this release pins with "
                              "`pinned`, as `rai claude-update` does. It builds the agent image, "
@@ -399,14 +445,16 @@ def build_server(client: ApiClient):
     def update_claude_code(pinned: bool = False) -> dict[str, Any]:
         return call("update_claude_code", pinned=pinned)
 
-    @tool(server, description="Machine tab only: say your /work/SESSION-START.md is ready for "
-                             "your next conversation, once the daemon has asked at your "
-                             "context budget, handing over `report`, the user's progress "
-                             "report on this stretch of the run. It is filed in their catalog "
-                             "with /work/run.md and the daemon's record of the stretch, and a "
-                             "new machine tab takes over when this turn ends.")
-    def ready_to_restart(report: str) -> dict[str, Any]:
-        return call("ready_to_restart", report=report)
+    @tool(server, description="End this conversation: call it last, once /work/SESSION-START.md "
+                             "is ready to start the next one from and ~/thoughts.md is finished "
+                             "as this one's record. When this turn ends the tab closes, its "
+                             "conversation archived, and a new tab takes over the work from "
+                             "SESSION-START.md alone. The machine tab during a run hands over "
+                             "`report`, the user's progress report on this stretch of it, "
+                             "filed in their catalog with /work/run.md and the daemon's record "
+                             "of the stretch.")
+    def end_conversation(report: str | None = None) -> dict[str, Any]:
+        return call("end_conversation", report=report)
 
     @tool(server, description="Machine tab only: the user's report on the run that is over, "
                              "once the daemon asks for it — for each tab what it did, where it "
@@ -541,6 +589,37 @@ def build_machine_server(client: ApiClient):
                              "the dead container's output).")
     def crash_logs(name: str | None = None) -> dict[str, Any]:
         return call("crash_logs", name=name)
+
+    @tool(server, description="What runs beside raigolmid's own record: every container it "
+                             "manages as docker has it (role, image, status, exit code, "
+                             "start), and the host compositor's outputs and every window on "
+                             "it, by workspace, as sway has them.")
+    def machine_state() -> dict[str, Any]:
+        return call("machine_state")
+
+    @tool(server, description="Capture the face, the desktop on the user's screen, as a PNG. "
+                             "Returns its path; read that file to see it.")
+    def screenshot() -> dict[str, Any]:
+        return call("screenshot")
+
+    @tool(server, description="The faces, toolbelts and bodies as the user's selector shows "
+                             "them, each with whether it can be used with the rest. `kind` is "
+                             "face, toolbelt or body; omitted, all three.")
+    def list_items(kind: str | None = None) -> dict[str, Any]:
+        return call("list_items", kind=kind)
+
+    @tool(server, description="Find package names in the nixpkgs-unstable index, before "
+                             "putting a name in a toolbelt's package list in a repair.")
+    def search_packages(query: str, limit: int = 20) -> list[str]:
+        return call("search_packages", query=query, limit=limit)
+
+    @tool(server, description="Close a tab failing in a way no `restart_agent`, `unstick` or "
+                             "`repair` recovered: its agent stops, its conversation is "
+                             "archived, and the tabs that always exist open fresh. `why` is "
+                             "said in the user's history. Never a tab the machine tab manages; "
+                             "`tell` the machine tab instead.")
+    def close_tab(tab: str, why: str) -> dict[str, Any]:
+        return call("close_tab", tab=tab, why=why)
 
     @tool(server, name="ask_user", description=ASK_USER)
     def ask_user_tool(message: str, choices: list[str] | None = None) -> dict[str, Any]:

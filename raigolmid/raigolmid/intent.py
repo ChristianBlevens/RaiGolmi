@@ -46,8 +46,9 @@ class TabIntent:
     # Its handover to a fresh conversation (`coordinator.py`): None, or "asked" (the push
     # asking it to make its documents ready is on its way), "heard" (that turn started),
     # "ready" (the documents are ready for the next conversation), "restart" (ready, and
-    # restarted when its running turn ends), or, for the machine tab, "unanswered" (that turn
-    # ended without saying ready).
+    # restarted when its running turn ends), "ending" (it said it is ending its own
+    # conversation, and is handed on as its turn ends), or, for the machine tab, "unanswered"
+    # (that turn ended without saying ready).
     handover: str | None = None
     # The user's words for where a managed tab stops for them — a goal, or a decision that is
     # theirs — given when they hand it over; and, once the machine tab finds it reached, the

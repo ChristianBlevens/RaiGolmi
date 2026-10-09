@@ -39,8 +39,8 @@ settings="$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude"
 [ -f "$settings" ] || echo '{}' > "$settings"
 # SessionStart is the evidence a restarted agent came up: one that dies before it is a
-# crash reopening cannot fix. The other hooks tell raigolmid when it is working; no tab
-# closes itself when it is done. The prompt
+# crash reopening cannot fix. The other hooks tell raigolmid when it is working; a turn
+# ending closes nothing. The prompt
 # hook reads its input, which says whether the prompt is a channel push or the user's. An
 # interrupt fires no Stop, so an interrupted agent stays busy — kept rather than closed with
 # its work. A turn ending with background commands running is decided by `agent-activity stop` (raigolmid/agent_stop.py).

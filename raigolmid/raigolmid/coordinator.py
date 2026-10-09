@@ -19,10 +19,12 @@ the one document written for the next conversation; a thought doc is never where
 **A handover takes two steps** (`TabIntent.handover`), because the next conversation has only
 that document: `restart_fresh` first pushes the wrap-up (`wrap_up_message`); once that turn has
 started and ended the tab is ready, the machine tab is told, reads its `SESSION-START.md`, and
-the next `restart_fresh` hands the work on. **The machine tab hands itself on the same way**
-while it manages tabs, since nobody else is there to close it: at its own budget the daemon
-asks it to make its `SESSION-START.md` ready, it says so with `ready_to_restart`, and when that
-turn ends a new machine tab takes over.
+the next `restart_fresh` hands the work on. **Every tab can hand itself on**
+(`end_conversation`, `ENDING`): it says its `SESSION-START.md` is ready, and when that turn
+ends a new tab takes over from it; a managed tab's machine tab is told. The machine tab is
+asked to at its own budget while it manages tabs, since nobody else is there to close it.
+The janitor has no such verb: the daemon gives it a fresh conversation per failure
+(`janitor.py`).
 
 **A managed tab stops where the user said** (`TabIntent.stop_when`, given as they hand it
 over, and in every message about it): at that goal or decision the machine tab `hold`s it on
@@ -38,7 +40,7 @@ that turn has ended — a held one as it stands.
 is asked for the user's report (`report_message`), carrying what the daemon itself recorded of
 the run and read of each tab, since a tab given back is out of its reach. **Each machine-tab
 handover is a checkpoint**, so nothing about a run grows with its length: the outgoing machine
-tab's `ready_to_restart` files its progress report on its stretch with that stretch's
+tab's `end_conversation` files its progress report on its stretch with that stretch's
 `documents.RUN_RECORD` and the daemon's record of it (`Session.checkpoint_run`), and the next
 machine tab keeps a new record. The final report covers the last stretch and where the run
 ended, beside the progress reports (`Session.report_run`).
@@ -155,17 +157,18 @@ def hold_message(stop_when: str | None, situation: str) -> str:
             "message. Do nothing more of the work until it comes.")
 
 
-def restart_message(tab: str, continues: str) -> str:
-    """What the user would type to start a session: the run's direction is in the document."""
+def restart_message(tab: str, continues: str, opened: str) -> str:
+    """What the user would type to start a session: the work's direction is in the document."""
     return (f"You are tab {tab}, taking over tab {continues}'s work in a fresh conversation, "
-            "opened by the machine tab, which manages this work for the user. Read "
-            f"/work/{documents.SESSION_START} and continue the work from it. "
+            f"{opened}. Read /work/{documents.SESSION_START} and continue the work from it. "
             f"~/{documents.THOUGHTS} is this conversation's own record; {continues}'s is "
             "archived with its conversation.")
 
 
 # A managed tab whose restart the machine tab asked for while its turn ran (`restart_fresh`).
 RESTART_ON_IDLE = "restart"
+# A tab that said it is ending its conversation (`end_conversation`): handed on as its turn ends.
+ENDING = "ending"
 WRAP_UP = "coordinator.wrap_up"
 TIME_UP = "coordinator.time_up"
 RESTART_ASKED = "coordinator.restart_asked"
@@ -220,22 +223,23 @@ def restart_asked_message(tokens: int, budget: int) -> str:
         "This handover is a checkpoint of the run: write the user's progress report on this "
         "stretch of it — for each tab what it worked toward, what it got done and where it "
         "stands; what you decided for them; what went wrong — and hand it over with "
-        "`ready_to_restart`, last of all: it files the report in their catalog with "
+        "`end_conversation`, last of all: it files the report in their catalog with "
         f"{documents.RUN_RECORD} and the daemon's own record of the stretch. Then end your "
         "turn; the new tab takes over once it ends.")
 
 
-def machine_restart_message(continues: str, report: str | None) -> str:
+def machine_restart_message(continues: str, report: str | None, running: bool) -> str:
+    start = (f"You are the machine tab, taking over from {continues} in a fresh conversation "
+             f"opened as it ended its own. Read /work/{documents.SESSION_START}")
+    own = f" ~/{documents.THOUGHTS} is this conversation's own record."
+    if not running:
+        return start + " and carry on from it." + own
     filed = (f"{continues}'s stretch is filed with its progress report, `{report}`, which "
              "`document` reads" if report is not None
              else f"{continues}'s stretch is filed with its progress report")
-    return (
-        f"You are the machine tab, taking over from {continues} in a fresh conversation the "
-        "daemon opened at its context budget, while the user is away. Read "
-        f"/work/{documents.SESSION_START}, call `managed` for where each tab you manage "
-        f"stands now, and carry on managing them. Keep /work/{documents.RUN_RECORD}, the "
-        f"record of this stretch of the run: {filed}. ~/{documents.THOUGHTS} is this "
-        "conversation's own record.")
+    return (start + ", call `managed` for where each tab you manage stands now, and carry on "
+            f"managing them. Keep /work/{documents.RUN_RECORD}, the record of this stretch of "
+            f"the run: {filed}." + own)
 
 
 def report_message(run: Run, record: list[str], tabs: dict[str, dict[str, Any]]) -> str:
@@ -344,6 +348,8 @@ class Coordinator:
             if (event.data["cause"] in (WRAP_UP, TIME_UP, RESTART_ASKED)
                     and tab.handover == "asked"):
                 self.session.hand_over(tab.tab_id, "heard")
+        elif event.type == "agent.idle" and tab.handover == ENDING:
+            self._end(tab, event.data.get("error"))
         elif event.type == "tab.opened" and tab.machine:
             self.announce()
         elif event.type == "agent.idle" and tab.machine:
@@ -451,29 +457,47 @@ class Coordinator:
         self.events.emit(REPORT_ASKED, tab=machine.tab_id, deliver={
             "content": report_message(run, lines, tabs), "meta": {"from": "daemon"}})
 
+    def _end(self, tab: TabIntent, error: str | None) -> None:
+        """A tab that said it is ending its conversation, handed on as its turn ends: a new
+        tab takes over from its `SESSION-START.md`, and a managed tab's machine tab is told.
+        A turn ended by an error is resumed and ends again; one with a question or permission
+        pending waits, since a restart would withdraw it."""
+        if error is not None or self.questions.tab_state(tab.tab_id) is not None:
+            return
+        try:
+            successor = self.session.succeed_tab(tab.tab_id, by="self")
+        except Exception as exc:  # noqa: BLE001 — said, and this thread must not end
+            self.events.emit("coordinator.restart_failed", tab=tab.tab_id, error=str(exc))
+            return
+        if tab.machine:
+            self.events.emit("coordinator.machine_restarted", tab=successor.tab_id, deliver={
+                "content": machine_restart_message(tab.tab_id, self._last_report(),
+                                                   running(self.session)),
+                "meta": {"from": "daemon"}})
+            return
+        opened = f"opened as {tab.tab_id} ended its conversation"
+        if tab.managed:
+            opened += "; the machine tab manages this work for the user"
+        self.events.emit("coordinator.continued", tab=successor.tab_id, deliver={
+            "content": restart_message(successor.tab_id, tab.tab_id, opened),
+            "meta": {"from": "daemon"}})
+        if tab.managed:
+            self._to_machine(successor.tab_id, "coordinator.continued_itself", (
+                f"Tab {tab.tab_id} ({tab.body}) ended its own conversation; "
+                f"{successor.tab_id} takes over its work from its SESSION-START.md, and you "
+                "manage it now."), why="continued")
+
     def _machine_idle(self, tab_id: str, handover: str | None, error: str | None) -> None:
-        """The machine tab's own handover, only while the user is away (`Intent.hands_off`):
-        asked at its budget and restarted after the turn that said ready. A turn that heard it
-        and ended without saying so is the tab failing, and asking again would only repeat
-        it: it is said as `coordinator.unanswered`, which the janitor takes, and nothing more
-        is asked until it says ready."""
+        """The machine tab asked to hand itself on, only while the user is away
+        (`Intent.hands_off`): asked at its budget, and handed on by `_end` once it says
+        ready. A turn that heard it and ended without saying so is the tab failing, and
+        asking again would only repeat it: it is said as `coordinator.unanswered`, which the
+        janitor takes, and nothing more is asked until it says ready."""
         if not self.session.intent.hands_off(tab_id):
             if handover is not None:
                 self.session.hand_over(tab_id, None)    # the user is back: theirs to close
             return
         if error is not None:
-            return
-        if handover == "ready":
-            if self.questions.tab_state(tab_id) is not None:
-                return      # a restart would withdraw what it asked; its next idle retries
-            try:
-                successor = self.session.succeed_tab(tab_id, by="daemon")
-            except Exception as exc:  # noqa: BLE001 — said, and this thread must not end
-                self.events.emit("coordinator.restart_failed", tab=tab_id, error=str(exc))
-                return
-            self.events.emit("coordinator.machine_restarted", tab=successor.tab_id, deliver={
-                "content": machine_restart_message(tab_id, self._last_report()),
-                "meta": {"from": "daemon"}})
             return
         if handover in ("asked", "unanswered"):
             return          # its push is on its way, or the janitor has it
@@ -482,9 +506,9 @@ class Coordinator:
             reply = transcript_tail(self.session.agents.home(tab_id), 1)
             self.events.emit("coordinator.unanswered", tab=tab_id, message=(
                 f"The machine tab {tab_id} was asked to make its SESSION-START.md ready and call "
-                "`ready_to_restart` at its context budget, and ended its turn without doing "
+                "`end_conversation` at its context budget, and ended its turn without doing "
                 "so; nothing more is asked of it. It restarts once it calls "
-                "`ready_to_restart`. Its last words: "
+                "`end_conversation`. Its last words: "
                 + (reply[0]["said"] if reply else "(none)")))
             return
         tokens = context_tokens(self.session.agents.home(tab_id))
@@ -551,7 +575,8 @@ class Coordinator:
 
 def methods(session: "Session", questions: Questions, channels: Channels,
             caller: str) -> dict[str, Callable[..., Any]]:
-    """The machine tab's verbs on its own socket, refused on any other tab's."""
+    """The machine tab's verbs on its own socket, refused on any other tab's; and every
+    tab's own `end_conversation` and `document_save`."""
     verbs = Verbs(session, questions, channels)
     library = Library(session.paths, session, parse_permissions, PERMISSIONS_ABSENT)
 
@@ -571,16 +596,26 @@ def methods(session: "Session", questions: Questions, channels: Channels,
                                "hands you a tab")
         return run_record(session, session.events, questions, run)[0]
 
-    def ready_to_restart(report: str) -> dict[str, Any]:
+    def end_conversation(report: str | None = None) -> dict[str, Any]:
+        """The caller handed on to a new tab as this turn ends (`Coordinator._end`). The
+        machine tab during a run hands over `report`, its progress report on its stretch,
+        filed as the run's checkpoint."""
         tab = session.intent.tabs[caller]
-        if tab.handover not in ("asked", "heard", "unanswered"):
-            raise SessionError("nothing asked you to restart: the daemon asks at your context "
-                               "budget while you manage tabs")
-        read_at = time.time()
-        filed = session.checkpoint_run(caller, report, record(), read_at)
-        session.hand_over(caller, "ready")
-        return {**filed, "status": "ready",
-                "next": "End your turn; you are restarted once it ends."}
+        if tab.held is not None:
+            raise SessionError("you are held for the user: put the situation to them and end "
+                               "your turn; their answer is your next message")
+        if tab.handover in (RESTART_ON_IDLE, "ready"):
+            raise SessionError("the machine tab is handing you on already; end your turn")
+        filed: dict[str, Any] = {}
+        if tab.machine and running(session):
+            filed = session.checkpoint_run(caller, report or "", record(), time.time())
+        elif report is not None:
+            raise SessionError("`report` is the machine tab's progress report on a run's "
+                               "stretch; there is no run to report on")
+        session.hand_over(caller, ENDING)
+        return {**filed, "status": "ending",
+                "next": f"End your turn; a new tab takes over from "
+                        f"/work/{documents.SESSION_START} once it ends."}
 
     def report_run(report: str) -> dict[str, Any]:
         return session.report_run(caller, report, record())
@@ -598,17 +633,24 @@ def methods(session: "Session", questions: Questions, channels: Channels,
     return {name: only_machine(verb) for name, verb in (
         *((n, getattr(verbs, n)) for n in ("manage", "managed", "managed_tab", "direct",
                                            "answer_question", "restart_fresh", "hold")),
-        ("ready_to_restart", ready_to_restart), ("report_run", report_run),
+        ("report_run", report_run),
         # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
         ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)))
-    } | {"document_save": document_save}
+    } | {"document_save": document_save, "end_conversation": end_conversation}
+
+
+def running(session: "Session") -> bool:
+    """A run in progress: the machine tab managing for the user while they are away."""
+    run = session.intent.run
+    return run is not None and run.ended is None
 
 
 def hand_on(session: "Session", tab: str) -> dict[str, Any]:
     """A new tab takes over `tab`'s work from its `SESSION-START.md`, and `tab` is closed."""
     successor = session.succeed_tab(tab, by="machine")
     session.events.emit("coordinator.restarted", tab=successor.tab_id, deliver={
-        "content": restart_message(successor.tab_id, tab),
+        "content": restart_message(successor.tab_id, tab, "opened by the machine tab, which "
+                                   "manages this work for the user"),
         "meta": {"from": "machine"}})
     return {"tab": successor.tab_id, "continues": tab, "status": "started",
             "next": f"{successor.tab_id} takes over {tab}'s work, which is closed and "
@@ -722,6 +764,9 @@ class Verbs:
         would cut its turn off, and while anything is asked of the user or the machine tab,
         since a restart withdraws it."""
         agent = self._unheld(tab)
+        if agent.handover == ENDING:
+            raise SessionError(f"{tab} is ending its own conversation: a new tab takes over "
+                               "as its turn ends, and you are told")
         if agent.busy and documents_ready and agent.handover in (None, RESTART_ON_IDLE):
             # Its documents are ready and it is finishing a turn: restarted when that ends.
             self.session.hand_over(tab, RESTART_ON_IDLE)

@@ -103,6 +103,13 @@ class Memory:
                 budget, held = self.budgets.over(body, {"memory": peak})["memory"]
                 self.budgets.say_over(body, "memory", budget, held, machine=host, peaks=peaks)
 
+    def of_body(self, body: str) -> dict[str, Any]:
+        """A body tab's own `memory`: its project's peak over the last window, its budget, and
+        the machine's memory now."""
+        whole = self.accounted()
+        return {"peak": whole.get("peaks", {}).get(body), "budget": whole["budgets"].get(body),
+                "machine": whole["machine"], "window_seconds": whole["window_seconds"]}
+
     def accounted(self) -> dict[str, Any]:
         """The janitor's `memory`: each project's peak working memory over the last window,
         its budget, and the machine's memory now."""

@@ -99,10 +99,11 @@ audited: 7102 2026-10-05
   your context for rulings.
 - At your own budget the daemon asks you to make `/work/SESSION-START.md` ready — every tab you
   manage, what each works toward, the last direction you gave each and what is on its way — and
-  to say so with `ready_to_restart`, handing over your progress report on your stretch. The
+  to say so with `end_conversation`, handing over your progress report on your stretch. The
   report is filed with your `run.md`, and the next machine tab starts a new one.
-- Hand yourself on before a report or audit would run out of room: a handover in the middle of
-  one loses its thread.
+- Hand yourself on with `end_conversation`, the same way, before a report or audit would run
+  out of room: a handover in the middle of one loses its thread.
+- A tab you manage may end its own conversation; you are told which tab takes over its work.
 
 ## The run's end and its report
 

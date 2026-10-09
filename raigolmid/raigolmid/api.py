@@ -76,7 +76,7 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "unstick": lambda tab_id, note: stalls.unstick(session, events, tab_id, note),
         "tell": lambda tab_id, note: _tell(session, events, tab_id, note),
         "disk": lambda: disk.accounted(session),
-        "memory": lambda: _memory(memory),
+        "memory": lambda body=None: _memory(memory, body),
         "exec": lambda target, cmd, cwd="/work", timeout=300.0: session.exec(
             target, cmd, cwd, timeout),
         "rebuild_body": lambda instance_id: session.rebuild_body(
@@ -107,6 +107,7 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "seen": history.seen,
         "overturn": questions.overturn,
         "crash_logs": lambda name=None: _crash_logs(session, name),
+        "machine_state": lambda: _machine_state(session),
         "version": lambda: {"protocol": PROTOCOL_VERSION, "epoch": session.epoch},
         "terminal_viewing": viewing.report,
         # The catalog window's whole vocabulary.
@@ -187,6 +188,39 @@ def _logs(session: Session, instance_id: str, tail: int) -> dict[str, Any]:
     return logs
 
 
+def _machine_state(session: Session) -> dict[str, Any]:
+    """What runs beside the daemon's own record, for the janitor: every container raigolmid
+    manages as docker has it, and the host compositor's outputs and windows as sway has
+    them. A compositor that cannot be addressed is said as unasked, never as broken."""
+    from . import labels
+    containers = [{"name": c.name, "role": c.labels.get(labels.ROLE), "image": c.image,
+                   "status": c.status, "exit_code": c.exit_code, "started_at": c.started_at}
+                  for c in session.runtime.list({labels.MANAGED: "true"})]
+    host = session.faces.host
+    if not host.available:
+        return {"containers": containers,
+                "sway": {"unasked": "SWAYSOCK names no socket in this daemon's environment"}}
+    outputs = [{k: o.get(k) for k in ("name", "active", "rect", "scale", "current_mode",
+                                      "current_workspace")} for o in host.outputs()]
+    return {"containers": containers,
+            "sway": {"outputs": outputs, "windows": _windows(host.tree(), None)}}
+
+
+def _windows(node: dict[str, Any], workspace: str | None) -> list[dict[str, Any]]:
+    """Every window in sway's tree, flattened, with the workspace it is on."""
+    if node.get("type") == "workspace":
+        workspace = node.get("name")
+    found = []
+    if node.get("pid") is not None:
+        found.append({"workspace": workspace, "app_id": node.get("app_id"),
+                      "name": node.get("name"), "pid": node["pid"], "rect": node.get("rect"),
+                      "focused": node.get("focused"), "visible": node.get("visible"),
+                      "fullscreen": node.get("fullscreen_mode")})
+    for child in (*node.get("nodes", ()), *node.get("floating_nodes", ())):
+        found.extend(_windows(child, workspace))
+    return found
+
+
 def _container_logs(session: Session, container: str, tail: int) -> dict[str, Any]:
     """Any container raigolmid manages, and only those: the janitor diagnoses the machine's
     parts, not whatever else runs on the host."""
@@ -200,10 +234,11 @@ def _container_logs(session: Session, container: str, tail: int) -> dict[str, An
             "logs": session.runtime.logs(info.id, tail)}
 
 
-def _memory(memory: "Memory | None") -> dict[str, Any]:
+def _memory(memory: "Memory | None", body: str | None = None) -> dict[str, Any]:
+    """The machine's, or with `body` one project's (a body tab's own)."""
     if memory is None:
         raise SessionError("this daemon does not watch memory")
-    return memory.accounted()
+    return memory.accounted() if body is None else memory.of_body(body)
 
 
 def _tell(session: Session, events: EventLog, tab_id: str, note: str) -> dict[str, Any]:

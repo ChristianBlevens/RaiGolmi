@@ -34,7 +34,7 @@ def gb(n: int) -> str:
     return f"{n / 1024 ** 3:.1f} GB"
 
 
-def unset_message(body: str, held: dict[str, int]) -> str:
+def unset_message(body: str, held: dict[str, int], toml: str) -> str:
     holding = ", ".join(f"{KINDS[k]} {gb(v)}" for k, v in held.items())
     return (f"From the daemon: this project ({body}) now holds {holding}, and its body.toml "
             "sets no budget. A budget is the range a regular run of this project stays within "
@@ -42,16 +42,18 @@ def unset_message(body: str, held: dict[str, int]) -> str:
             "ceiling with room to spare. Measure what a regular run keeps (this build's caches, "
             "the runs and snapshots the work still cites, the memory its largest build or run "
             "takes), clear what is stale first, and set each close to that in a `[budget]` "
-            f"table in /definitions/bodies/{body}/body.toml: `caches`, `output`, `memory`, "
+            f"table in {toml}: `caches`, `output`, `memory`, "
             "each a size like \"2G\". When one is passed you are told, and check: if the excess "
             "is what the work now regularly needs, set the budget to that new range; if it is "
             "leftovers, clear back within it.")
 
 
-def exceeded_message(body: str, kind: str, budget: int, held: int) -> str:
+def exceeded_message(kind: str, budget: int, held: int, toml: str) -> str:
+    reads = "memory" if kind == "memory" else "disk"
     return (f"From the daemon: this project's {KINDS[kind]} came to {gb(held)}, past the "
-            f"{gb(budget)} budget set for a regular run. Check what grew: if it is what the work now "
-            f"regularly needs, set `{kind}` in /definitions/bodies/{body}/body.toml to that new "
+            f"{gb(budget)} budget set for a regular run. Check what grew (`{reads}` reads it "
+            f"again): if it is what the work now regularly needs, set `{kind}` in {toml} to "
+            "that new "
             "range; if it is leftovers — old builds, superseded runs, copies — clear them "
             "back within the budget (a build cache with its own tool, once anything the project "
             "needs is moved out of it). Say which you did.")
@@ -77,7 +79,14 @@ class Budgets:
             asked.add(body)
             save_json(self.path, sorted(asked))
         self.events.emit("budget.unset", tab=tab.tab_id, body=body, held=held, deliver={
-            "content": unset_message(body, held), "meta": {"from": "daemon"}})
+            "content": unset_message(body, held, self._toml(definition)),
+            "meta": {"from": "daemon"}})
+
+    def _toml(self, definition) -> str:
+        """The body's body.toml as its tab sees it, under /definitions."""
+        within = (definition.directory / "body.toml").relative_to(
+            self.session.definitions_root())
+        return f"/definitions/{within}"
 
     def over(self, body: str, held: dict[str, int]) -> dict[str, tuple[int, int]]:
         """Each kind in `held` past the body's budget: (budget, held)."""
@@ -100,5 +109,7 @@ class Budgets:
             return
         self.events.emit("budget.exceeded", tab=tab.tab_id, body=body, kind=kind,
                          budget=budget, held=held, message=said, **evidence, deliver={
-                             "content": exceeded_message(body, kind, budget, held),
+                             "content": exceeded_message(
+                                 kind, budget, held,
+                                 self._toml(self.session.catalogue.bodies[body])),
                              "meta": {"from": "daemon"}})

@@ -159,6 +159,24 @@ def body_reading(directory: Path, seen: set[tuple[int, int]],
             "largest_output": [{"path": p, "bytes": b} for p, b in sizes[:LARGEST] if b]}
 
 
+def of_tab(session: "Session", tab_id: str) -> dict[str, Any]:
+    """A body tab's own `disk`: its working copy as `body_reading` sizes it, its `[budget]`,
+    and what the machine has free; every path as the tab sees it, under /work."""
+    from .session import SessionError
+    root = session.working_copy(tab_id)
+    if root is None:
+        raise SessionError("`disk` reads a body's project, and this tab has none: the "
+                           "janitor reads the whole machine's")
+    budget = session.catalogue.bodies[session.intent.tabs[tab_id].body].budget
+    unread: list[str] = []
+    read = body_reading(root, set(), unread)
+    fs = os.statvfs(session.paths.data)
+    return {**read, "budget": {"caches": budget.caches if budget else None,
+                               "output": budget.output if budget else None},
+            "machine_free": fs.f_bavail * fs.f_frsize,
+            "unread": [u.replace(str(root), "/work") for u in unread]}
+
+
 def reading(session: "Session") -> dict[str, Any]:
     """What the disk holds now, by holder."""
     paths = session.paths

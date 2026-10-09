@@ -167,7 +167,7 @@ def test_a_project_with_no_tab_past_its_budget_is_the_janitors(h, monkeypatch):
 
 def test_the_ask_says_a_budget_is_a_regular_run_not_a_ceiling():
     from raigolmid.budgets import unset_message
-    said = unset_message("myapi", {"caches": GB})
+    said = unset_message("myapi", {"caches": GB}, "/definitions/bodies/myapi/body.toml")
     assert "regular run" in said and "not a" in said and "room to spare" in said
 
 

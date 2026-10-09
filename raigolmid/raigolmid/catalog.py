@@ -12,6 +12,10 @@ anything uses it; upload sends `layerfiles.upload_choice`'s files less what the 
 (`.uploadignore`). Install and upload are long, so they run on the catalog's own queue and are told through events
 (`catalog.*`); nobody waits on them, so a failure is said there or not at all.
 
+The machine tab works the layers too (`served_to_machine_tab`): the listing, download,
+install and delete, its install's outcome pushed to it. **No tab uploads** — an upload is a
+pull request from the user's account, the user's alone (the owner, 2026-10-09).
+
 Where a downloaded layer came from is kept in `Paths.registry_state`, never in the layer's
 directory, whose files are only what its build reads.
 """
@@ -160,6 +164,8 @@ class Catalog:
                 return "it is the selected body"
             if any(i.body == layer.id for i in intent.instances.values()):
                 return "a sandbox is built from it"
+            if (tab := next((t for t in intent.tabs.values() if t.body == layer.id), None)):
+                return f"its tab {tab.tab_id} is open"
         else:
             if session.active_toolbelt() == layer.id:
                 return "it is the active toolbelt"
@@ -288,14 +294,15 @@ class Catalog:
         shutil.rmtree(carried)
 
     # --- install ---------------------------------------------------------------------------
-    def install(self, kind: str, layer_id: str) -> dict[str, Any]:
+    def install(self, kind: str, layer_id: str, tab: str | None = None) -> dict[str, Any]:
+        """Queued; its outcome is an event, pushed to `tab` when a tab asked for it."""
         layer = self._layer(kind, layer_id)
         self._did(kind, layer_id, "installing")
         self.session.events.emit("catalog.installing", kind=kind, id=layer_id)
-        self.session.queues.submit(QUEUE, lambda: self._install(kind, layer), "install")
+        self.session.queues.submit(QUEUE, lambda: self._install(kind, layer, tab), "install")
         return {"kind": kind, "id": layer_id, "state": "installing"}
 
-    def _install(self, kind: str, layer) -> None:
+    def _install(self, kind: str, layer, tab: str | None) -> None:
         session = self.session
         try:
             if isinstance(layer, Body):
@@ -318,10 +325,12 @@ class Catalog:
             # Nobody waits on this job: its failure is said here or not at all.
             error = f"{type(exc).__name__}: {exc}"
             self._did(kind, layer.id, "install_failed", error=error)
-            session.events.emit("catalog.install_failed", kind=kind, id=layer.id, error=error)
+            session.events.emit("catalog.install_failed", kind=kind, id=layer.id, error=error,
+                                **_told(tab, f"Installing {kind} '{layer.id}' failed: {error}"))
             return
         self._did(kind, layer.id, "installed")
-        session.events.emit("catalog.installed", kind=kind, id=layer.id)
+        session.events.emit("catalog.installed", kind=kind, id=layer.id,
+                            **_told(tab, f"{kind} '{layer.id}' is installed."))
 
     # --- delete: the images first, the definition after ------------------------------------
     def delete(self, kind: str, layer_id: str) -> dict[str, Any]:
@@ -436,6 +445,35 @@ class Catalog:
         if not self._mine(came):
             raise CatalogError(f"{kind} '{layer_id}' was downloaded from {came['author']}; "
                                "only its author uploads it")
+
+
+def _told(tab: str | None, content: str) -> dict[str, Any]:
+    return {} if tab is None else {"tab": tab, "deliver": {
+        "content": content, "meta": {"from": "daemon"}}}
+
+
+def served_to_machine_tab(catalog: Catalog, tab_id: str) -> dict[str, Callable[..., Any]]:
+    """The layers' verbs on a tab's socket, refused to every tab but the machine tab, whose
+    work the layers are. The listing leaves out thumbnails, which are host paths."""
+    def machine(does: str, verb: Callable[..., Any]) -> Callable[..., Any]:
+        def call(*args: Any, **kwargs: Any) -> Any:
+            catalog.session._machine_tab(tab_id, does)
+            return verb(*args, **kwargs)
+        return call
+
+    def listing(server: bool = False) -> dict[str, Any]:
+        out = catalog.listing(server)
+        return {**out, "entries": [{k: v for k, v in e.items() if k != "thumbnail"}
+                                   for e in out["entries"]]}
+
+    return {
+        "layers": machine("lists the layers", listing),
+        "layer_download": machine("downloads a layer", lambda kind, id: catalog.download(
+            kind, id)),
+        "layer_install": machine("installs a layer", lambda kind, id: catalog.install(
+            kind, id, tab=tab_id)),
+        "layer_delete": machine("deletes a layer", lambda kind, id: catalog.delete(kind, id)),
+    }
 
 
 def _same_tree(a: Path, b: Path) -> bool:

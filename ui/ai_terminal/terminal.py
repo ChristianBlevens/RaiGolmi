@@ -464,8 +464,17 @@ def follow(client, tab: str) -> int:
     offered[0] = _keep(client, tab, pane, offered[0])
     event: dict | None = {}
     while True:
-        agent = next((a for a in _status(client)["agents"] if a["tab"] == tab), None)
+        status = _status(client)
+        agent = next((a for a in status["agents"] if a["tab"] == tab), None)
         if agent is None:
+            # A tab that ended its conversation: the one taking its work over comes into
+            # view in its place, as the user would have it.
+            successor = next((a["tab"] for a in status["agents"] if a["continues"] == tab),
+                             None)
+            if successor is not None and _in_view(pane):
+                with _one_at_a_time():
+                    sync_windows(client)
+                select_window(successor)
             return 0
         if agent["status"] == "running":
             _replay(naming.agent(tab))

@@ -269,18 +269,18 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_hands_on_to_
     record = h.session.paths.work / "run.md"
     record.write_text("23:00 handed tab-2\n")
 
-    # Not managing, the user is there: theirs to close.
+    # Not managing, the user is there: nothing is asked, and there is no run to report on.
     m.tab(MACHINE)["agent_activity"](busy=True)
     m.tab(MACHINE)["agent_activity"](busy=False)
     assert m.queued(MACHINE) == []
-    with pytest.raises(SessionError, match="nothing asked you"):
-        m.tab(MACHINE)["ready_to_restart"](report="early")
+    with pytest.raises(SessionError, match="no run to report on"):
+        m.tab(MACHINE)["end_conversation"](report="early")
 
     m.tab(MACHINE)["manage"](tab=BODY)
     m.tab(MACHINE)["agent_activity"](busy=True)
     m.tab(MACHINE)["agent_activity"](busy=False)
     m.pump()
-    assert "`ready_to_restart`" in m.queued(MACHINE)[-1]["content"]
+    assert "`end_conversation`" in m.queued(MACHINE)[-1]["content"]
 
     # A turn that heard the ask and did not say ready is the tab failing: said once, for the
     # janitor, and not asked again however often it goes idle.
@@ -291,15 +291,15 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_hands_on_to_
         m.pump()
     assert m.queued(MACHINE) == []
     [unanswered] = h.events_of("coordinator.unanswered")
-    assert unanswered.tab == MACHINE and "ready_to_restart" in unanswered.data["message"]
+    assert unanswered.tab == MACHINE and "end_conversation" in unanswered.data["message"]
     assert "coordinator.unanswered" in TAKEN
 
     # Repaired, it says ready with its progress report, a checkpoint of the run: filed with
     # this stretch's record and the daemon's, so the next stretch starts a record of its own.
     m.tab(MACHINE)["agent_activity"](busy=True)
     with pytest.raises(SessionError, match="needs words"):
-        m.tab(MACHINE)["ready_to_restart"](report=" ")
-    filed = m.tab(MACHINE)["ready_to_restart"](report="tab-2 ported the lexer")
+        m.tab(MACHINE)["end_conversation"](report=" ")
+    filed = m.tab(MACHINE)["end_conversation"](report="tab-2 ported the lexer")
     m.tab(MACHINE)["agent_activity"](busy=False)
     m.pump()
     run = h.session.intent.run
@@ -487,18 +487,23 @@ def test_a_runs_report_after_a_checkpoint_covers_its_last_stretch(h):
     m.tab(MACHINE)["manage"](tab=BODY)
     first = m.referred(BODY, "which lexer?")
     m.tab(MACHINE)["answer_question"](id=first, answer="the fast one")
-    h.session.hand_over(MACHINE, "asked")
-    m.tab(MACHINE)["ready_to_restart"](report="stretch one: the lexer")
-    later = m.referred(BODY, "which parser?")
-    m.tab(MACHINE)["answer_question"](id=later, answer="pratt")
-    m.tab(MACHINE)["manage"](tab=BODY, on=False)
+    m.tab(MACHINE)["agent_activity"](busy=True)
+    m.tab(MACHINE)["end_conversation"](report="stretch one: the lexer")
+    m.tab(MACHINE)["agent_activity"](busy=False)
     m.pump()
-    [asked] = [q["content"] for q in m.queued(MACHINE) if "report_run" in q["content"]]
+    machine = h.session.intent.machine_tab().tab_id
+    assert machine != MACHINE
+    h.session.agent_session_started(machine)
+    later = m.referred(BODY, "which parser?")
+    m.tab(machine)["answer_question"](id=later, answer="pratt")
+    m.tab(machine)["manage"](tab=BODY, on=False)
+    m.pump()
+    [asked] = [q["content"] for q in m.queued(machine) if "report_run" in q["content"]]
     assert "'which parser?'" in asked and "'which lexer?'" not in asked
     assert "first 1 stretch(es) are filed with their progress reports" in asked
     while h.session.intent.run.asked is None:
-        _hear(m, MACHINE)
-    filed = m.tab(MACHINE)["report_run"](report="the parser and the lexer are in")
+        _hear(m, machine)
+    filed = m.tab(machine)["report_run"](report="the parser and the lexer are in")
     assert filed["daemon_record"].endswith("-daemon-02.md")
 
 
@@ -512,3 +517,36 @@ def test_the_machine_tab_keeps_to_its_own_budget_only_while_it_manages_and_its_p
     assert h.session.context_budget(BODY) == 300000
     primer = h.session.agents.render_context(h.session._agent_spec(h.session.intent.tabs[MACHINE]))
     assert "300k-token context budget" in primer and "machine tab to 120k" in primer
+
+
+def test_a_body_tab_ends_its_own_conversation_and_a_new_tab_takes_its_work_over(h):
+    m = Machine(h)
+    m.tab(BODY)["agent_activity"](busy=True)
+    assert m.tab(BODY)["end_conversation"]()["status"] == "ending"
+    with pytest.raises(SessionError, match="no run to report on"):
+        m.tab(BODY)["end_conversation"](report="mine")
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+
+    [successor] = [t for t in h.session.intent.tabs.values() if t.continues == BODY]
+    assert BODY not in h.session.intent.tabs and not successor.managed
+    [start] = m.queued(successor.tab_id)
+    assert f"ended its conversation. Read /work/SESSION-START.md" in start["content"]
+    [closed] = [e for e in h.events_of("tab.closed") if e.tab == BODY]
+    assert (closed.data["by"], closed.data["continued_by"]) == ("self", successor.tab_id)
+
+
+def test_a_managed_tab_ending_its_own_conversation_is_told_to_the_machine_tab(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["end_conversation"]()
+    with pytest.raises(SessionError, match="ending its own conversation"):
+        m.tab(MACHINE)["restart_fresh"](tab=BODY)
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+
+    [successor] = [t for t in h.session.intent.tabs.values() if t.continues == BODY]
+    assert successor.managed
+    [told] = [q for q in m.queued(MACHINE) if "ended its own conversation" in q["content"]]
+    assert successor.tab_id in told["content"]

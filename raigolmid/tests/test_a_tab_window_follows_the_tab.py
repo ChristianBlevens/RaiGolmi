@@ -8,6 +8,7 @@ replaced by what the daemon does while the window is attached.
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import queue
 import subprocess
@@ -31,8 +32,9 @@ CONVERSATION = b"\x1b[c\x1b[>0q\x1b[?u\x1b[>1u" + SHOWN
 
 
 class _Daemon:
-    """`status` answers the next scripted state of the tab, None being a closed tab; an
-    exhausted script is a read nobody expected, and fails the test."""
+    """`status` answers the next scripted state of the tab, None being a closed tab and
+    "continued" one whose work tab-2 took over; an exhausted script is a read nobody
+    expected, and fails the test."""
 
     def __init__(self, states: list[str | None]) -> None:
         self.states = iter(states)
@@ -49,7 +51,11 @@ class _Daemon:
     def call(self, method: str, **_params):
         assert method == "status", method
         state = next(self.states)
-        agents = [] if state is None else [{"tab": TAB, "scope": "machine", "status": state}]
+        if state == "continued":
+            return {"agents": [{"tab": "tab-2", "scope": "machine", "status": "running",
+                                "continues": TAB}]}
+        agents = [] if state is None else [{"tab": TAB, "scope": "machine", "status": state,
+                                            "continues": None}]
         return {"agents": agents}
 
 
@@ -94,6 +100,18 @@ def test_a_reopened_tab_is_attached_again_in_the_same_window(monkeypatch):
     code, attaches, written = _follow(monkeypatch, daemon, [_reopened, _closed])
     assert (code, attaches) == (0, 2)
     assert "could not bring it back" not in written, "a crash being reopened is not final"
+
+
+@pytest.mark.parametrize("in_view", [True, False])
+def test_a_tab_that_ended_its_conversation_hands_the_view_to_its_successor(monkeypatch,
+                                                                          in_view):
+    selected: list[str] = []
+    monkeypatch.setattr(terminal, "_in_view", lambda _pane: in_view)
+    monkeypatch.setattr(terminal, "_one_at_a_time", contextlib.nullcontext)
+    monkeypatch.setattr(terminal, "sync_windows", lambda _client: None)
+    monkeypatch.setattr(terminal, "select_window", selected.append)
+    code, _, _ = _follow(monkeypatch, _Daemon(["running", "continued"]), [_closed])
+    assert (code, selected) == (0, ["tab-2"] if in_view else [])
 
 
 def test_the_replay_draws_everything_and_asks_the_terminal_nothing():

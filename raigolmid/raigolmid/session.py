@@ -1088,7 +1088,8 @@ class Session:
         """The agent's hooks report a prompt taken and an answer finished. A prompt
         its channel pushed carries the push's `channel_seq`; `done` is a turn that ended with
         nothing asked of the user and nothing on its way to it; `error` is the API error that
-        ended one (`limits.py`). No tab closes itself."""
+        ended one (`limits.py`). A turn ending closes nothing: a tab ends its conversation by
+        saying so (`coordinator.end_conversation`)."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
@@ -1176,27 +1177,38 @@ class Session:
         return {"version": version, "pinned": claudecode.pinned(containerfile),
                 "image": image, "moving": moving, "working": working}
 
-    def close_tab(self, tab_id: str) -> dict[str, Any]:
+    def close_tab(self, tab_id: str, why: str | None = None) -> dict[str, Any]:
         """The user closes a tab: its sandbox stops and its home, with the conversation in it,
         is archived. The tabs that always exist open afresh — the machine tab, or the
-        selected body's — so closing one is how its context is cleared."""
+        selected body's — so closing one is how its context is cleared. With `why`, the
+        janitor closes a tab failing in a way no restart or repair recovers; never one the
+        machine tab manages, which is the machine tab's to hand on."""
+        by = "user" if why is None else "janitor"
         with self._lock:
             tab = self._closable(tab_id)
+            if by == "janitor":
+                if tab.managed:
+                    raise SessionError(f"{tab_id} is managed by the machine tab, which hands "
+                                       "it on: `tell` the machine tab instead")
+                if not why.strip():
+                    raise SessionError("a close needs why: the failure no restart or repair "
+                                       "recovered")
             closed, released = self._close(tab)
             ended = self._end_run_if_over()
             self.store.save(self.intent)
-            self.events.emit("tab.closed", **closed, by="user")
+            self.events.emit("tab.closed", **closed, by=by,
+                             **({} if why is None else {"why": why}))
         self._say_run_ended(ended)
         self._stop_released(released)
-        return self.ensure_tabs(by="user")
+        return self.ensure_tabs(by="user" if by == "user" else "daemon")
 
     def succeed_tab(self, tab_id: str, by: str) -> TabIntent:
         """A fresh conversation is a new tab: this one closes as the user's close does, its
         home archived with its thought doc as that conversation's record, and a new tab on
         the same body takes over its work, the user's handing-over carried (`managed`,
         `stop_when`, `until`). The new tab is in the intent before this one leaves it, so a
-        run is never seen to end between them. `by` is who handed the work on, "machine" or
-        "daemon"."""
+        run is never seen to end between them. `by` is who handed the work on: "machine", or
+        "self" for a tab that ended its own conversation."""
         with self._lock:
             tab = self._closable(tab_id)
             if tab.held is not None:
@@ -1747,19 +1759,19 @@ class Session:
     def managed_tabs(self) -> set[str]:
         return {t.tab_id for t in self.intent.tabs.values() if t.managed}
 
-    def _machine_tab(self, tab_id: str) -> None:
+    def _machine_tab(self, tab_id: str, does: str = "tries a face off the user's screen") -> None:
         tab = self.intent.tabs.get(tab_id)
         if tab is None:
             raise SessionError(f"no tab {tab_id}")
         if not tab.machine:
-            raise SessionError("only the machine tab tries a face off the user's screen, as only "
-                               "it edits faces; message it (`to` \"machine\") for a change")
+            raise SessionError(f"only the machine tab {does}, as only it works on the "
+                               "layers; message it (`to` \"machine\") for a change")
 
     def seed_face_settings(self, tab_id: str, face_id: str,
                            source_id: str) -> dict[str, Any]:
         """The machine tab starts a face's app settings from another face's,
         replacing its own. Refused for the face on the user's screen, whose apps hold them."""
-        self._machine_tab(tab_id)
+        self._machine_tab(tab_id, "seeds a face's app settings")
         for fid in (face_id, source_id):
             if fid not in self.catalogue.faces:
                 raise SessionError(f"no face {fid!r}: {', '.join(sorted(self.catalogue.faces))}")
@@ -1935,7 +1947,7 @@ class Session:
 
     def repair(self, instance_id: str) -> dict[str, Any]:
         """`rai repair` — tear the instance down completely and rebuild it from its
-        definition, as an explicit user action."""
+        definition: the user's, the janitor's on any sandbox, a body tab's on its own."""
         with self._lock:
             if instance_id not in self.intent.instances:
                 raise SessionError(f"no sandbox {instance_id}")
@@ -1977,7 +1989,7 @@ class Session:
                      else {"body": t.body},
                      "sandbox": self._open_sandbox_of(t),
                      "status": t.status, "busy": t.busy, "managed": t.managed,
-                     "hands_off": self.intent.hands_off(t.tab_id)}
+                     "hands_off": self.intent.hands_off(t.tab_id), "continues": t.continues}
                     for t in self.intent.tabs.values()
                 ],
                 "face_runtime": {

@@ -48,7 +48,8 @@ def _closed(e: Event) -> str:
                 "this conversation and its thought doc archived")
     if "reason" in e.data:
         return f"closed: {e.data['reason']}"
-    who = {"user": "closed by you"}[e.data["by"]]
+    who = {"user": "closed by you",
+           "janitor": f"closed by the janitor: {e.data.get('why')}"}[e.data["by"]]
     # No archive: the tab had no home to keep; one that could not be kept says so itself
     # (`agent.home_archive_failed`).
     return who if e.data["archive"] is None else f"{who}; its conversation archived"
@@ -76,7 +77,8 @@ def _clock(t: float) -> str:
     return time.strftime("%H:%M", time.localtime(t))
 
 
-_BY = {"machine": "machine tab", "daemon": "daemon"}
+# "daemon" is the machine tab's budget handover as event logs already on machines record it.
+_BY = {"machine": "machine tab", "self": "tab itself", "daemon": "daemon"}
 
 
 def _opened(e: Event) -> str:

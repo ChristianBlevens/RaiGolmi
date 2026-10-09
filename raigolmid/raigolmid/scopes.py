@@ -23,7 +23,7 @@ import shutil
 import threading
 from typing import Any, Callable
 
-from . import api, hostsurfaces, jobs, naming, permissions
+from . import api, catalog, disk, hostsurfaces, jobs, naming, permissions
 from .api import ApiServer
 from .channel import Channels
 from .library import Library, served_to_tabs
@@ -36,11 +36,14 @@ from .session import Session, SessionError
 
 SOCKET = "raigolmid.sock"
 
-# Of the full table, what the janitor's machine scope reaches: the machine's state
-# read-only, its channel, and the repairs the daemon already has — never a shell in a sandbox.
+# Of the full table, what the janitor's machine scope reaches: everything it takes to
+# diagnose the machine — its state, docker's and sway's, the package index its repairs to
+# definitions name packages from — its channel, and the daemon's repairs. Its reach is
+# wide because it repairs the OS and reads little foreign text (the owner, 2026-10-09);
+# never a shell in a sandbox, which is a project's.
 MACHINE = ("version", "status", "list_items", "events", "container_logs", "journal",
-           "crash_logs", "restart_agent", "repair", "reconcile", "rediscover", "unstick",
-           "tell", "disk", "memory")
+           "crash_logs", "machine_state", "search_packages", "restart_agent", "repair",
+           "reconcile", "rediscover", "unstick", "tell", "disk", "memory")
 
 # Of the full table, what a face reaches: a read-only view of the machine, and every sandbox's
 # toolbelt by name (a face works with every body). Beyond it, what the user does themselves,
@@ -168,8 +171,22 @@ def _library(session: Session) -> Library:
 
 
 def build_tab_methods(session: Session, questions: Questions, channels: Channels,
-                      tab_id: str) -> dict[str, Callable[..., Any]]:
+                      tab_id: str,
+                      memory: Callable[..., Any] | None = None) -> dict[str, Callable[..., Any]]:
+    """`memory` is the full table's, narrowed here to the tab's own body."""
     here = lambda: instance_of(session, tab_id)                     # noqa: E731
+
+    def own_body() -> str:
+        body = session.intent.tabs[tab_id].body
+        if body is None:
+            raise SessionError("this reads a body's project, and this tab has none")
+        return body
+
+    def own_memory() -> dict[str, Any]:
+        if memory is None:
+            raise SessionError("this daemon does not watch memory")
+        return memory(body=own_body())
+
     return {
         **served_to_tabs(_library(session)),
         "version": lambda: {"protocol": api.PROTOCOL_VERSION, "epoch": session.epoch},
@@ -191,6 +208,10 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
         "rebuild_body": lambda: session.rebuild_body(
             here(), why=f"{tab_id}'s request").to_dict(),
         "restart_body": lambda: session.restart_body(here()),
+        # Its own sandbox and project, the genre the janitor repairs machine-wide.
+        "repair": lambda: session.repair(here()),
+        "disk": lambda: disk.of_tab(session, tab_id),
+        "memory": own_memory,
         "show_file": lambda path, line=1: session.show_file(here(), path, line),
         "show_url": lambda url: session.show_url(
             session._open_sandbox_of(session.intent.tabs[tab_id]), url),
@@ -211,6 +232,7 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
         "reply": lambda message, content: channels.messages.reply(tab_id, message, content),
         # The machine tab's, refused to every other.
         **coordinator.methods(session, questions, channels, tab_id),
+        **catalog.served_to_machine_tab(session.catalog, tab_id),
         **_talking(session, questions, channels, tab_id),
     }
 
@@ -225,6 +247,10 @@ def build_machine_methods(full: dict[str, Callable[..., Any]], session: Session,
             "restart_body": lambda instance: session.restart_body(instance),
             "rebuild_body": lambda instance: session.rebuild_body(
                 instance, why="the janitor's request").to_dict(),
+            # The face as the user sees it, written into the janitor's own home.
+            "screenshot": lambda: session.screenshot(JANITOR),
+            # A tab failing in a way no restart or repair recovers; never a managed one.
+            "close_tab": lambda tab, why: session.close_tab(tab, why=why),
             **_talking(session, questions, channels, JANITOR)}
 
 
@@ -277,7 +303,7 @@ class AgentSockets:
                                                  self.channels)
                            if tab_id == JANITOR
                            else build_tab_methods(self.session, self.questions,
-                                                  self.channels, tab_id))
+                                                  self.channels, tab_id, self.full["memory"]))
                 server = ApiServer(directory / SOCKET, methods, self.events, ready=self.ready,
                                    subscribe=False)
             except OSError as exc:
