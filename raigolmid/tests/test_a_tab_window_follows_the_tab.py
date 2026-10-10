@@ -383,12 +383,16 @@ def test_a_tab_has_one_window_and_a_second_is_closed(monkeypatch):
 
 class _Windows:
     """tmux's windows in index order: `list-windows` read from them, `swap-window` exchanging
-    two in place, `select-window` moving the current one. Any other command is refused."""
+    two in place, `select-window` moving the current one; one naming a window not there is
+    refused as tmux refuses it. `closing` is a window that closes as the first swap is asked.
+    Any other command is refused."""
 
-    def __init__(self, monkeypatch, names: list[str], current: str) -> None:
+    def __init__(self, monkeypatch, names: list[str], current: str,
+                 closing: str | None = None) -> None:
         self.windows = [(f"@{i}", name) for i, name in enumerate(names)]
         self.current = next(i for i, (_, n) in enumerate(self.windows) if n == current)
         self.selected: list[str] = []
+        self.closing = closing
         monkeypatch.setattr(terminal, "session_exists", lambda: True)
         monkeypatch.setattr(terminal, "_tmux", self)
 
@@ -399,6 +403,16 @@ class _Windows:
             out = "".join(f"{i}\t{n}\t{int(k == self.current)}\n"
                           for k, (i, n) in enumerate(self.windows))
         elif args[0] == "swap-window" and args[1] == "-s" and args[3] == "-t":
+            if self.closing is not None:
+                gone = next(k for k, (_, n) in enumerate(self.windows) if n == self.closing)
+                current = self.windows[self.current][0]
+                del self.windows[gone]
+                self.current = [i for i, _ in self.windows].index(current)
+                ids, self.closing = [i for i, _ in self.windows], None
+            missing = next((a for a in (args[2], args[4]) if a not in ids), None)
+            if missing is not None:
+                raise terminal.TerminalError(f"tmux {' '.join(args)} failed: "
+                                             f"can't find window: {missing}")
             a, b = ids.index(args[2]), ids.index(args[4])
             self.windows[a], self.windows[b] = self.windows[b], self.windows[a]
         elif args[:2] == ("select-window", "-t"):
@@ -424,6 +438,19 @@ def test_the_tabs_are_in_order_janitor_machine_selected_body_then_the_rest(monke
     assert tmux.names() == ["raigolmi", "janitor ⚙", "tab-11 machine", "tab-12 notes",
                             "tab-3 api", "tab-7 web"]
     assert tmux.names()[tmux.current] == "tab-3 api", "the window in view stays in view"
+
+
+def test_a_window_that_closes_while_the_tabs_are_put_in_order_is_left_out(monkeypatch):
+    """A tab's window closes itself when its tab ends, unlocked, so one read for the order can
+    be gone by its swap: the rest are still put in order, and nothing is raised."""
+    tmux = _Windows(monkeypatch, ["raigolmi", "tab-12 notes", "tab-11 machine", "janitor ⚙"],
+                    current="tab-11 machine", closing="janitor ⚙")
+    terminal.arrange_windows({
+        "agents": [{"tab": "janitor", "scope": "janitor"}, {"tab": "tab-11", "scope": "machine"},
+                   {"tab": "tab-12", "scope": {"body": "notes"}}],
+        "session": {"body": "notes"}})
+    assert tmux.names() == ["raigolmi", "tab-11 machine", "tab-12 notes"]
+    assert tmux.names()[tmux.current] == "tab-11 machine"
 
 
 class _Restarting(_Daemon):

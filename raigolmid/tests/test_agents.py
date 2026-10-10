@@ -643,6 +643,56 @@ def test_what_arrives_mid_turn_names_the_paths_the_agent_sees(monkeypatch, capsy
     assert "built /work/app" in said and "/host/work" not in said
 
 
+class _Bodies:
+    """The daemon a tab's stop hook asks: the bodies, each with its tab, and the turn's end.
+    Any other call is refused."""
+
+    def __init__(self, bodies):
+        self.bodies = bodies
+
+    def call(self, method, **params):
+        if method == "list_items" and params == {"kind": "body"}:
+            return {"bodies": self.bodies}
+        if method == "agent_activity":
+            return None
+        raise AssertionError(f"{method} {params} is not what a turn's end asks")
+
+
+def test_a_turn_ends_asked_only_about_documents_of_bodies_no_other_tab_has(
+        monkeypatch, tmp_path, capsys):
+    """A body that has its own tab is that tab's, so a doc read in it is not asked of the
+    machine tab; the question is context for the turn, not a blocking error."""
+    import argparse
+    import io
+    import rai.__main__ as rai_main
+
+    bodies = tmp_path / "definitions" / "bodies"
+    for body in ("free", "taken"):
+        (bodies / body).mkdir(parents=True)
+        (bodies / body / "SESSION-START.md").write_text("# start\n")
+    read = [{"type": "tool_use", "id": f"r{i}", "name": "Read",
+             "input": {"file_path": str(bodies / body / "SESSION-START.md")}}
+            for i, body in enumerate(("free", "taken"))]
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(json.dumps({"type": "assistant", "message": {"content": read}}) + "\n")
+    (tmp_path / "home").mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("RAIGOLMI_SCOPE", "tab")
+    monkeypatch.setenv("RAIGOLMI_TAB", "tab-1")
+    monkeypatch.delenv("RAIGOLMI_MOUNTS", raising=False)
+    monkeypatch.setattr(rai_main, "_client", lambda: _Bodies([
+        {"id": "free", "tab": None, "directory": str(bodies / "free")},
+        {"id": "taken", "tab": "tab-9", "directory": str(bodies / "taken")}]))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
+        "transcript_path": str(transcript), "background_tasks": [],
+        "stop_hook_active": False, "last_assistant_message": ""})))
+    assert rai_main.cmd_agent_activity(argparse.Namespace(state="stop")) == 0
+    asked = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert asked["hookEventName"] == "Stop"
+    assert str(bodies / "free" / "SESSION-START.md") in asked["additionalContext"]
+    assert "taken" not in asked["additionalContext"]
+
+
 def test_a_repository_among_the_definitions_is_protected_in_every_agent(h):
     """A body whose working copy is its definition directory keeps its `.git` under the
     definitions, which every agent mounts writable; its hooks and config are read-only

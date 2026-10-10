@@ -446,8 +446,9 @@ def follow(client, tab: str) -> int:
                     break
                 try:
                     on(event)
-                except (ApiError, OSError) as exc:
-                    # The daemon going away mid-event; the stream ending says the rest.
+                except (ApiError, OSError, TerminalError) as exc:
+                    # The daemon going away mid-event, the stream ending says the rest; or
+                    # tmux refusing one, and the next event reconciles the windows again.
                     logger.warning("%s's window could not act on %s: %s",
                                    tab, event.get("type"), exc)
             ended.set()
@@ -487,6 +488,20 @@ def follow(client, tab: str) -> int:
             # crash and its reopen, when the tab also reads crashed.
             _out(past_reopening)
         event = wake.get()
+
+
+def _to_the_journal() -> None:
+    """A tab's window says its own account in the journal, as the terminal's hooks do
+    (`rai-ai`): its tty is the agent's pane, in raw mode while attached, so a line written
+    there lands in the agent's screen, unreturned. A thread's death goes there too."""
+    import logging.handlers
+    handler = logging.handlers.SysLogHandler(address="/dev/log")
+    handler.ident = "rai-ai: "
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    threading.excepthook = lambda hook: logger.error(
+        "the %s thread died", hook.thread.name if hook.thread else "?",
+        exc_info=(hook.exc_type, hook.exc_value, hook.exc_traceback))
 
 
 def _status(client) -> dict:
@@ -731,6 +746,7 @@ def main(args) -> int:
             return attach()
 
         if action == "follow":
+            _to_the_journal()
             return follow(client, args.tab)
 
         if action == "permission":
@@ -955,7 +971,8 @@ def arrange_windows(status: dict) -> None:
     """The windows put in `_rank`'s order by swapping them among the indices they hold. A swap
     without `-d` fires no hook and leaves the current index where it was, with another window
     in it (tmux 3.7c; with `-d` it selects the destination), so the window in view is selected
-    again once, if a swap moved it."""
+    again once, if a swap moved it. A window that closed while this ran is arranged without
+    (`_still_there`)."""
     windows = list_windows()
     scopes = {a["tab"]: a["scope"] for a in status["agents"]}
     body = status["session"]["body"]
@@ -965,7 +982,22 @@ def arrange_windows(status: dict) -> None:
     for i, window_id in enumerate(wanted):
         if placed[i] != window_id:
             j = placed.index(window_id)
-            _tmux("swap-window", "-s", window_id, "-t", placed[i])
+            if not _still_there("swap-window", "-s", window_id, "-t", placed[i]):
+                arrange_windows(status)
+                return
             placed[i], placed[j] = placed[j], placed[i]
     if current is not None and placed[current] != windows[current].id:
-        _tmux("select-window", "-t", windows[current].id)
+        _still_there("select-window", "-t", windows[current].id)
+
+
+def _still_there(*args: str) -> bool:
+    """A tmux command on windows, False when tmux refused it because one it names has closed.
+    A tab's window closes itself when its tab ends, outside `_one_at_a_time`, so a window read
+    a moment ago can be gone; a refusal with every named window still listed is raised."""
+    try:
+        _tmux(*args)
+    except TerminalError:
+        if {a for a in args if a.startswith("@")} <= {w.id for w in list_windows()}:
+            raise
+        return False
+    return True

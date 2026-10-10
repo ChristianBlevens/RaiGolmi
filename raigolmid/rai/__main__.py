@@ -1276,16 +1276,26 @@ def cmd_agent_activity(args) -> int:
     hook = json.load(sys.stdin)
     from raigolmid.transcript import main_rows, undeclared_documents
     # Its own thought doc is the conversation's record, never declared; a doc it cannot write
-    # (the guide, a read-only layer) is not its to keep.
+    # (the guide, a read-only layer), or one in a body another tab has, is not its to keep:
+    # that body is its tab's (the primer's "Which tab you are"). The janitor keeps the machine.
     thoughts = str(Path.home() / "thoughts.md")
+    others: tuple[str, ...] = ()
+    if os.environ["RAIGOLMI_SCOPE"] == "tab":
+        from raigolmid.mcp_server import SeenInside
+        bodies = SeenInside(_client()).call("list_items", kind="body")["bodies"]
+        others = tuple(f"{b['directory']}/" for b in bodies
+                       if b["tab"] not in (None, os.environ["RAIGOLMI_TAB"]) and b["directory"])
     undeclared = {doc: portions for doc, portions in undeclared_documents(
                       main_rows(Path(hook["transcript_path"])), Path.home()).items()
-                  if doc != thoughts and os.access(doc, os.W_OK)}
+                  if doc != thoughts and os.access(doc, os.W_OK) and not doc.startswith(others)}
     decision = decide(hook, memory, undeclared)
     store.parent.mkdir(exist_ok=True)
     store.write_text(json.dumps(decision.memory.to_json()))
     if decision.refusal is not None:
-        print(json.dumps({"decision": "block", "reason": decision.refusal}))
+        # Context rather than `decision: block`, which continues the turn the same way and
+        # shows the user a "blocking error" with the hook's command line (Claude Code 2.1.295).
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop",
+                                                 "additionalContext": decision.refusal}}))
     if decision.report is not None:
         activity.record(Path.home(), busy=decision.report == "busy")
         _client().call("agent_activity", busy=decision.report == "busy")
