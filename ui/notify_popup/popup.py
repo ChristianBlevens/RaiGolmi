@@ -345,9 +345,8 @@ class Popup:
             panel.append(Gtk.ScrolledWindow(
                 hscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_height=True,
                 max_content_height=theme.look().menu_max_height, child=rows))
-        status = copyable.label(model.failure, wrap=True, xalign=0,
-                                visible=bool(model.failure))
-        status.add_css_class("status")
+        status = self._label(model.failure, "status", wrap=True)
+        status.set_visible(bool(model.failure))
         panel.append(status)
         return panel
 
@@ -362,7 +361,8 @@ class Popup:
             text = entry["text"]
             if entry["notice"] and entry["over"] is not None:
                 head += "  —  over"
-        row.append(self._label(head, "when"))
+        # Wrapped: a settled item's head carries its answer, whose width is the user's.
+        row.append(self._label(head, "when", wrap=True))
         standing = entry["notice"] and entry["over"] is None
         if standing:
             row.add_css_class("notice")
@@ -407,7 +407,10 @@ class Popup:
 
     @staticmethod
     def _label(text: str, css: str, wrap: bool = False, hexpand: bool = False) -> Gtk.Label:
-        label = copyable.label(text, wrap=wrap, xalign=0, hexpand=hexpand)
+        # A label's minimum width is the menu's: one that cannot break is as wide as its
+        # longest word, and a path is one word.
+        label = copyable.label(text, wrap=wrap, wrap_mode=Pango.WrapMode.WORD_CHAR, xalign=0,
+                               hexpand=hexpand)
         label.add_css_class(css)
         return label
 
