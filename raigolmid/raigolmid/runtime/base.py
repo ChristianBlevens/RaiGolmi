@@ -171,6 +171,15 @@ class ContainerRuntime(abc.ABC):
     def stop(self, name_or_id: str, timeout: int = 10) -> None: ...
 
     @abc.abstractmethod
+    def pause(self, name_or_id: str) -> None:
+        """Every process in it frozen where it stands (the cgroup freezer); refused unless
+        it is running."""
+
+    @abc.abstractmethod
+    def unpause(self, name_or_id: str) -> None:
+        """Refused unless it is paused."""
+
+    @abc.abstractmethod
     def remove(self, name_or_id: str, force: bool = False) -> None:
         """Raises `RemoveBusy` when something still holds mounts into the container.
         Never forces on its own: forcing is how a leaked storage layer happens."""

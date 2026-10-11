@@ -125,15 +125,21 @@ class FakeRuntime(ContainerRuntime):
         return info
 
     def pause(self, name: str) -> None:
-        """A container that is not running and still has a pid.
-
-        Every other way of stopping one drops the pid to None, so without this the fake
-        cannot express the state where `status` is the only thing that says a container is
-        not usable — and a caller checking the pid alone passes here and reports a paused
-        face as the face that is on the screen.
-        """
+        """A container that is not running and still has a pid: `status` is the only thing
+        that says it is not usable, so a caller checking the pid alone is caught here.
+        Refused, as Docker refuses it, unless it is running."""
         rec = self._live(name)
+        if rec["status"] != "running":
+            raise RuntimeError_(f"fake: '{name}' is {rec['status']}; only a running container pauses")
         rec["status"] = "paused"
+        self._emit("pause", rec)
+
+    def unpause(self, name: str) -> None:
+        rec = self._live(name)
+        if rec["status"] != "paused":
+            raise RuntimeError_(f"fake: '{name}' is {rec['status']}, not paused")
+        rec["status"] = "running"
+        self._emit("unpause", rec)
 
     def kill(self, name: str, exit_code: int = 137) -> None:
         """A container dying without the daemon asking — the case reconciliation exists

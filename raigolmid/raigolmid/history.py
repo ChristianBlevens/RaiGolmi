@@ -117,6 +117,10 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
                               if e.data.get("why") == "time"
                               else "taken back from the machine tab"),
     "tab.held": lambda e: f"held for you: {e.data['situation']}",
+    "tab.paused": lambda e: "paused by the machine tab: frozen where it stood",
+    "tab.resumed": lambda e: (f"resumed by the machine tab after {e.data['paused_for'] // 60} "
+                              "min" + ("" if e.data["how"] == "thawed"
+                                       else ", on its conversation: the machine restarted")),
     "run.ended": lambda e: (f"the machine tab's run from {_clock(e.data['started'])} ended: "
                             "every tab is given back, and it is asked for its report"),
     "run.checkpoint": lambda e: (f"its progress report on the run from "

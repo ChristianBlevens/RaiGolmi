@@ -24,6 +24,9 @@ The rules are applied **per instance, in this order**, and the order is the poin
    it running as it stopped and the machine has booted since: the shutdown ended it, and it
    resumes without a crash.
 
+A paused tab's frozen containers are as good as running: its sandbox is adopted as it
+stands, and the tab stays paused, with or without its agent, until it is resumed.
+
 Anything that cannot be brought to a known-good state is marked **degraded** with a reason
 and left alone.
 """
@@ -186,9 +189,15 @@ class Reconciler:
         # else touches the body, because the view's mounts are what make the body
         # unremovable. An instance with no body has a view on the toolbelt's own root.
         has_body = naming.has_body(instance_id)
+        paused = any(t.status == "paused" and intent.sandbox_of(t.tab_id) == instance_id
+                     for t in intent.tabs.values())
+
+        def up(c: ContainerInfo | None) -> bool:
+            return c is not None and (c.running or (paused and c.status == "paused"))
+
         if group.view is not None and has_body:
             view_body = group.view.labels.get(labels.BODY_CONTAINER)
-            body_gone = group.body is None or not group.body.running
+            body_gone = not up(group.body)
             replaced = group.body is not None and view_body not in (group.body.id, None)
             if body_gone or replaced:
                 reason = "its body is gone" if body_gone else "its body was replaced"
@@ -208,7 +217,7 @@ class Reconciler:
                 self.events.emit("reconcile.unreachable_view", instance=instance_id)
                 self.views.teardown(instance_id)
                 group.view = None
-        elif group.view is not None:
+        elif group.view is not None and not up(group.view):
             self.views.teardown(instance_id)
             group.view = None
 
@@ -216,10 +225,8 @@ class Reconciler:
         # sandbox names a toolbelt.
         wants_view = intent.instances[instance_id].toolbelt is not None
         healthy = (group.anchor is not None and group.anchor.running
-                   and (group.body is not None and group.body.running if has_body
-                        else group.body is None)
-                   and (group.view is not None and group.view.running
-                        if wants_view else group.view is None))
+                   and (up(group.body) if has_body else group.body is None)
+                   and (up(group.view) if wants_view else group.view is None))
 
         if healthy:
             # Rule 3 — adopt. The launcher socket lives on the host, so the daemon
@@ -326,7 +333,7 @@ class Reconciler:
             container = agent_containers.get(tab_id)
             if container is not None and container.running:
                 continue
-            if tab.status == "crashed":
+            if tab.status in ("crashed", "paused"):
                 continue
             if rebooted and tab_id in intent.stopped.running_tabs:
                 report.resumable_tabs.append(tab_id)

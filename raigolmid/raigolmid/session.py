@@ -931,6 +931,9 @@ class Session:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
                 raise SessionError(f"no tab {tab_id}")
+            if tab.status == "paused":
+                raise SessionError(f"{tab_id} is paused for the user, frozen where it stood; "
+                                   "the machine tab resumes it")
             try:
                 container, resumed = self.agents.restart(self._agent_spec(tab), resume=resume)
             finally:
@@ -959,6 +962,97 @@ class Session:
             tab.held = None
             self.store.save(self.intent)
         self.events.emit("tab.released", tab=tab_id, body=tab.body)
+
+    def pause(self, tab_id: str) -> dict[str, Any]:
+        """A tab's work frozen where it stands, at the user's word to the machine tab: its
+        agent, then its sandbox's toolbelt and body, so nothing of it runs — no turn, no job,
+        no load — until `resume` thaws it exactly where it was."""
+        with self._lock:
+            tab = self._tab(tab_id)
+            if tab.status != "running":
+                raise SessionError(f"{tab_id} is {tab.status}; only a running tab pauses")
+            frozen: list[str] = []
+            try:
+                self.runtime.pause(naming.agent(tab_id))
+                frozen.append(naming.agent(tab_id))
+                if (sandbox := self.intent.sandbox_of(tab_id)) is not None:
+                    frozen += self.queues.run(sandbox, lambda: self._freeze(sandbox), "pause",
+                                              timeout=60)
+            except BaseException:
+                for name in reversed(frozen):
+                    self.runtime.unpause(name)
+                raise
+            tab.status, tab.paused_at = "paused", time.time()
+            self.store.save(self.intent)
+        self.events.emit("tab.paused", tab=tab_id, body=tab.body)
+        return {"tab": tab_id, "status": "paused", "frozen": frozen}
+
+    def resume(self, tab_id: str) -> dict[str, Any]:
+        """A paused tab thawed, its sandbox before its agent, and the user's time for it moved
+        on by the pause. A boot ends every container, so a tab paused across one is started
+        again on its conversation instead."""
+        with self._lock:
+            tab = self._tab(tab_id)
+            if tab.status != "paused":
+                raise SessionError(f"{tab_id} is {tab.status}, not paused")
+            if (sandbox := self.intent.sandbox_of(tab_id)) is not None:
+                self.queues.run(sandbox, lambda: self._thaw(sandbox), "resume", timeout=60)
+            paused_for = time.time() - tab.paused_at
+            if tab.until is not None:
+                tab.until += paused_for
+            tab.paused_at = None
+            agent = self.runtime.inspect(naming.agent(tab_id))
+            if agent is not None and agent.status in ("paused", "running"):
+                if agent.status == "paused":
+                    self.runtime.unpause(agent.name)
+                tab.status = "running"
+                self.store.save(self.intent)
+                how = "thawed"
+            else:
+                tab.status = "starting"
+                self.restart_agent(tab_id, resume=True)
+                how = "restarted"
+        self.events.emit("tab.resumed", tab=tab_id, body=tab.body, how=how,
+                         paused_for=round(paused_for))
+        return {"tab": tab_id, "status": how, "paused_for": round(paused_for),
+                "until": tab.until}
+
+    def _freeze(self, sandbox: str) -> list[str]:
+        """The sandbox's running toolbelt and body, frozen; its anchor holds no process."""
+        frozen: list[str] = []
+        try:
+            for name in self._sandbox_parts(sandbox):
+                info = self.runtime.inspect(name)
+                if info is not None and info.running:
+                    self.runtime.pause(name)
+                    frozen.append(name)
+        except BaseException:
+            for name in reversed(frozen):
+                self.runtime.unpause(name)
+            raise
+        return frozen
+
+    def _thaw(self, sandbox: str) -> None:
+        for name in reversed(self._sandbox_parts(sandbox)):
+            info = self.runtime.inspect(name)
+            if info is not None and info.status == "paused":
+                self.runtime.unpause(name)
+
+    @staticmethod
+    def _sandbox_parts(sandbox: str) -> list[str]:
+        """Frozen in this order, thawed in the reverse: the toolbelt runs the body's work."""
+        return [naming.view(sandbox), *([naming.body_container(sandbox)]
+                                        if naming.has_body(sandbox) else [])]
+
+    def paused_sandbox(self, instance_id: str) -> None:
+        """Refuses changing a paused tab's sandbox, which would end the processes the pause
+        keeps where they stood."""
+        owner = next((t for t in self.intent.tabs.values()
+                      if t.status == "paused" and self.intent.sandbox_of(t.tab_id) == instance_id),
+                     None)
+        if owner is not None:
+            raise SessionError(f"{instance_id} is {owner.tab_id}'s, which is paused for the "
+                               "user; the machine tab resumes it")
 
     def context_budget(self, tab_id: str) -> int:
         """The context this tab keeps to now, and the one place that is decided; both numbers
@@ -1293,6 +1387,7 @@ class Session:
     def rebuild_body(self, instance_id: str, why: str) -> RebuildReport:
         """`why` is what asked for it, as the history says it: "your request", "a
         watched file", or a tab's request."""
+        self.paused_sandbox(instance_id)
         report = self._rebuild(instance_id)
         self.events.emit("rebuild.finished", instance=instance_id, why=why,
                          report=report.to_dict())

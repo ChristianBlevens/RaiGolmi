@@ -22,7 +22,8 @@ from typing import Any, Iterable, Literal
 from . import naming
 from .compatibility import Selection
 
-AgentStatus = Literal["running", "crashed", "exited", "starting"]
+# "paused": its agent and its sandbox frozen where they stood (`Session.pause`).
+AgentStatus = Literal["running", "crashed", "exited", "starting", "paused"]
 
 # The janitor tab: scoped to the machine rather than a sandbox, so it is neither the
 # machine tab nor a body's, and never one of the tabs the user works in.
@@ -58,6 +59,9 @@ class TabIntent:
     # When the user's time for a managed tab runs out (epoch seconds): the daemon then has it
     # make its documents ready and gives it back (`coordinator.py`).
     until: float | None = None
+    # When the user's pause began (epoch seconds): their time for the tab stands still
+    # through it, so `resume` moves `until` on by its length.
+    paused_at: float | None = None
     # The tab whose work this one took over in a fresh conversation (`Session.succeed_tab`).
     continues: str | None = None
 

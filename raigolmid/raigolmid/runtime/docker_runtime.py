@@ -198,6 +198,18 @@ class DockerRuntime(ContainerRuntime):
         except APIError as exc:
             raise RuntimeError_(f"could not stop '{name_or_id}': {exc}") from exc
 
+    def pause(self, name_or_id: str) -> None:
+        try:
+            self._client.containers.get(name_or_id).pause()
+        except APIError as exc:
+            raise RuntimeError_(f"could not pause '{name_or_id}': {exc}") from exc
+
+    def unpause(self, name_or_id: str) -> None:
+        try:
+            self._client.containers.get(name_or_id).unpause()
+        except APIError as exc:
+            raise RuntimeError_(f"could not unpause '{name_or_id}': {exc}") from exc
+
     def remove(self, name_or_id: str, force: bool = False) -> None:
         try:
             self._client.containers.get(name_or_id).remove(force=force, v=False)

@@ -356,6 +356,62 @@ def test_a_tab_stops_where_the_user_said_and_is_held_until_they_answer(h):
     m.tab(MACHINE)["direct"](tab=BODY, content="carry on")
 
 
+def _parts(sandbox: str) -> list[str]:
+    return [naming.agent(BODY), naming.view(sandbox), naming.body_container(sandbox)]
+
+
+def test_a_paused_tab_is_frozen_where_it_stands_until_the_machine_tab_resumes_it(h):
+    sandbox = h.open_sandbox()
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY, hours=1)
+    until = h.session.intent.tabs[BODY].until
+    m.tab(MACHINE)["pause"](tab=BODY)
+    assert [h.runtime._containers[n]["status"] for n in _parts(sandbox)] == ["paused"] * 3
+    assert h.session.intent.tabs[BODY].status == "paused"
+
+    for verb, args in (("direct", {"content": "go on"}), ("restart_fresh", {}),
+                       ("hold", {"situation": "x"}), ("manage", {"on": False})):
+        with pytest.raises(SessionError, match="paused"):
+            m.tab(MACHINE)[verb](tab=BODY, **args)
+    with pytest.raises(SessionError, match="paused"):
+        h.session.restart_agent(BODY)
+    with pytest.raises(SessionError, match="paused"):
+        h.session.rebuild_body(sandbox, "a watched file")
+
+    # Its time stands still, and a daemon restart adopts it as it stands.
+    m.coordinator.tick(until + 1)
+    assert h.session.intent.tabs[BODY].managed
+    report = h.session.reconcile()
+    assert BODY not in report.crashed_tabs and sandbox in report.adopted
+    assert [h.runtime._containers[n]["status"] for n in _parts(sandbox)] == ["paused"] * 3
+
+    h.session.intent.tabs[BODY].paused_at -= 600
+    resumed = m.tab(MACHINE)["resume"](tab=BODY)
+    assert resumed["status"] == "thawed"
+    assert [h.runtime._containers[n]["status"] for n in _parts(sandbox)] == ["running"] * 3
+    assert h.session.intent.tabs[BODY].status == "running"
+    assert h.session.intent.tabs[BODY].until >= until + 600
+    m.tab(MACHINE)["direct"](tab=BODY, content="carry on")
+
+
+def test_a_tab_paused_across_a_boot_stays_paused_and_its_resume_starts_it(h):
+    sandbox = h.open_sandbox()
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(MACHINE)["pause"](tab=BODY)
+    for name in _parts(sandbox):
+        h.runtime.stop(name)
+
+    report = h.session.reconcile()
+    assert BODY not in report.crashed_tabs + report.resumable_tabs
+    assert h.session.intent.tabs[BODY].status == "paused"
+    assert not h.events_of("agent.crashed")
+
+    assert m.tab(MACHINE)["resume"](tab=BODY)["status"] == "restarted"
+    assert h.session.intent.tabs[BODY].status == "running"
+    assert h.runtime._containers[naming.agent(BODY)]["status"] == "running"
+
+
 def test_a_tab_whose_time_runs_out_makes_its_documents_ready_and_is_given_back(h):
     m = Machine(h)
     m.tab(MACHINE)["manage"](tab=BODY, hours=4)

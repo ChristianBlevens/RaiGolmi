@@ -222,6 +222,10 @@ class Channels:
         if event.type in ("question.withdrawn", "question.delivered"):
             self._tab(event.tab).open_questions.discard(event.data.get("id"))
             return True
+        if event.type == "tab.resumed" and event.tab in self._tabs:
+            # Its poller stood still with it, so silence counts from the thaw.
+            self._tabs[event.tab].asked_at = event.ts
+            return False
         if event.type == "tab.closed":
             return self._tabs.pop(event.tab, None) is not None
         if event.type == "agent.started":

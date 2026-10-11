@@ -409,7 +409,7 @@ class Coordinator:
         already has it making its documents ready; given back once they are, or at once
         while it is held for the user, who has it as it stands."""
         for tab in list(self.session.intent.tabs.values()):
-            if not tab.managed or not self._time_up(tab, now):
+            if not tab.managed or tab.status == "paused" or not self._time_up(tab, now):
                 continue
             if tab.held is not None or (tab.handover == "ready" and not tab.busy):
                 self._give_back(tab)
@@ -632,7 +632,8 @@ def methods(session: "Session", questions: Questions, channels: Channels,
 
     return {name: only_machine(verb) for name, verb in (
         *((n, getattr(verbs, n)) for n in ("manage", "managed", "managed_tab", "direct",
-                                           "answer_question", "restart_fresh", "hold")),
+                                           "answer_question", "restart_fresh", "hold",
+                                           "pause", "resume")),
         ("report_run", report_run),
         # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
         ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)))
@@ -672,6 +673,10 @@ class Verbs:
         if hours is not None and hours <= 0:
             raise SessionError("`hours` is how long the user gives the tab, more than none")
         until = time.time() + hours * 3600 if hours is not None else None
+        if not on and (agent := self.session.intent.tabs.get(tab)) is not None \
+                and agent.status == "paused":
+            raise SessionError(f"{tab} is paused, and only you resume it: `resume` it before "
+                               "giving it back")
         managed = self.session.manage(tab, on, stop_when, until)
         if not on:
             run = self.session.intent.run
@@ -805,8 +810,24 @@ class Verbs:
             "content": hold_message(agent.stop_when, situation), "meta": {"from": "machine"}})
         return {**held, "next": "It is the user's until they answer in it; you are told then."}
 
+    def pause(self, tab: str) -> dict[str, Any]:
+        """At the user's word to you: the tab's work frozen where it stands, and their time
+        for it standing still, until they tell you to `resume` it."""
+        self._managed(tab)
+        paused = self.session.pause(tab)
+        return {**paused, "next": "Nothing of it runs and nothing reaches it, and its time "
+                                  "stands still; `resume` it when the user says."}
+
+    def resume(self, tab: str) -> dict[str, Any]:
+        self._managed(tab)
+        resumed = self.session.resume(tab)
+        return {**resumed, "next": "It goes on where it stood; you are told when its turn "
+                                   "ends, as before."}
+
     def _unheld(self, tab: str):
         agent = self._managed(tab)
+        if agent.status == "paused":
+            raise SessionError(f"{tab} is paused for the user; `resume` it first")
         if agent.held is not None:
             raise SessionError(f"{tab} is held for the user; nothing reaches it until they "
                                "answer in it, and you are told then")

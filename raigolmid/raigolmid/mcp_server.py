@@ -365,9 +365,23 @@ def build_server(client: ApiClient):
     @tool(server, description="Machine tab only: hold a tab you manage for the user, at the "
                              "stop they gave. It is told to put `situation` to them — where the "
                              "work stands, what is theirs to decide, the options. Nothing of "
-                             "yours reaches it until they answer in it; you are told then.")
+                             "yours reaches it until they answer in it, which only they can do; "
+                             "you are told then. Never for a pause the user asks of you: that is `pause`.")
     def hold(tab: str, situation: str) -> dict[str, Any]:
         return call("hold", tab=tab, situation=situation)
+
+    @tool(server, description="Machine tab only: when the user asks you to pause a tab you "
+                             "manage, freeze its work where it stands — its turn, its jobs, "
+                             "its sandbox — so it puts no load on the machine. Nothing reaches "
+                             "it and their time for it stands still until you `resume` it at "
+                             "their word.")
+    def pause(tab: str) -> dict[str, Any]:
+        return call("pause", tab=tab)
+
+    @tool(server, description="Machine tab only: a tab you paused goes on exactly where it "
+                             "stood.")
+    def resume(tab: str) -> dict[str, Any]:
+        return call("resume", tab=tab)
 
     @tool(server, description="Machine tab only: every tab you manage — its state, the "
                              "questions it waits on you for, and its context use against the "

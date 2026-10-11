@@ -364,13 +364,16 @@ a tab to stop for you, a number of hours, or both. From then on:
 - every tab, the machine tab and the janitor included, is a Claude Code Remote Control
   session named after its project, so you can follow any of them from your phone;
 - a tab that reaches your stop is held for you, and typing in the tab takes it back;
+- ask the machine tab to pause and it freezes the tabs where they stand, so they put no
+  load on the machine and their time stands still; ask it to resume and they carry on
+  exactly where they were;
 - when the time runs out, each tab finishes up and is given back;
 - each time the machine tab hands itself over, it files a progress report on that stretch,
   so a run of any length keeps its whole record;
 - once the last tab is back, the machine tab writes a report, which you'll find in the
   catalog under Documents, Runs, next to the progress reports.
 
-Every handover, hold and ending shows up in the history.
+Every handover, hold, pause and ending shows up in the history.
 
 ### The janitor, in more detail
 

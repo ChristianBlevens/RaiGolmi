@@ -487,6 +487,10 @@ def follow(client, tab: str) -> int:
             # Read at the window's opening, or said by the daemon: not the moment between a
             # crash and its reopen, when the tab also reads crashed.
             _out(past_reopening)
+        elif agent["status"] == "paused" and event == {}:
+            # Docker refuses to attach to a paused container; its resume wakes this.
+            _out(f"\n{tab} is paused by the machine tab, frozen where it stood; it goes on "
+                 "when the machine tab resumes it.\n")
         event = wake.get()
 
 
