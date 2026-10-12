@@ -49,6 +49,28 @@ ABANDON_GRACE = 2.0
 SCROLLBACK_BYTES = 256 * 1024
 
 
+def group_cpu(pid: int) -> float | None:
+    """CPU seconds used by the process group `pid` leads: each live member's own, and what
+    each has reaped from its children. None when the group is gone."""
+    total = 0
+    found = False
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as f:
+                stat = f.read()
+        except OSError:
+            continue                    # exited between the listing and the read
+        # After the command, which may itself hold ')': state, ppid, pgrp, ..., the 12th to
+        # 15th fields after it are utime, stime, cutime, cstime (proc(5)).
+        fields = stat[stat.rfind(")") + 2:].split()
+        if int(fields[2]) == pid:
+            found = True
+            total += sum(int(x) for x in fields[11:15])
+    return total / os.sysconf("SC_CLK_TCK") if found else None
+
+
 @dataclass
 class Process:
     """A launcher child.
@@ -69,15 +91,19 @@ class Process:
     master_fd: int | None = None
     conn: socket.socket | None = None
     scrollback: bytearray = field(default_factory=bytearray)
+    # Every byte it has printed, which the scrollback stops counting once it is full.
+    printed: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def to_wire(self) -> dict[str, Any]:
         return {"proc": self.proc_id, "pid": self.pid, "cmd": list(self.cmd),
                 "pty": self.pty, "started": self.started, "exit": self.exit_code,
-                "attached": self.conn is not None}
+                "attached": self.conn is not None, "printed": self.printed,
+                "cpu": None if self.exit_code is not None else group_cpu(self.pid)}
 
     def record(self, data: bytes) -> None:
         with self.lock:
+            self.printed += len(data)
             self.scrollback.extend(data)
             if len(self.scrollback) > SCROLLBACK_BYTES:
                 del self.scrollback[:len(self.scrollback) - SCROLLBACK_BYTES]

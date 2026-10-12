@@ -219,31 +219,59 @@ def build_server(client: ApiClient):
                              "without output; when it passes, everything the command started "
                              "is stopped, background jobs included. Anything that may run "
                              "longer than a few minutes — a build, a test suite, a long run — "
-                             "is a job (`job_start`), never a background `&` here.")
-    def exec(cmd: list[str], cwd: str = "/work", timeout: float = 300.0) -> dict[str, Any]:
-        return client.call("exec", cmd=cmd, cwd=cwd, timeout=timeout)
+                             "is a job (`job_start`), never a background `&` here. Given "
+                             "`expect` (seconds you predict) and `basis` (why), it runs as a "
+                             "job held to that prediction and returns as `job_wait` does.")
+    def exec(cmd: list[str], cwd: str = "/work", timeout: float = 300.0,
+             expect: int | None = None, basis: str = "") -> dict[str, Any]:
+        return client.call("exec", cmd=cmd, cwd=cwd, timeout=timeout, expect=expect,
+                           basis=basis)
 
     @tool(server, description="Start a long command in your sandbox's toolbelt container as a "
                              "job under `name`: it runs on whatever happens to this call, your "
                              "turn or your session, until it exits. Wait on it with `job_wait`. "
                              "Its output is kept (the last 256 KB); a job whose output you "
-                             "need whole writes it to a file itself.")
-    def job_start(name: str, cmd: list[str], cwd: str = "/work") -> dict[str, Any]:
-        return client.call("job_start", name=name, cmd=cmd, cwd=cwd)
+                             "need whole writes it to a file itself. `expect` is how many "
+                             "seconds you predict it takes and `basis` one line on why — "
+                             "returned are your body's last runs of the same command, to "
+                             "predict the next from. When `expect` runs out the job is "
+                             "paused until you defend it (`job_defend`) or stop it.")
+    def job_start(name: str, cmd: list[str], expect: int, basis: str,
+                  cwd: str = "/work") -> dict[str, Any]:
+        return client.call("job_start", name=name, cmd=cmd, expect=expect, basis=basis,
+                           cwd=cwd)
 
     @tool(server, description="Wait on a job: returns when it exits (with its exit code), when it "
                              "is gone (its toolbelt container was recreated or the machine "
                              "restarted, so it left no exit code), or after `timeout` seconds "
-                             "(at most 300) with it still running — then call again. Always "
+                             "(at most 300) with it still running — then call again — or as "
+                             "OVERRUN when it ran past its prediction and is paused. Always "
                              "returns the end of what it printed, so a run that crashed says "
                              "how.")
     def job_wait(name: str, timeout: float = 300.0) -> dict[str, Any]:
         return client.call("job_wait", name=name, timeout=timeout)
 
-    @tool(server, description="Your jobs: each one's command, how long since it started, and "
-                             "whether it is running, exited (with its code) or gone.")
+    @tool(server, description="Your jobs: each one's command, how long since it started, its "
+                             "prediction and defences, and whether it is running, OVERRUN, "
+                             "exited (with its code) or gone.")
     def jobs() -> list[dict[str, Any]]:
         return client.call("jobs")
+
+    @tool(server, description="Continue a job paused past its prediction. `reason` names the "
+                             "cause of it taking longer — never only that it is still running; "
+                             "a cause given before carries `confirmed` with evidence it is "
+                             "real. `observed` is evidence it is progressing (what it is "
+                             "working on now, output since you last looked), set beside the "
+                             "daemon's own reading of its CPU and output. `expect_more` is "
+                             "the new prediction in seconds.")
+    def job_defend(name: str, reason: str, observed: str,
+                   expect_more: int) -> dict[str, Any]:
+        return client.call("job_defend", name=name, reason=reason, observed=observed,
+                           expect_more=expect_more)
+
+    @tool(server, description="End a job, saying why; its process group is sent SIGTERM.")
+    def job_stop(name: str, reason: str) -> dict[str, Any]:
+        return client.call("job_stop", name=name, reason=reason)
 
     @tool(server, description="Rebuild your sandbox's body from its definition and swap "
                              "it in. Returns exactly one of rebuilt, already_current or "

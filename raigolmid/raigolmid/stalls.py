@@ -224,8 +224,8 @@ class Stalls:
 
     def _evidence(self, body: str | None, tab_id: str, home: Path,
                   since: float) -> dict[str, Any]:
-        """What the janitor judges by, read-only: what the tab last called and waits on, and
-        what runs in its agent's container and a body tab's sandbox toolbelt, where those calls ran."""
+        """What the janitor judges by, read-only: what the tab last called and waits on, its
+        jobs' predictions and the defences of each overrun, and what runs in its agent's container and a body tab's sandbox toolbelt, where those calls ran."""
         sandbox = None if body is None else naming.instance_id(body, tab_id)
         containers = [naming.agent(tab_id)] + ([] if sandbox is None else [naming.view(sandbox)])
         processes = {}
@@ -236,7 +236,8 @@ class Stalls:
                 # The refusal is the answer: a toolbelt that is down runs nothing.
                 processes[container] = f"(not listed: {exc})"
         return {"since": since, "sandbox": sandbox, "waiting_on": waited_on(home),
-                "last_calls": last_calls(home), "processes": processes}
+                "last_calls": last_calls(home), "processes": processes,
+                "jobs": self.session.jobs.recorded(tab_id)}
 
     def _unstick_janitor(self, tab_id: str, message: str, evidence: dict[str, Any]) -> None:
         """Nobody takes the janitor's own: it is unstuck here, told what it was doing."""

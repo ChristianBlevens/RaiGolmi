@@ -203,12 +203,16 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
                                     tab_status(session, questions, channels, tab_id))[1],
         "deselect": lambda kind: (session.deselect(kind, tab_id),
                                   tab_status(session, questions, channels, tab_id))[1],
-        "exec": lambda cmd, cwd="/work", timeout=300.0: session.exec(here(), cmd, cwd,
-                                                                     timeout),
-        "job_start": lambda name, cmd, cwd="/work": session.jobs.start(tab_id, here(), name,
-                                                                       cmd, cwd),
+        "exec": lambda cmd, cwd="/work", timeout=300.0, expect=None, basis="": (
+            session.exec(here(), cmd, cwd, timeout) if expect is None
+            else session.jobs.exec(tab_id, here(), cmd, cwd, expect, basis)),
+        "job_start": lambda name, cmd, expect, basis, cwd="/work": session.jobs.start(
+            tab_id, here(), name, cmd, expect, basis, cwd),
         "job_wait": lambda name, timeout=jobs.WAIT_MOST: session.jobs.wait(tab_id, name,
                                                                            timeout),
+        "job_defend": lambda name, reason, observed, expect_more: session.jobs.defend(
+            tab_id, name, reason, observed, expect_more),
+        "job_stop": lambda name, reason: session.jobs.stop(tab_id, name, reason),
         "jobs": lambda: session.jobs.list(tab_id),
         "rebuild_body": lambda: session.rebuild_body(
             here(), why=f"{tab_id}'s request").to_dict(),

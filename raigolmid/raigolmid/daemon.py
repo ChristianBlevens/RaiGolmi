@@ -228,6 +228,7 @@ class Daemon:
                              (lambda: self.coordinator.run(self._stop), "coordinator"),
                              (lambda: self.limits.run(self._stop), "limits"),
                              (lambda: self.stalls.run(self._stop), "stalls"),
+                             (lambda: self.session.jobs.run(self._stop), "jobs"),
                              (lambda: self.remote_control.run(self._stop), "remote-control"),
                              (lambda: self.claude_login.run(self._stop), "claude-login"),
                              (lambda: self.disk.run(self._stop), "disk"),

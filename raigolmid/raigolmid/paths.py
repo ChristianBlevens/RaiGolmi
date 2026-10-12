@@ -96,6 +96,11 @@ class Paths:
         """Each tab's long jobs and the launcher that runs each (`jobs.py`)."""
         return self.state / "jobs.json"
 
+    def job_ledger(self, body: str) -> Path:
+        """One row per job a body's tabs ran (`jobs.py`). Not in the body's directory, which
+        may be its build context: a row written there would make the body outdated."""
+        return self.state / "job-ledgers" / f"{body}.jsonl"
+
     @property
     def budget_asks(self) -> Path:
         """The bodies whose tabs were asked to set a budget (`budgets.py`)."""

@@ -315,7 +315,9 @@ error cut off — the usage limit included — is resumed by the daemon once it 
 **A long command is a job.** A build, a suite or a run that may outlast a few minutes is
 started with `job_start` and waited on with `job_wait`, which ends when it exits, crashes or is
 gone, and hands back how it ended — never a background `&` and a loop on a file, which a
-timed-out call kills and a crashed run never ends. Run one heavy build at a time: `jobs` shows
+timed-out call kills and a crashed run never ends. Every job starts with a prediction
+(`expect`, and its `basis`) taken from the past runs `job_start` hands back: a job past it is
+paused, and an overrun is a fault to explain with `job_defend`, never a wait to sit out. Run one heavy build at a time: `jobs` shows
 what is still running. A build tool's cache (a directory holding `CACHEDIR.TAG`, as cargo's
 `target/` does) only grows: empty it with its tool (`cargo clean`) when it holds far more than a
 fresh build would, and keep nothing the project needs in it — runs, snapshots and scripts go

@@ -118,6 +118,13 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
                               else "taken back from the machine tab"),
     "tab.held": lambda e: f"held for you: {e.data['situation']}",
     "tab.paused": lambda e: "paused by the machine tab: frozen where it stood",
+    "job.overrun": lambda e: (f"its job {e.data['name']} ran past its prediction "
+                              f"({e.data['seconds']} s against {e.data['predicted']} s) and is "
+                              "paused" + (", for whoever manages it to decide"
+                                          if e.data["escalated"] else " until it says why")),
+    "job.undefended": lambda e: (f"ended its turn with its job {e.data['name']} paused past its "
+                                 "prediction and undefended"),
+    "job.stopped": lambda e: f"stopped its job {e.data['name']}: {e.data['reason']}",
     "tab.resumed": lambda e: (f"resumed by the machine tab after {e.data['paused_for'] // 60} "
                               "min" + ("" if e.data["how"] == "thawed"
                                        else ", on its conversation: the machine restarted")),
@@ -188,6 +195,9 @@ NOTICED: dict[str, Callable[[Event], str]] = {
     "coordinator.unanswered": lambda e: e.data["message"],
     "janitor.open_failed": lambda e: f"The janitor tab could not open: {e.data['error']}",
     "agent.turn_failed": lambda e: e.data["message"],
+    "job.pause_failed": lambda e: (f"Tab {e.tab}'s job {e.data['name']} ran past its "
+                                   f"prediction and could not be paused: {e.data['error']}"),
+    "job.watch_failed": lambda e: f"The job watch failed on an event: {e.data['error']}",
     "stalls.unstick_failed": lambda e: (f"The janitor tab was stuck and could not be "
                                         f"restarted: {e.data['error']}"),
     "claude_login.lost": lambda e: (

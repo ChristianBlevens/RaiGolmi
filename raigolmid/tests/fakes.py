@@ -245,7 +245,8 @@ class FakeLauncherClient:
         launcher = self.parent.launcher(self.instance)
         mine = self.parent.jobs.setdefault(launcher, {})
         proc = len(mine) + 1
-        mine[proc] = {"cmd": list(cmd), "cwd": cwd, "exit": None, "printed": ""}
+        mine[proc] = {"cmd": list(cmd), "cwd": cwd, "exit": None, "printed": "", "cpu": 0.0,
+                      "signals": []}
         return proc, launcher
 
     def process(self, launcher: str, proc_id: int) -> dict | None:
@@ -255,7 +256,19 @@ class FakeLauncherClient:
         if launcher != self.parent.launcher(self.instance):
             return None
         job = self.parent.jobs[launcher][proc_id]
-        return {"proc": proc_id, "exit": job["exit"]}
+        return {"proc": proc_id, "exit": job["exit"], "printed": len(job["printed"].encode()),
+                "cpu": None if job["exit"] is not None else job["cpu"]}
+
+    def signal(self, proc_id: int, sig: int = 15) -> None:
+        """As the real one: refused for a proc it never issued or one already gone."""
+        from raigolmid.launcher.client import LauncherError
+        self._require_reachable()
+        job = self.parent.jobs[self.parent.launcher(self.instance)].get(proc_id)
+        if job is None:
+            raise LauncherError("no such proc")
+        if job["exit"] is not None:
+            raise LauncherError("process is already gone")
+        job["signals"].append(sig)
 
     def scrollback(self, proc: int, timeout: float = 5.0) -> str:
         self._require_reachable()
