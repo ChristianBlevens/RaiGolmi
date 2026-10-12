@@ -317,7 +317,8 @@ started with `job_start` and waited on with `job_wait`, which ends when it exits
 gone, and hands back how it ended — never a background `&` and a loop on a file, which a
 timed-out call kills and a crashed run never ends. Every job starts with a prediction
 (`expect`, and its `basis`) taken from the past runs `job_start` hands back: a job past it is
-paused, and an overrun is a fault to explain with `job_defend`, never a wait to sit out. Run one heavy build at a time: `jobs` shows
+paused, and an overrun is a fault to explain with `job_defend`, never a wait to sit out; a
+prediction wrong three times ends the job, since it is not the task you took it for. Run one heavy build at a time: `jobs` shows
 what is still running. A build tool's cache (a directory holding `CACHEDIR.TAG`, as cargo's
 `target/` does) only grows: empty it with its tool (`cargo clean`) when it holds far more than a
 fresh build would, and keep nothing the project needs in it — runs, snapshots and scripts go

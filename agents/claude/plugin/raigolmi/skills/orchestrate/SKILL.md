@@ -94,9 +94,7 @@ audited: 7102 2026-10-05
 - A tab whose turn already left its documents ready goes in one call, with `documents_ready`;
   while it is still finishing a turn, that call restarts it as the turn ends.
 - Long jobs are the tab's `job_start` and `job_wait`, never a background `&`: a tab waiting on
-  one is not stuck, and a job that crashed says so. A job past its prediction is paused until
-  the tab defends it; from its third overrun the tab's question about it is yours to answer —
-  whether the cause it gives is real is the decision.
+  one is not stuck, and a job that crashed says so.
 
 ## Your own budget and handover
 

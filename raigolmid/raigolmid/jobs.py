@@ -20,10 +20,11 @@ watch pauses the job (SIGSTOP to its process group, so its work so far is kept) 
 tab; `wait` and `list` then say OVERRUN, never a status, until `defend` names a cause and the
 evidence it is progressing, beside the daemon's own reading of the job (CPU seconds and bytes
 printed since the last defence), and gives a new prediction — or `stop` ends it. A later
-defence repeating an earlier cause carries `confirmed`. From the third overrun on, the decision
-is not the tab's: the job stays paused until a question the tab asks since (`ask_user`, which
-reaches the machine tab when the tab is managed) is answered, and the machine tab is told. A
-turn that ends with a job undefended is said in the tab's history. Each job's end writes a row
+defence repeating an earlier cause carries `confirmed`. The job and its defence are the tab's
+that started it, and no one else's. Three overruns end it: a task whose prediction was wrong
+three times is not the task its tab thinks it is, so the third is struck out (SIGTERM) and the
+tab told to find out what it is before starting it again. A turn that ends with a job
+undefended is said in the tab's history. Each job's end writes a row
 to its body's ledger (`Paths.job_ledger`), a run under a third of its prediction included,
 since a prediction far too long hides a fault as well as one too short.
 
@@ -58,8 +59,8 @@ PROGRESS_SECONDS = 60.0
 # How much of the end of what a job printed `wait` and `jobs` hand back.
 TAIL_CHARS = 3000
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-# The overrun from which the decision is the manager's, and how many ledger rows `start` gives.
-ESCALATE_AT = 3
+# The overrun that ends a job, and how many ledger rows `start` gives.
+STRIKES = 3
 SIMILAR_ROWS = 5
 # A reason that says only that the job is going, which names no cause.
 NO_CAUSE = re.compile(r"(it'?s |it is )?(still )?(running|building|compiling|working|"
@@ -183,7 +184,7 @@ class Jobs:
         job = {"instance": instance_id, "launcher": launcher, "proc": proc, "cmd": cmd,
                "cwd": cwd, "started": now, "expect": expect, "basis": basis,
                "until": now + expect, "overruns": 0, "overrun": None, "defences": [],
-               "mark": {"cpu": 0.0, "printed": 0}, "asked": [], "answer": None}
+               "mark": {"cpu": 0.0, "printed": 0}}
         with self._lock:
             # A closed tab's jobs are no one's to wait on.
             for gone in self._jobs.keys() - self.session.intent.tabs.keys():
@@ -230,7 +231,8 @@ class Jobs:
             return {"state": "gone", "why": known}
         if known["exit"] is not None:
             with self._lock:
-                self._ledger(tab_id, name, job, "stopped" if job.get("stopped") else "exited",
+                self._ledger(tab_id, name, job, "struck out" if job.get("struck")
+                             else "stopped" if job.get("stopped") else "exited",
                              known["exit"])
             out = {"state": "exited", "exit_code": known["exit"]}
             if job.get("stopped"):
@@ -253,18 +255,16 @@ class Jobs:
                 "to_do": ("paused: say why it is taking longer with `job_defend` (a cause, "
                           "evidence it is progressing, and a new prediction), or end it with "
                           "`job_stop`")}
-        if overrun["count"] >= ESCALATE_AT:
-            said["to_do"] = (
-                "paused, and no longer yours to continue alone: ask with `ask_user` whether "
-                "to go on (it reaches whoever manages this tab), then `job_defend` or "
-                "`job_stop` with the answer" + (f" — answered: {job['answer']!r}"
-                                                if job["answer"] else ""))
+        if overrun["count"] == STRIKES - 1:
+            said["to_do"] += (f"; a prediction wrong {STRIKES} times ends it, so check what it "
+                              "is really doing before you defend it again")
         return said
 
     # --- the timer ---------------------------------------------------------------------
 
     def _due(self, tab_id: str, name: str, job: dict[str, Any]) -> None:
-        """Pauses the job if its prediction has run out and it is still running."""
+        """Pauses the job if its prediction has run out and it is still running, and ends it
+        at its third."""
         with self._lock:
             if job["overrun"] is not None or job.get("ledgered") or job.get("stopped") \
                     or time.time() < job["until"]:
@@ -272,15 +272,16 @@ class Jobs:
             known = self._known(job)
             if isinstance(known, str) or known["exit"] is not None:
                 return
+            struck = job["overruns"] + 1 >= STRIKES
             client = self.session.views.client(job["instance"])
             try:
-                client.signal(job["proc"], signal.SIGSTOP)
+                client.signal(job["proc"], signal.SIGTERM if struck else signal.SIGSTOP)
             except LauncherError as exc:
                 known = self._known(job)
                 if isinstance(known, str) or known["exit"] is not None:
-                    return                  # it ended between the read and the pause
+                    return                  # it ended between the read and the signal
                 raise JobError(f"job {name!r} ran past its prediction and could not be "
-                               f"paused: {exc}") from exc
+                               f"{'ended' if struck else 'paused'}: {exc}") from exc
             mark = job["mark"]
             cpu = known["cpu"]
             reading = {"cpu_seconds": (None if cpu is None
@@ -291,31 +292,28 @@ class Jobs:
             job["overruns"] += 1
             predicted = (job["defences"][-1]["expect_more"] if job["defences"]
                          else job["expect"])
-            job["overrun"] = {"count": job["overruns"], "at": time.time(),
-                              "predicted": predicted, "reading": reading}
-            job["asked"], job["answer"] = [], None
+            if struck:
+                job["stopped"] = (f"struck out: its prediction was wrong {STRIKES} times, so "
+                                  "it is not the task you think it is")
+                job["struck"] = True
+            else:
+                job["overrun"] = {"count": job["overruns"], "at": time.time(),
+                                  "predicted": predicted, "reading": reading}
             self._save()
-        escalated = job["overruns"] >= ESCALATE_AT
         seconds = round(time.time() - job["started"])
         message = (f"Your job {name!r} ({' '.join(job['cmd'])}) has run {seconds} s against "
-                   f"a prediction of {predicted} s and is paused, its work kept. Since the "
-                   f"last check it used {reading['cpu_seconds']} CPU seconds and printed "
+                   f"a prediction of {predicted} s. Since the last check it used "
+                   f"{reading['cpu_seconds']} CPU seconds and printed "
                    f"{reading['bytes_printed']} bytes. ")
-        message += self._overrun_said(job)["to_do"] + "."
+        if struck:
+            message += (f"Its prediction was wrong {STRIKES} times, so it is ended: it is not "
+                        "the task you think it is. Find out what it actually does — its tail, "
+                        "the defences you gave — before you start it again.")
+        else:
+            message += "It is paused, its work kept: " + self._overrun_said(job)["to_do"] + "."
         self.events.emit("job.overrun", tab=tab_id, name=name, count=job["overruns"],
-                         seconds=seconds, predicted=predicted, reading=reading,
-                         escalated=escalated,
+                         seconds=seconds, predicted=predicted, reading=reading, struck=struck,
                          deliver={"content": message, "meta": {"from": "daemon"}})
-        if escalated:
-            tab = self.session.intent.tabs.get(tab_id)
-            machine = self.session.intent.machine_tab()
-            if tab is not None and tab.managed and not tab.held and machine is not None:
-                self.events.emit("job.escalated", tab=machine.tab_id, about=tab_id, name=name,
-                                 deliver={"content": (
-                                     f"Tab {tab_id}'s job {name!r} has run past its "
-                                     f"prediction {job['overruns']} times and stays paused "
-                                     f"until its question to you is answered. {message}"),
-                                     "meta": {"tab": tab_id, "from": "daemon"}})
 
     def tick(self) -> None:
         with self._lock:
@@ -330,30 +328,13 @@ class Jobs:
                                  error=f"{type(exc).__name__}: {exc}")
 
     def on_event(self, event: Event) -> None:
-        """A question asked and answered since an escalation, and a turn that ends with a job
-        undefended."""
-        if event.tab is None:
+        """A turn that ends with a job undefended."""
+        if event.type != "agent.idle" or event.tab is None:
             return
         with self._lock:
             mine = dict(self._jobs.get(event.tab, {}))
-        waiting = {n: j for n, j in mine.items() if j["overrun"] is not None}
-        if not waiting:
-            return
-        if event.type == "question.asked" and event.data.get("kind") == "question":
-            with self._lock:
-                for job in waiting.values():
-                    if job["overrun"]["count"] >= ESCALATE_AT:
-                        job["asked"].append(event.data["id"])
-                self._save()
-        elif event.type == "question.answered":
-            with self._lock:
-                for job in waiting.values():
-                    if event.data.get("id") in job["asked"] \
-                            and event.data.get("answer") != "no answer":
-                        job["answer"] = event.data["answer"]
-                self._save()
-        elif event.type == "agent.idle":
-            for name, job in waiting.items():
+        for name, job in mine.items():
+            if job["overrun"] is not None:
                 self.events.emit("job.undefended", tab=event.tab, name=name,
                                  count=job["overrun"]["count"])
 
@@ -398,23 +379,20 @@ class Jobs:
                 raise JobError("that cause was given before and the job ran past it again: "
                                "name a different cause, or say `confirmed` with evidence the "
                                "first is real")
-            if overrun["count"] >= ESCALATE_AT and not job["answer"]:
-                raise JobError(self._overrun_said(job)["to_do"])
             defence = {"reason": reason, "observed": observed, "expect_more": expect_more,
-                       "at": time.time(), "reading": overrun["reading"],
-                       "answer": job["answer"]}
+                       "at": time.time(), "reading": overrun["reading"]}
             client = self.session.views.client(job["instance"])
             try:
                 client.signal(job["proc"], signal.SIGCONT)
             except LauncherError as exc:
                 raise JobError(f"job {name!r} could not be continued: {exc}") from exc
             job["defences"].append(defence)
-            job["overrun"], job["asked"], job["answer"] = None, [], None
+            job["overrun"] = None
             job["until"] = time.time() + expect_more
             self._save()
         self.events.emit("job.defended", tab=tab_id, name=name, reason=reason,
                          observed=observed, expect_more=expect_more,
-                         reading=defence["reading"], answer=defence["answer"])
+                         reading=defence["reading"])
         return {"name": name, "state": "running", "timer_until": round(job["until"]),
                 "daemon_reading": defence["reading"]}
 
@@ -423,9 +401,6 @@ class Jobs:
             raise JobError("a job is stopped with a reason")
         job = self._job(tab_id, name)
         with self._lock:
-            overrun = job["overrun"]
-            if overrun is not None and overrun["count"] >= ESCALATE_AT and not job["answer"]:
-                raise JobError(self._overrun_said(job)["to_do"])
             client = self.session.views.client(job["instance"])
             try:
                 # A stopped group takes SIGTERM only once continued, so it can clean up.

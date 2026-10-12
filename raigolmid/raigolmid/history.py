@@ -120,8 +120,8 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "tab.paused": lambda e: "paused by the machine tab: frozen where it stood",
     "job.overrun": lambda e: (f"its job {e.data['name']} ran past its prediction "
                               f"({e.data['seconds']} s against {e.data['predicted']} s) and is "
-                              "paused" + (", for whoever manages it to decide"
-                                          if e.data["escalated"] else " until it says why")),
+                              + ("ended: wrong three times, it is not the task it was taken "
+                                 "for" if e.data["struck"] else "paused until it says why")),
     "job.undefended": lambda e: (f"ended its turn with its job {e.data['name']} paused past its "
                                  "prediction and undefended"),
     "job.stopped": lambda e: f"stopped its job {e.data['name']}: {e.data['reason']}",

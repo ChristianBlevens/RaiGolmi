@@ -2,9 +2,8 @@
 when it exits, with its code and the end of what it printed, says it gone when its toolbelt
 container was recreated under it, and otherwise returns at its deadline with it running; while
 it prints, the stall watch reads the tab's work as moving. Past its prediction it is paused
-and said as OVERRUN until a defence names a new cause; from the third overrun, until the tab's
-question is answered; and its end is a row in its body's ledger, handed back to the next start
-of the same command."""
+and said as OVERRUN until a defence names a new cause, and three overruns end it; its end is
+a row in its body's ledger, handed back to the next start of the same command."""
 from __future__ import annotations
 
 import signal
@@ -12,7 +11,6 @@ import signal
 import pytest
 
 from raigolmid import jobs
-from raigolmid.events import Event
 from raigolmid.jobs import JobError
 from raigolmid.scopes import instance_of
 from raigolmid.stalls import SPIN_SECONDS, Stalls, Watch
@@ -118,7 +116,7 @@ def test_a_job_past_its_prediction_is_paused_until_a_cause_is_given(h):
                           "bevy_pbr now; target/ grew 2 GB", 600)
 
 
-def test_the_third_overrun_waits_for_an_answer_to_the_tabs_question(h):
+def test_a_job_wrong_three_times_is_struck_out(h):
     tab, instance = h.tab("myapi"), _instance(h)
     h.session.jobs.start(tab, instance, "y50", ["myproject", "--years", "50"], 60, "a guess")
     for cause in ("first cause", "second cause"):
@@ -126,16 +124,15 @@ def test_the_third_overrun_waits_for_an_answer_to_the_tabs_question(h):
         h.session.jobs.wait(tab, "y50")
         h.session.jobs.defend(tab, "y50", cause, "year 20", 60)
     _past_due(h, tab, "y50")
-    assert "ask_user" in h.session.jobs.wait(tab, "y50")["to_do"]
-    with pytest.raises(JobError, match="ask_user"):
+    h.session.jobs.tick()
+    assert _signals(h, instance)[-1] == signal.SIGTERM
+    [*_, struck] = h.events_of("job.overrun")
+    assert struck.data["struck"] and "not the task" in struck.data["deliver"]["content"]
+    with pytest.raises(JobError, match="nothing to defend"):
         h.session.jobs.defend(tab, "y50", "third cause", "year 40", 60)
-
-    def event(type, **data):
-        return Event(type=type, ts=0.0, epoch=0, tab=tab, data=data)
-    h.session.jobs.on_event(event("question.asked", kind="question", id="q1"))
-    h.session.jobs.on_event(event("question.answered", kind="question", id="q1",
-                                  answer="go on"))
-    assert h.session.jobs.defend(tab, "y50", "third cause", "year 40", 60)["state"] == "running"
+    h.launchers.end_job(instance, 1, 143)
+    waited = h.session.jobs.wait(tab, "y50")
+    assert waited["state"] == "exited" and "struck out" in waited["stopped"]
 
 
 def test_a_jobs_end_is_a_ledger_row_handed_to_the_next_start(h):
