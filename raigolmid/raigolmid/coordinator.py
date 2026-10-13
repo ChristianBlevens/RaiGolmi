@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from . import api, documents, history, limits
-from .channel import Channels
+from .channel import DIRECTED, Channels, HandedOn
 from .events import Event, EventLog
 from .intent import Run, TabIntent
 from .library import Library, run_id, save_from_tab
@@ -72,6 +72,9 @@ if TYPE_CHECKING:
 TAIL_TURNS = 20
 TAIL_LINES = 60
 TURN_CHARS = 2000
+# How much of each direction a handover's notice quotes: enough to tell which it is.
+DIRECTION_EXCERPT = 300
+DIRECTION = "From the machine tab, which manages this tab for the user:\n\n"
 
 
 def _said(row: dict[str, Any]) -> str:
@@ -163,6 +166,26 @@ def restart_message(tab: str, continues: str, opened: str) -> str:
             f"{opened}. Read /work/{documents.SESSION_START} and continue the work from it. "
             f"~/{documents.THOUGHTS} is this conversation's own record; {continues}'s is "
             "archived with its conversation.")
+
+
+def handed_on_line(handed: HandedOn, successor: str) -> str:
+    """The directions a handover moved, for the machine tab: those still on their way, which
+    `successor` now has first, and those the closed tab took in its last turn, which only its
+    work shows were carried out. Empty when there are none."""
+    def quoted(directions: list) -> str:
+        texts = [m.content.removeprefix(DIRECTION) for m in directions]
+        return "; ".join('"' + (t if len(t) <= DIRECTION_EXCERPT
+                                else t[:DIRECTION_EXCERPT] + "…") + '"' for t in texts)
+    carried = [m for m in handed.carried if m.cause == DIRECTED]
+    line = ""
+    if carried:
+        line += (f" Your directions still on their way to it go to {successor}, as its first "
+                 f"messages after its opening: {quoted(carried)}.")
+    if handed.last_turn:
+        line += (f" It took these directions in its last turn; check its work and "
+                 f"{documents.SESSION_START} carry them out, and `direct` {successor} with any "
+                 f"they do not: {quoted(handed.last_turn)}.")
+    return line
 
 
 # A managed tab whose restart the machine tab asked for while its turn ran (`restart_fresh`).
@@ -314,10 +337,12 @@ def run_record(session: "Session", events: EventLog, questions: Questions,
 class Coordinator:
     """Subscribed at construction, so no referral falls between the daemon's start and `run`."""
 
-    def __init__(self, session: "Session", events: EventLog, questions: Questions) -> None:
+    def __init__(self, session: "Session", events: EventLog, questions: Questions,
+                 channels: Channels) -> None:
         self.session = session
         self.events = events
         self.questions = questions
+        self.channels = channels
         self._sub = events.subscribe()
         # (machine tab, question) handed over: a referral and a hand-over read in one batch
         # both find the question pending, and a machine tab hears each once.
@@ -375,7 +400,7 @@ class Coordinator:
                                    f"turn's end as you asked: it is {waiting} on a question "
                                    "or permission, which a restart would withdraw")
                     else:
-                        started = hand_on(self.session, tab.tab_id)
+                        started = hand_on(self.session, self.channels, tab.tab_id)
                         content = (f"Tab {tab.tab_id} ({tab.body}) was restarted at its turn's "
                                    f"end as you asked: {started['next']}")
                     self._to_machine(event.tab, "coordinator.restarted_on_idle", content,
@@ -469,7 +494,16 @@ class Coordinator:
         except Exception as exc:  # noqa: BLE001 — said, and this thread must not end
             self.events.emit("coordinator.restart_failed", tab=tab.tab_id, error=str(exc))
             return
+        handed = self.channels.handed_on(successor.tab_id)
         if tab.machine:
+            # What was on its way to the machine tab went on to its successor, so `announce`,
+            # as the successor opens, does not send it twice.
+            for message in handed.carried:
+                if message.cause == "coordinator.question":
+                    self._handed.add((successor.tab_id, message.meta["question"]))
+                elif message.cause == REPORT_ASKED:
+                    run = self.session.intent.run
+                    self._handed.add((successor.tab_id, f"run@{run.started}"))
             self.events.emit("coordinator.machine_restarted", tab=successor.tab_id, deliver={
                 "content": machine_restart_message(tab.tab_id, self._last_report(),
                                                    running(self.session)),
@@ -485,7 +519,7 @@ class Coordinator:
             self._to_machine(successor.tab_id, "coordinator.continued_itself", (
                 f"Tab {tab.tab_id} ({tab.body}) ended its own conversation; "
                 f"{successor.tab_id} takes over its work from its SESSION-START.md, and you "
-                "manage it now."), why="continued")
+                "manage it now." + handed_on_line(handed, successor.tab_id)), why="continued")
 
     def _machine_idle(self, tab_id: str, handover: str | None, error: str | None) -> None:
         """The machine tab asked to hand itself on, only while the user is away
@@ -646,9 +680,10 @@ def running(session: "Session") -> bool:
     return run is not None and run.ended is None
 
 
-def hand_on(session: "Session", tab: str) -> dict[str, Any]:
+def hand_on(session: "Session", channels: Channels, tab: str) -> dict[str, Any]:
     """A new tab takes over `tab`'s work from its `SESSION-START.md`, and `tab` is closed."""
     successor = session.succeed_tab(tab, by="machine")
+    handed = channels.handed_on(successor.tab_id)
     session.events.emit("coordinator.restarted", tab=successor.tab_id, deliver={
         "content": restart_message(successor.tab_id, tab, "opened by the machine tab, which "
                                    "manages this work for the user"),
@@ -656,7 +691,7 @@ def hand_on(session: "Session", tab: str) -> dict[str, Any]:
     return {"tab": successor.tab_id, "continues": tab, "status": "started",
             "next": f"{successor.tab_id} takes over {tab}'s work, which is closed and "
                     f"archived; you manage {successor.tab_id} now, and are told when its "
-                    "first turn ends."}
+                    "first turn ends." + handed_on_line(handed, successor.tab_id)}
 
 
 class Verbs:
@@ -729,7 +764,7 @@ class Verbs:
         start = self.session.session_start(tab)
         channel = self.channels.state(tab)
         return {**row, "directions_queued": [m["content"] for m in channel["queued"]
-                                             if m["cause"] == "coordinator.directed"],
+                                             if m["cause"] == DIRECTED],
                 "session_start": start if session_start else None,
                 "session_start_bytes": len(start.encode()) if start is not None else None,
                 "thoughts_tail": thoughts_tail(home, lines),
@@ -741,9 +776,8 @@ class Verbs:
         agent = self._unheld(tab)
         if not content.strip():
             raise SessionError("a directive needs words")
-        self.events.emit("coordinator.directed", tab=tab, deliver={
-            "content": f"From the machine tab, which manages this tab for the user:\n\n"
-                       f"{content}", "meta": {"from": "machine"}})
+        self.events.emit(DIRECTED, tab=tab, deliver={
+            "content": DIRECTION + content, "meta": {"from": "machine"}})
         if agent.busy:
             return {"tab": tab, "status": "queued",
                     "next": "The tab is working: it reads this at its next tool call, or as its "
@@ -796,7 +830,7 @@ class Verbs:
                     "next": "It is making its documents ready for its next conversation; you "
                             "are told when that turn ends, and `restart_fresh` then restarts "
                             "it."}
-        return hand_on(self.session, tab)
+        return hand_on(self.session, self.channels, tab)
 
     def hold(self, tab: str, situation: str) -> dict[str, Any]:
         """The tab stopped for the user where they said, and told to put `situation` to

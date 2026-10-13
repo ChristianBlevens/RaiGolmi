@@ -35,6 +35,13 @@ queue, its push not yet heard, and the janitor's open questions are written to
 `Paths.channels` on every change and read back at the start. A push the old daemon had not
 heard is pushed again marked `redelivered`: its turn may have started while nothing was
 listening for the hook that says so, and the agent is the one that can tell a repeat.
+
+**What is on its way to a tab handed on goes to the tab that takes its work over**
+(`tab.closed` with `continued_by`, `Session.succeed_tab`): its queue and its push not heard,
+in order, marked `carried_from`, behind only the successor's opening message (`OPENING`). The
+directions a tab took in its current turn are kept (`Tab.this_turn`), since a turn that ends in
+a handover may not have acted on them; `handed_on` gives both to the coordinator, which tells
+the machine tab.
 """
 from __future__ import annotations
 
@@ -63,7 +70,12 @@ SILENT_SECONDS = 30.0
 # What reaches a working tab at its next tool call (`take_midturn`): words a person or another
 # tab would type into it — a direction, the janitor's word, a tab's message, the user's words
 # through a face. Everything else needs a turn of its own and waits for the tab to be idle.
-MIDTURN = frozenset({"coordinator.directed", "janitor.told", "message.sent", "face.asked"})
+DIRECTED = "coordinator.directed"
+MIDTURN = frozenset({DIRECTED, "janitor.told", "message.sent", "face.asked"})
+# The message that opens a tab taking over another's work (`coordinator.py`): it says to start
+# from `SESSION-START.md`, so it goes ahead of what was carried over from the closed tab.
+OPENING = frozenset({"coordinator.continued", "coordinator.restarted",
+                     "coordinator.machine_restarted"})
 # Claude Code's limit on what a hook adds to the conversation.
 MIDTURN_CHARS = 10_000
 
@@ -102,6 +114,17 @@ class Tab:
     # only by asking, so one that stops asking with something waiting is said (`silent`).
     asked_at: float = field(default_factory=time.time)
     silent: bool = False
+    # The directions delivered to it in its current turn: taken mid-turn, or the push the turn
+    # started on.
+    this_turn: list[Message] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class HandedOn:
+    """What a tab's handover moved (`Channels.handed_on`): what was on its way to the closed
+    tab, now its successor's, and the directions the closed tab took in its last turn."""
+    carried: list[Message]
+    last_turn: list[Message]
 
 
 # How Claude Code hands a push from this plugin to the session and to its prompt hook: the
@@ -137,7 +160,10 @@ def _loaded(saved: dict[str, Any], session_up: bool) -> Tab:
     the front marked `redelivered`; one heard was taken, and its turn is over or will end."""
     tab = Tab(queue=deque(Message(**m) for m in saved["queue"]), session_up=session_up,
               open_questions=set(saved["open_questions"]),
-              took_failure=saved["took_failure"], fresh_asked=saved["fresh_asked"])
+              took_failure=saved["took_failure"], fresh_asked=saved["fresh_asked"],
+              # A file from a daemon that kept no turn's directions has none to give; failing
+              # here would stop a running machine's upgrade with its queued directions in it.
+              this_turn=[Message(**m) for m in saved.get("this_turn", ())])
     pushed = saved["pushed"]
     if pushed is not None and not pushed["heard"]:
         tab.queue.appendleft(Message(content=pushed["content"],
@@ -172,6 +198,8 @@ class Channels:
                 self._tabs[tab_id] = Tab(session_up=True)
         self.messages = Messages(session, events, session.paths.messages)
         self._hold_until = 0.0
+        # Each handover's record until the coordinator asks for it, by the successor's id.
+        self._handed_on: dict[str, HandedOn] = {}
 
     # --- routing ----------------------------------------------------------------------
     def run(self, stop: threading.Event) -> None:
@@ -212,8 +240,12 @@ class Channels:
                 self.events.emit("channel.joined", tab=event.tab, incident=incident,
                                  cause=event.type)
                 return False
-            tab.queue.append(Message(content=deliver["content"],
-                                     meta=dict(deliver["meta"]), cause=event.type))
+            message = Message(content=deliver["content"], meta=dict(deliver["meta"]),
+                              cause=event.type)
+            if event.type in OPENING:
+                tab.queue.appendleft(message)
+            else:
+                tab.queue.append(message)
             tab.open_questions.discard(deliver["meta"].get("question"))
             return True
         if event.type == "question.asked" and event.data.get("kind") == "question":
@@ -227,15 +259,25 @@ class Channels:
             self._tabs[event.tab].asked_at = event.ts
             return False
         if event.type == "tab.closed":
-            return self._tabs.pop(event.tab, None) is not None
+            closed = self._tabs.pop(event.tab, None)
+            self._handed_on.pop(event.tab, None)
+            successor = event.data.get("continued_by")
+            if successor is None:
+                return closed is not None
+            self._carry(event.tab, closed or Tab(), successor)
+            return True
         if event.type == "agent.started":
             self._tab(event.tab).session_up = False
             return False
         if event.type == "agent.busy":
             tab = self._tab(event.tab)
+            began = bool(tab.this_turn)
+            tab.this_turn = []
             if tab.pushed is None or tab.pushed.seq != event.data.get("channel_seq"):
-                return False
+                return began
             tab.pushed.heard = True
+            if tab.pushed.message.cause == DIRECTED:
+                tab.this_turn.append(tab.pushed.message)
             if tab.pushed.message.cause == FAILURE:
                 tab.took_failure = True
             self.events.emit("channel.heard", tab=event.tab, seq=tab.pushed.seq,
@@ -261,6 +303,26 @@ class Channels:
             return True
         return False
 
+    def _carry(self, closed_id: str, closed: Tab, successor: str) -> None:
+        """Under `_lock`: what was on its way to the closed tab, its push not heard first, goes
+        to the front of its successor's queue, and the handover is kept for `handed_on`."""
+        waiting = list(closed.queue)
+        if closed.pushed is not None and not closed.pushed.heard:
+            waiting.insert(0, closed.pushed.message)
+        carried = [Message(content=m.content, meta={**m.meta, "carried_from": closed_id},
+                           cause=m.cause) for m in waiting]
+        self._tab(successor).queue.extendleft(reversed(carried))
+        self._handed_on[successor] = HandedOn(carried=carried, last_turn=list(closed.this_turn))
+
+    def handed_on(self, successor: str) -> HandedOn:
+        """The handover that `successor` took over in, asked for once by whoever tells of it."""
+        self._catch_up()
+        with self._lock:
+            handed = self._handed_on.pop(successor, None)
+        if handed is None:
+            raise RuntimeError(f"the channel has seen no tab handed on to {successor}")
+        return handed
+
     def _save(self) -> None:
         """Under `_lock`."""
         save_json(self._path, {"seq": self._seq, "tabs": {
@@ -272,6 +334,7 @@ class Channels:
                 "open_questions": sorted(tab.open_questions),
                 "took_failure": tab.took_failure,
                 "fresh_asked": tab.fresh_asked,
+                "this_turn": [_saved(m) for m in tab.this_turn],
             } for tab_id, tab in self._tabs.items()}})
 
     def _say_silent(self) -> None:
@@ -361,6 +424,8 @@ class Channels:
                     break
                 message = tab.queue.popleft()
                 taken.append(message.content[:MIDTURN_CHARS])
+                if message.cause == DIRECTED:
+                    tab.this_turn.append(message)
                 self.events.emit("channel.midturn", tab=tab_id, cause=message.cause,
                                  meta=message.meta)
             if taken:

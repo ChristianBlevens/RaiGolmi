@@ -37,7 +37,7 @@ class Machine:
         self.h = h
         self.questions = Questions(h.events, h.paths)
         self.channels = Channels(h.session, h.events)
-        self.coordinator = Coordinator(h.session, h.events, self.questions)
+        self.coordinator = Coordinator(h.session, h.events, self.questions, self.channels)
         for tab in (MACHINE, BODY):
             h.session.agent_session_started(tab)
 
@@ -606,3 +606,21 @@ def test_a_managed_tab_ending_its_own_conversation_is_told_to_the_machine_tab(h)
     assert successor.managed
     [told] = [q for q in m.queued(MACHINE) if "ended its own conversation" in q["content"]]
     assert successor.tab_id in told["content"]
+
+
+def test_a_direction_on_its_way_to_a_tab_that_ends_its_conversation_goes_to_its_successor(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(BODY)["agent_activity"](busy=True)
+    assert m.tab(MACHINE)["direct"](tab=BODY, content="add the lexer tests")["status"] == "queued"
+    m.tab(BODY)["end_conversation"]()
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+
+    [successor] = [t for t in h.session.intent.tabs.values() if t.continues == BODY]
+    opening, directed = m.queued(successor.tab_id)
+    assert "Read /work/SESSION-START.md" in opening["content"], "its opening comes first"
+    assert directed["content"].endswith("add the lexer tests")
+    assert directed["meta"]["carried_from"] == BODY
+    [told] = [q for q in m.queued(MACHINE) if "ended its own conversation" in q["content"]]
+    assert '"add the lexer tests"' in told["content"]

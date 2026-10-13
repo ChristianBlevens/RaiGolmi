@@ -144,7 +144,8 @@ class Daemon:
         self.judge = Judge(self.events, runtime, paths.preferences, self.session.agents.broker,
                            self.epoch, self.session.agents.image)
         self.channels = Channels(self.session, self.events)
-        self.coordinator = Coordinator(self.session, self.events, self.questions)
+        self.coordinator = Coordinator(self.session, self.events, self.questions,
+                                       self.channels)
         self.limits = Limits(self.session, self.events)
         self.stalls = Stalls(self.session, self.events)
         self.disk = Disk(self.session, self.events)
