@@ -123,6 +123,13 @@ face is handed the render node, so its compositor renders with GL and advertises
 wlroots compositors are what has run here; Hyprland (aquamarine) needs dmabuf, which is
 there, but no Hyprland face has been started.
 
+There is no Vulkan on the GPU: Vulkan programs (wgpu's first choice) fall to lavapipe, on the
+CPU, unless the window's experimental Venus setting is on. GL is ES 2.0 unless the program is
+given `bodies.md` § The GPU and sound's settings. A Bevy window on wgpu's GL backend gets no
+present mode on Wayland, because Bevy starts wgpu with no display handle and wgpu then uses
+surfaceless EGL, whose configs cannot present; Bevy's renderer has to be created with the
+window's Wayland display for its window to draw on the GPU.
+
 Every drawn frame still travels from the guest to the window on Windows, so a face that
 animates constantly costs the whole machine, the user's typing included. Keep a face still when
 nothing is happening: no infinite CSS animations or `requestAnimationFrame` loops, no

@@ -78,6 +78,23 @@ A body has the GPU's render node (`/dev/dri/renderD128`), not its display node: 
 headless with GL (EGL, surfaceless) through the Mesa drivers its image installs. The GPU is a
 virtual one (virgl), so the work lands on the user's real GPU through QEMU.
 
+virgl offers GL 2.1 and ES 2.0 by default: the user's GPU is reached through ANGLE on
+Direct3D 11, whose 12 constant buffers per stage leave Mesa 11 uniform blocks, one short of
+what it asks before enabling uniform buffers. Mesa can be told to enable them anyway, which
+is enough for wgpu (its GLES limits ask for 11):
+
+```
+WGPU_BACKEND=gl
+MESA_EXTENSION_OVERRIDE=+GL_ARB_uniform_buffer_object
+MESA_GLES_VERSION_OVERRIDE=3.0    # 3.1 adds compute shaders
+```
+
+With these, wgpu 29 headless picks `virgl (ANGLE (…GPU name…))` and renders and dispatches
+compute on the user's GPU. For Bevy keep 3.0: at 3.1 wgpu claims `Rgba16Float` storage
+GLES does not have, and Bevy's compute passes fail to compile; at 3.0 Bevy turns them off.
+wgpu's GL backend has no view formats, so a render target is created in the format it is
+viewed in. A program that asks for 12 uniform blocks is refused its device.
+
 A body has no speakers and no sound server. Its ALSA default output (the machine's
 `/etc/asound.conf`, which replaces the image's own) opens for any program built on the image's
 libasound and takes the audio into nothing, or as a WAV into the file `RAIGOLMI_AUDIO_FILE`
