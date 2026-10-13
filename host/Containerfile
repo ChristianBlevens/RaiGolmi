@@ -85,6 +85,7 @@ COPY host/systemd/drop-rollback.sh         /usr/libexec/raigolmi/drop-rollback
 #  The machine's timezone is Windows': the launcher hands it in as a credential.
 COPY host/systemd/raigolmi-timezone.service /usr/lib/systemd/system/raigolmi-timezone.service
 COPY host/systemd/set-timezone             /usr/libexec/raigolmi/set-timezone
+COPY host/systemd/zram-generator.conf      /usr/lib/systemd/zram-generator.conf
 #  The host stays up whatever the agents do: no container reaches it over the network but
 #  for the credential proxy, applied before Docker starts.
 COPY host/firewall/raigolmi.nft           /usr/lib/raigolmi/firewall.nft
