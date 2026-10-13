@@ -55,7 +55,14 @@ anyway*: the scripts aren't signed.)
 `setup.bat` checks for what it needs and asks once before installing anything that's
 missing, then downloads the app and its disk (about 2.5 GB) and starts it. Next time, open the
 `RaiGolmi` shortcut it leaves next to `setup.bat`, and close the window when you're done.
-Closing it shuts the machine down properly.
+Closing it shuts the machine down properly, and so does Windows restarting or shutting down.
+
+Click the icon at the window's top left for **Settings** (all off until you choose them, kept in
+`%LOCALAPPDATA%\RaiGolmi\settings.ini`): *Start RaiGolmi when I sign in to Windows*, *Keep
+Windows awake while RaiGolmi runs* (the screen can still turn off), *Memory* for the machine (8
+GB to half your PC's, from its next start), and *Venus (Vulkan)*, an experiment that needs a
+QEMU built for it. To leave it running unattended, also turn on Windows' automatic sign-in
+(`netplwiz`, or Sysinternals Autologon) and your BIOS's "power on after AC loss".
 
 To update, get the newest scripts first (`git pull` in the folder, or download the ZIP
 again), then run `setup.bat`. It downloads the new app, and your machine downloads its

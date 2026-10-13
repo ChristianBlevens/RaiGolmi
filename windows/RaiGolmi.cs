@@ -136,6 +136,11 @@ class Machine
     // The transfer bridge's tools and key, or why there are none.
     public Ssh Ssh;
     public string NoSsh;
+    public Settings Settings;
+    // The machine's RAM in MiB, from the memory setting.
+    public int MemoryMiB;
+    // Why the machine has no sound card this start, or null when it has one.
+    public string NoSound;
 
     public static Machine Prepare()
     {
@@ -143,6 +148,10 @@ class Machine
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RaiGolmi");
         Directory.CreateDirectory(home);
         var m = new Machine();
+        m.Settings = Settings.Load(home);
+        m.Settings.ApplyStartAtLogin();
+        m.MemoryMiB = Settings.MemoryMiB(m.Settings.Memory);
+        m.NoSound = AudioEndpoints.Missing();
         m.Qemu = Require(Launcher.QemuPath(@"bin\qemu-system-x86_64w.exe"));
         m.Firmware = Require(Launcher.QemuPath(@"share\qemu\edk2-x86_64-code.fd"));
         m.Log = Path.Combine(Application.StartupPath, "qemu.log");
@@ -233,17 +242,33 @@ class Machine
     // core, so the guest gets every logical processor and an idle one costs nothing. The
     // hypervisor emulates each vCPU's local APIC (kernel-irqchip=on, required, so a host that
     // cannot fails QEMU's start): off, every IPI, timer and EOI exits to QEMU under its one lock.
+    //
+    // Sound is HDA (ich9-intel-hda, the q35 chipset's own, with an output-only codec, so Windows
+    // is never asked for its microphone) into DirectSound, the one Windows backend that stops
+    // when the guest is silent: the guest closing its stream stops the codec's timer
+    // (hw/audio/hda-codec.c hda_audio_set_running), the voice's disable stops the DirectSound
+    // buffer, and the mixer's timer runs only while a voice is enabled (audio/audio-mixeng-be.c
+    // audio_is_timer_needed). SDL, the other needing no server, feeds its WASAPI stream silence
+    // from its own thread while paused (SDL2 SDL_audio.c SDL_RunAudio). The 40 ms DirectSound buffer
+    // in place of its 93 ms default bounds how far sound can lag, and still holds four of the
+    // mixer's 10 ms periods.
     string Arguments()
     {
         var a = new List<string>();
         a.Add("-name RaiGolmi");
-        a.Add("-machine type=q35,accel=whpx,kernel-irqchip=on -cpu max -m 8192 -smp " + Environment.ProcessorCount);
+        a.Add("-machine type=q35,accel=whpx,kernel-irqchip=on -cpu max -m " + MemoryMiB + " -smp " + Environment.ProcessorCount);
         a.Add("-drive " + Quote("if=pflash,format=raw,readonly=on,file=" + Opt(Native.Ascii(Firmware))));
         a.Add("-drive " + Quote("if=pflash,format=raw,file=" + Opt(Native.Ascii(Vars))));
         // What the guest discards (its trim every ten minutes and at shutdown) the patched QEMU
         // releases from the sparse file, so the file shrinks with the guest's use while it runs.
         a.Add("-drive " + Quote("file=" + Opt(Native.Ascii(Disk)) + ",format=qcow2,discard=unmap,detect-zeroes=unmap"));
-        a.Add("-device virtio-vga-gl -device qemu-xhci,id=xhci -device usb-tablet,bus=xhci.0");
+        // Venus needs blob resources and host memory for them (hw/display/virtio-gpu.c
+        // virtio_gpu_device_realize), and a virglrenderer built with it.
+        a.Add("-device " + (Settings.Venus ? "virtio-vga-gl,blob=on,hostmem=4G,venus=on" : "virtio-vga-gl") +
+              " -device qemu-xhci,id=xhci -device usb-tablet,bus=xhci.0");
+        if (NoSound == null)
+            a.Add("-audiodev dsound,id=snd0,out.buffer-length=40000 -device ich9-intel-hda " +
+                  "-device hda-output,audiodev=snd0");
         a.Add("-netdev user,id=net0,hostfwd=tcp:127.0.0.1:" + SshPort + "-:22 -device virtio-net,netdev=net0");
         // Boot credentials (systemd reads SMBIOS type 11): the login keys, and Windows' own
         // timezone, which the guest makes its own (host/systemd/set-timezone).
@@ -343,6 +368,9 @@ class Window : Form
         renderer = new Renderer(this, Note);
         new Thread(Connect) { IsBackground = true, Name = "display" }.Start();
         watcher = new System.Threading.Timer(delegate { Watch(); }, null, 5000, 10000);
+        ApplySetting(machine.Settings.ApplyKeepAwake);
+        if (machine.NoSound != null)
+            Warn(machine.NoSound);
         if (bridge == null)
         {
             Note(machine.NoSsh);
@@ -360,6 +388,7 @@ class Window : Form
         if (bridge != null && !Native.AddClipboardFormatListener(Handle))
             Warn("Windows' clipboard cannot be followed, so copies made in Windows will not reach "
                  + "the OS: error " + Marshal.GetLastWin32Error());
+        AddSettingsMenu();
     }
 
     // Windows' clipboard reaches the guest when the window gains focus, and only its latest
@@ -373,7 +402,184 @@ class Window : Form
     {
         if (m.Msg == Native.WM_CLIPBOARDUPDATE)
             windowsChanged = true;
+        if (m.Msg == Native.WM_SYSCOMMAND && ChooseSetting((uint)(m.WParam.ToInt64() & 0xFFF0)))
+            return;
+        // Answered here rather than by Form, whose answer to WM_QUERYENDSESSION is the close
+        // button's: a cancelled close, which tells Windows the session may not end, and asks
+        // the user on a second one (Form.WmClose).
+        if (m.Msg == Native.WM_QUERYENDSESSION)
+        {
+            WindowsEnding();
+            m.Result = (IntPtr)1;
+            return;
+        }
+        if (m.Msg == Native.WM_ENDSESSION)
+        {
+            if (m.WParam != IntPtr.Zero)
+                WindowsEnded();
+            else
+                WindowsStays();
+            m.Result = IntPtr.Zero;
+            return;
+        }
         base.WndProc(ref m);
+    }
+
+    // --- the settings menu, in the window menu the title bar's icon opens ----------------
+    //
+    // The caption is Windows' own, which takes no buttons of a program's; its icon's menu is
+    // the drop-down that title bar already has.
+
+    const uint MenuStartAtLogin = 0x1000, MenuKeepAwake = 0x1010, MenuVenus = 0x1020, MenuMemory = 0x1100;
+    IntPtr settingsMenu, memoryMenu;
+
+    void AddSettingsMenu()
+    {
+        IntPtr system = Native.GetSystemMenu(Handle, false);
+        settingsMenu = Native.CreatePopupMenu();
+        memoryMenu = Native.CreatePopupMenu();
+        if (system == IntPtr.Zero || settingsMenu == IntPtr.Zero || memoryMenu == IntPtr.Zero)
+            throw new LauncherError("The window's settings menu could not be made: error " +
+                                    Marshal.GetLastWin32Error());
+        MenuItem(settingsMenu, Native.MF_STRING, MenuStartAtLogin, "Start RaiGolmi when I sign in to Windows");
+        MenuItem(settingsMenu, Native.MF_STRING, MenuKeepAwake, "Keep Windows awake while RaiGolmi runs");
+        for (int i = 0; i < Settings.MemoryChoices.Length; i++)
+        {
+            string choice = Settings.MemoryChoices[i];
+            bool refused = Settings.Refusal(choice) != null;
+            MenuItem(memoryMenu, refused ? Native.MF_GRAYED : Native.MF_STRING, MenuMemory + (uint)i * 0x10,
+                     Settings.MemoryLabel(choice) + (refused ? " — more than this PC can spare" : ""));
+        }
+        MenuItem(settingsMenu, Native.MF_POPUP, (ulong)memoryMenu.ToInt64(), "Memory (applies at next start)");
+        MenuItem(settingsMenu, Native.MF_STRING, MenuVenus, "Venus (Vulkan), experimental (applies at next start)");
+        MenuItem(system, Native.MF_SEPARATOR, 0, null);
+        MenuItem(system, Native.MF_POPUP, (ulong)settingsMenu.ToInt64(), "Settings");
+        CheckSettings();
+    }
+
+    static void MenuItem(IntPtr menu, uint flags, ulong id, string text)
+    {
+        if (!Native.AppendMenu(menu, flags, (UIntPtr)id, text))
+            throw new LauncherError("The window's settings menu could not be made: error " +
+                                    Marshal.GetLastWin32Error());
+    }
+
+    void CheckSettings()
+    {
+        Settings s = machine.Settings;
+        Native.CheckMenuItem(settingsMenu, MenuStartAtLogin, s.StartAtLogin ? Native.MF_CHECKED : 0);
+        Native.CheckMenuItem(settingsMenu, MenuKeepAwake, s.KeepAwake ? Native.MF_CHECKED : 0);
+        Native.CheckMenuItem(settingsMenu, MenuVenus, s.Venus ? Native.MF_CHECKED : 0);
+        for (int i = 0; i < Settings.MemoryChoices.Length; i++)
+            Native.CheckMenuItem(memoryMenu, MenuMemory + (uint)i * 0x10,
+                                 s.Memory == Settings.MemoryChoices[i] ? Native.MF_CHECKED : 0);
+    }
+
+    // True when `id` is one of the settings, which is then changed, saved and applied.
+    bool ChooseSetting(uint id)
+    {
+        Settings s = machine.Settings;
+        if (id == MenuStartAtLogin)
+        {
+            s.StartAtLogin = !s.StartAtLogin;
+            ApplySetting(s.ApplyStartAtLogin);
+        }
+        else if (id == MenuKeepAwake)
+        {
+            s.KeepAwake = !s.KeepAwake;
+            ApplySetting(s.ApplyKeepAwake);
+        }
+        else if (id == MenuVenus)
+        {
+            s.Venus = !s.Venus;
+            ApplySetting(null);
+        }
+        else if (id >= MenuMemory && id < MenuMemory + Settings.MemoryChoices.Length * 0x10)
+        {
+            string choice = Settings.MemoryChoices[(id - MenuMemory) / 0x10];
+            string refused = Settings.Refusal(choice);
+            if (refused != null)
+            {
+                MessageBox.Show(this, refused, "RaiGolmi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return true;
+            }
+            s.Memory = choice;
+            ApplySetting(null);
+        }
+        else
+            return false;
+        Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
+             ", memory " + s.Memory + ", venus " + s.Venus);
+        return true;
+    }
+
+    // Saves the settings, then makes `apply` true of Windows now; either failing is shown.
+    void ApplySetting(Action apply)
+    {
+        try
+        {
+            machine.Settings.Save();
+            if (apply != null)
+                apply();
+        }
+        catch (Exception e) when (e is LauncherError || e is IOException || e is UnauthorizedAccessException ||
+                                  e is System.Security.SecurityException)
+        {
+            Warn("A setting could not be applied: " + e.Message);
+        }
+        CheckSettings();
+    }
+
+    // --- Windows ending the session ------------------------------------------------------
+    //
+    // Windows asks first (WM_QUERYENDSESSION) and the guest is asked to shut down then, so it
+    // has every second Windows gives. The session is never refused: Windows' guidance is to
+    // let it end and do the work in WM_ENDSESSION, with a reason registered for the screen it
+    // shows while a program is still working (learn.microsoft.com, Shutdown Changes for
+    // Windows Vista). The session ends once that message returns, and this process with it,
+    // taking QEMU (Native.KillOnClose), so it returns only when QEMU has exited. A forced end
+    // that does not wait (an update's restart can be one) cuts the guest off as a power loss
+    // would; nothing a program does prevents that.
+
+    void WindowsEnding()
+    {
+        Note("Windows is ending the session");
+        SavePlacement();
+        if (exited)
+            return;
+        if (!Native.ShutdownBlockReasonCreate(Handle, "Shutting down the RaiGolmi machine so its disk is left whole"))
+            Note("the reason for the wait could not be given to Windows: error " + Marshal.GetLastWin32Error());
+        if (shutdownSent)
+            return;
+        try
+        {
+            AskGuestToShutDown();
+        }
+        catch (Exception ex)
+        {
+            Note("the shutdown request failed, so the guest ends with Windows: " + ex.Message);
+        }
+    }
+
+    void WindowsEnded()
+    {
+        // A guest that could not be asked would never end on its own.
+        if (exited || !shutdownSent)
+            return;
+        // The keyboard hook is this thread's, and a thread that is waiting delays every key
+        // Windows delivers by the hook's timeout.
+        keyboard.Dispose();
+        Note("waiting for the guest to shut down before Windows ends the session");
+        qemu.WaitForExit();
+        Note("QEMU exited with code " + qemu.ExitCode + " before Windows ended the session");
+    }
+
+    // The end was cancelled after the guest was asked to shut down; it goes on shutting down
+    // as after the close button.
+    void WindowsStays()
+    {
+        Native.ShutdownBlockReasonDestroy(Handle);
+        Note("Windows did not end the session after all");
     }
 
     protected override void OnActivated(EventArgs e)
@@ -721,11 +927,22 @@ class Window : Form
         Record(this, "launcher: " + line);
     }
 
+    // QEMU's own lines. A renderer that fails to start is reported by QEMU, which keeps
+    // running with a screen that stays black (hw/display/virtio-gpu-virgl.c
+    // virtio_gpu_virgl_init), so that line is shown, not left in the log.
     void Record(object sender, DataReceivedEventArgs e)
     {
-        if (e.Data != null)
-            Record(sender, e.Data);
+        if (e.Data == null)
+            return;
+        Record(sender, e.Data);
+        if (e.Data.Contains("virgl could not be initialized"))
+            Warn("QEMU could not start the machine's GPU, so the screen stays black. QEMU said:\n\n" +
+                 e.Data + (machine.Settings.Venus ? "\n\n" + VenusRefused : ""));
     }
+
+    const string VenusRefused = "The experimental Venus (Vulkan) setting is on, and this QEMU or its " +
+        "virglrenderer may not support it. Turn it off under Settings in the menu of the window's " +
+        "title-bar icon (or set venus=off in settings.ini), then start RaiGolmi again.";
 
     void Record(object sender, string line)
     {
@@ -777,13 +994,7 @@ class Window : Form
         {
             try
             {
-                Display d = display;
-                if (d != null)
-                    d.StopListening();
-                Qmp.Execute(machine.ControlPort, "system_powerdown", null);
-                shutdownSent = true;
-                Note("asked the guest to shut down");
-                ShowShuttingDown();
+                AskGuestToShutDown();
             }
             catch (Exception ex)
             {
@@ -794,6 +1005,18 @@ class Window : Form
         }
         // A second close while the guest is still shutting down is the user deciding.
         OfferPowerOff("RaiGolmi was asked to shut down and has not finished.");
+    }
+
+    // As the machine's power button: the guest shuts itself down and QEMU then exits.
+    void AskGuestToShutDown()
+    {
+        Display d = display;
+        if (d != null)
+            d.StopListening();
+        Qmp.Execute(machine.ControlPort, "system_powerdown", null);
+        shutdownSent = true;
+        Note("asked the guest to shut down");
+        ShowShuttingDown();
     }
 
     // From the request until QEMU exits: a guest that is shutting down stops drawing, and a
@@ -824,10 +1047,11 @@ class Window : Form
         {
             dialog.Location = new Point(Left + (Width - dialog.Width) / 2, Top + (Height - dialog.Height) / 2);
         };
-        // Closing it is a second close of the machine.
+        // Closing it is a second close of the machine. Windows ending the session closes it
+        // too, and that is answered by the window (WindowsEnding), never refused here.
         dialog.FormClosing += (_, e) =>
         {
-            if (exited)
+            if (exited || e.CloseReason == CloseReason.WindowsShutDown)
                 return;
             e.Cancel = true;
             OfferPowerOff("RaiGolmi was asked to shut down and has not finished.");
@@ -870,9 +1094,12 @@ class Window : Form
     }
 
     // The failures a stranger's PC meets, by what QEMU says of each
-    // (target/i386/whpx/whpx-all.c, net/slirp.c, ui/egl-helpers.c), in one sentence each.
-    static string Explain(string log)
+    // (target/i386/whpx/whpx-all.c, net/slirp.c, ui/egl-helpers.c, hw/display/virtio-gpu.c),
+    // in one sentence each.
+    string Explain(string log)
     {
+        if (machine.Settings.Venus && (log.Contains("venus") || log.Contains("blob")))
+            return VenusRefused;
         if (log.Contains("WHPX: No accelerator found"))
             return "Windows' hypervisor is not running, so the machine cannot start. Windows " +
                    "Hypervisor Platform may be off, or virtualization turned off in the PC's " +
@@ -974,8 +1201,14 @@ class Keyboard : IDisposable
         return Native.CallNextHookEx(hook, code, wparam, lparam);
     }
 
+    // Twice when Windows ends the session: once before waiting for QEMU, once at its exit.
+    bool unhooked;
+
     public void Dispose()
     {
+        if (unhooked)
+            return;
+        unhooked = true;
         Native.UnhookWindowsHookEx(hook);
     }
 }
@@ -1844,6 +2077,16 @@ static class Native
     [DllImport("kernel32.dll")] public static extern IntPtr GetModuleHandle(string name);
 
     public const int WM_CLIPBOARDUPDATE = 0x031D;
+    public const int WM_QUERYENDSESSION = 0x0011, WM_ENDSESSION = 0x0016, WM_SYSCOMMAND = 0x0112;
+    public const uint MF_STRING = 0x0, MF_GRAYED = 0x1, MF_CHECKED = 0x8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
+    [DllImport("user32.dll")] public static extern IntPtr GetSystemMenu(IntPtr hwnd, bool revert);
+    [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr CreatePopupMenu();
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool AppendMenu(IntPtr menu, uint flags, UIntPtr id, string text);
+    [DllImport("user32.dll")] public static extern uint CheckMenuItem(IntPtr menu, uint id, uint check);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool ShutdownBlockReasonCreate(IntPtr hwnd, string reason);
+    [DllImport("user32.dll")] public static extern bool ShutdownBlockReasonDestroy(IntPtr hwnd);
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool AddClipboardFormatListener(IntPtr hwnd);
 
