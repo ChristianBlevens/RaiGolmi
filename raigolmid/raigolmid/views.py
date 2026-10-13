@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import git, labels, localtime, naming
+from . import compose, git, labels, localtime, naming
 from .launcher import LauncherClient
 from .paths import Paths
 from .runtime import ContainerInfo, ContainerRuntime, ContainerSpec, Mount
@@ -203,6 +203,10 @@ class Views:
             # capabilities above are dropped by the entrypoint before anything user-facing
             # runs, which is the boundary that actually matters.
             security_opt=("apparmor=unconfined", "seccomp=unconfined"),
+            # The body's render nodes, as the body has them: the root assembly rbinds the
+            # body's /dev, so the nodes are seen here, but opening one is the view's own
+            # device cgroup's call, and every program a tab runs is the view's.
+            devices=tuple(compose.render_nodes(compose.DRI)),
         ))
         return info
 

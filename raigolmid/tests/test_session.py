@@ -92,6 +92,20 @@ def test_the_view_gets_setup_capabilities_and_nothing_persistent(h):
     assert not spec.privileged, "a view must not be privileged wholesale"
 
 
+def test_the_view_may_open_the_render_nodes_the_body_has(h, tmp_path, monkeypatch):
+    """The view's /dev is the body's, rbound; the device cgroup that decides an open is the
+    view's own, so the view is given the same render nodes and never the display node."""
+    from raigolmid import compose
+    dri = tmp_path / "dri"
+    dri.mkdir()
+    for node in ("card1", "renderD128"):
+        (dri / node).touch()
+    monkeypatch.setattr(compose, "DRI", dri)
+    sandbox = h.open_sandbox("myapi", "python-dev")
+    spec = h.runtime._containers[naming.view(sandbox)]["spec"]
+    assert spec.devices == (f"{dri}/renderD128",)
+
+
 def test_leaving_a_body_leaves_its_tab_and_sandbox_running(h):
     """A sandbox runs while its tab holds it, whatever is selected, and a selection
     builds nothing."""
