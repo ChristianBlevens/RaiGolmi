@@ -124,6 +124,10 @@ class LauncherError : Exception
 class Machine
 {
     public string Qemu, Firmware, Vars, Disk, Log, Screen, Placement;
+    // With Venus on, beside qemu.log: QEMU's guest errors (-D) and virglrenderer's own log
+    // (VIRGL_LOG_FILE); null otherwise. Each is an ASCII path, as QEMU and virglrenderer open
+    // them with narrow-character fopen.
+    public string GuestErrorsLog, VirglLog;
     // Two control sockets, because QEMU serves one client per socket: the close has one no
     // probe can hold, and everything that only looks shares the other.
     public int ControlPort, WatchPort;
@@ -156,6 +160,12 @@ class Machine
                                   : Require(Launcher.QemuPath(@"bin\qemu-system-x86_64w.exe"));
         m.Firmware = Require(Launcher.QemuPath(@"share\qemu\edk2-x86_64-code.fd"));
         m.Log = Path.Combine(Application.StartupPath, "qemu.log");
+        if (m.Settings.Venus)
+        {
+            string dir = Native.Ascii(Application.StartupPath);
+            m.GuestErrorsLog = Path.Combine(dir, "qemu-guest-errors.log");
+            m.VirglLog = Path.Combine(dir, "virglrenderer.log");
+        }
         m.Screen = Path.Combine(Application.StartupPath, "screen.ppm");
         // The UEFI variable store is written by the firmware, so it is this machine's copy.
         m.Vars = Path.Combine(home, "uefi-vars.fd");
@@ -303,6 +313,10 @@ class Machine
         a.Add("-display dbus,p2p=yes,gl=on");
         a.Add("-qmp tcp:127.0.0.1:" + ControlPort + ",server=on,wait=off");
         a.Add("-qmp tcp:127.0.0.1:" + WatchPort + ",server=on,wait=off");
+        // A blob the guest's Venus asks for and virglrenderer refuses is said only as a guest
+        // error (hw/display/virtio-gpu-virgl.c virgl_cmd_resource_create_blob).
+        if (GuestErrorsLog != null)
+            a.Add("-d guest_errors -D " + Quote(GuestErrorsLog));
         return string.Join(" ", a);
     }
 
@@ -373,17 +387,30 @@ class Window : Form
         // own directory before any on PATH.
         info.Environment["PATH"] = info.WorkingDirectory + ";" + Launcher.QemuPath("bin") + ";" +
                                    info.Environment["PATH"];
+        // virglrenderer logs below ERROR only at the level asked for (virgl_util.c
+        // virgl_default_logger), and Venus's render server logs at INFO.
+        if (machine.VirglLog != null)
+        {
+            info.Environment["VIRGL_LOG_FILE"] = machine.VirglLog;
+            info.Environment["VIRGL_LOG_LEVEL"] = "debug";
+        }
         qemu = new Process();
         qemu.StartInfo = info;
         qemu.EnableRaisingEvents = true;
         qemu.ErrorDataReceived += Record;
         qemu.OutputDataReceived += Record;
         qemu.Exited += delegate { BeginInvoke(new Action(OnQemuExited)); };
-        // The last run's log is kept beside this one's, for the run that ended badly.
-        if (File.Exists(machine.Log))
-            File.Copy(machine.Log, Path.ChangeExtension(machine.Log, ".previous.log"), true);
+        KeepPrevious(machine.Log);
         File.WriteAllText(machine.Log, "\"" + machine.Qemu + "\" " + machine.CommandLine +
                                        Environment.NewLine);
+        // Emptied here: virglrenderer appends to its log, and a QEMU that stops before opening
+        // its -D file would leave the last run's.
+        foreach (string log in new[] { machine.GuestErrorsLog, machine.VirglLog })
+            if (log != null)
+            {
+                KeepPrevious(log);
+                File.WriteAllText(log, "");
+            }
         qemu.Start();
         // QEMU dies with this program: one outliving its window keeps the disk locked and the
         // ssh port taken, so no later launch could start, and nothing could reach it but ssh.
@@ -403,6 +430,13 @@ class Window : Form
             return;
         }
         bridge.Start();
+    }
+
+    // The last run's log is kept beside this one's, for the run that ended badly.
+    static void KeepPrevious(string log)
+    {
+        if (File.Exists(log))
+            File.Copy(log, Path.ChangeExtension(log, ".previous.log"), true);
     }
 
     // --- the transfer bridge's Windows side ----------------------------------------------
