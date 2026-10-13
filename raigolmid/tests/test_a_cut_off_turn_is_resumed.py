@@ -7,8 +7,10 @@ import time
 
 import pytest
 
-from raigolmid import activity
-from raigolmid.limits import GRACE_SECONDS, PROBE_SECONDS, RETRY_SECONDS, Limits
+from raigolmid import activity, boot, naming
+from raigolmid.limits import (GRACE_SECONDS, PROBE_SECONDS, RETRY_CAP_SECONDS, RETRY_SECONDS,
+                              Limits)
+from raigolmid.session import Session
 from tests.test_the_machine_tab_coordinates import BODY, MACHINE, Machine, h  # noqa: F401
 
 
@@ -105,3 +107,47 @@ def test_a_daemon_that_starts_finds_the_tabs_cut_off_while_it_was_down(m):
     assert [e.data["resets_at"] for e in m.h.events_of("account.limited")] == [None]
     fresh.tick(time.time() + PROBE_SECONDS + 1)
     assert [e.tab for e in m.h.events_of("account.probed")] == [BODY]
+
+
+def test_a_transient_failure_that_repeats_waits_twice_as_long_each_time_up_to_a_cap(m):
+    m.cut(BODY, "server_error")
+    now = time.time()
+    m.limits.tick(now + RETRY_SECONDS + 1)
+    assert len(m.contents(BODY)) == 1
+    m.cut(BODY, "server_error")         # the network is still down
+    now = time.time()
+    m.limits.tick(now + RETRY_SECONDS + 1)
+    assert len(m.contents(BODY)) == 1
+    m.limits.tick(now + 2 * RETRY_SECONDS + 1)
+    assert len(m.contents(BODY)) == 2
+    for _ in range(10):
+        m.cut(BODY, "server_error")
+    assert m.limits.retry_after(BODY) == RETRY_CAP_SECONDS
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)        # a turn the API answered ends the row
+    m.pump()
+    m.cut(BODY, "server_error")
+    assert m.limits.retry_after(BODY) == RETRY_SECONDS
+
+
+def test_a_reboot_tells_the_machine_tab_and_continues_the_managed_tab_cut_mid_turn(
+        h, monkeypatch):
+    h.session.manage(BODY, True)
+    for tab in (MACHINE, BODY):
+        activity.record(h.session.agents.home(tab), busy=True)
+    monkeypatch.setattr(boot, "current", lambda: "boot-1")
+    h.session.close()
+    for tab in (MACHINE, BODY):
+        h.runtime.stop(naming.agent(tab))
+    monkeypatch.setattr(boot, "current", lambda: "boot-2")
+    h.session = Session(h.runtime, h.paths, h.search, h.events, epoch=2,
+                        compose_cli=h.compose)
+    m = Resumer(h)          # subscribed before the start reconciles, as the daemon's are
+    h.session.reconcile()
+    m.pump()
+    assert "your session ended under it" in m.contents(BODY)[-1]
+    [told] = m.contents(MACHINE)
+    assert told.startswith("From the daemon: The machine restarted")
+    assert f"Tab {BODY} (myapi) was mid-turn" in told and "Your own turn" in told
+    assert [e.tab for e in h.events_of("limits.continued")] == [BODY], \
+        "the machine tab's own continuing is in what it is told"

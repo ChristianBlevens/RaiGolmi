@@ -106,12 +106,15 @@ class Run:
     `asked` is when the machine tab heard the daemon's request for the report, which carries
     the daemon's own record of the run; a report is taken only after it. `checkpoints` counts
     the machine-tab handovers that filed a progress report, and `since` is when the last did:
-    the current stretch starts there."""
+    the current stretch starts there. `tabs` is every tab managed in the run, by id, with its
+    body: kept here because the event log rotates away a long run's early tabs, and its report
+    names them all."""
     started: float
     ended: float | None = None
     asked: float | None = None
     checkpoints: int = 0
     since: float | None = None
+    tabs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

@@ -12,6 +12,12 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from . import claude_login
+
+if TYPE_CHECKING:
+    from .paths import Paths
 
 # Claude Code prefers ANTHROPIC_API_KEY over the subscription token, so a file setting both
 # would bill a subscription user per token without telling them. Exactly one is allowed.
@@ -83,3 +89,42 @@ def is_set(path: Path, keys: tuple[str, ...] = CREDENTIAL_KEYS) -> bool:
     except CredentialError:
         return False
     return True
+
+
+# What each agent credential is; neither states an expiry anywhere the machine can read.
+AGENT_KINDS = {"CLAUDE_CODE_OAUTH_TOKEN": "setup-token", "ANTHROPIC_API_KEY": "API key"}
+# GitHub's token prefixes (docs.github.com, "About authentication to GitHub"), longest first.
+GITHUB_KINDS = (("github_pat_", "fine-grained personal access token"),
+                ("ghp_", "personal access token"), ("gho_", "OAuth token"),
+                ("ghu_", "GitHub App user token"), ("ghs_", "GitHub App installation token"))
+
+
+def standing(paths: "Paths") -> dict[str, Any]:
+    """Each credential the machine keeps: whether it is set, what kind it is, and when it
+    ends where that is written down — never a secret itself."""
+    try:
+        oauth = claude_login.read(paths.claude_login)["claudeAiOauth"]
+    except claude_login.LoginError as exc:
+        login: dict[str, Any] = {"set": False, "why": str(exc)}
+    else:
+        ends = oauth.get("refreshTokenExpiresAt")
+        login = {"set": True, "expires_at": oauth["expiresAt"] / 1000,
+                 # Claude Code writes null when the token endpoint names none.
+                 "refresh_token_expires_at": ends / 1000 if ends is not None else None}
+    try:
+        [key] = read(paths.agent_credentials)
+    except CredentialError as exc:
+        agent: dict[str, Any] = {"set": False, "why": str(exc)}
+    else:
+        agent = {"set": True, "kind": AGENT_KINDS[key], "expiry": "no expiry stated"}
+    try:
+        token = read(paths.registry_token, REGISTRY_KEYS)["GITHUB_TOKEN"]
+    except CredentialError as exc:
+        github: dict[str, Any] = {"set": False, "why": str(exc)}
+    else:
+        kind = next((k for prefix, k in GITHUB_KINDS if token.startswith(prefix)),
+                    "token of no kind GitHub names")
+        github = {"set": True, "kind": kind,
+                  "expiry": ("does not expire" if kind == "OAuth token"
+                             else "expiry not known here")}
+    return {"claude_login": login, "agent": agent, "github": github}

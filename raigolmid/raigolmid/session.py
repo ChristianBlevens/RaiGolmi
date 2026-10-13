@@ -124,6 +124,7 @@ class Session:
             p.name for d in (paths.agent_homes, paths.agent_archive) if d.is_dir()
             for p in d.iterdir())
         self.intent.epoch = epoch
+        self._recover_run_tabs()
 
         self.anchors = Anchors(runtime, epoch, image=anchor_image or DEFAULT_ANCHOR_IMAGE)
         self.views = Views(runtime, paths, epoch)
@@ -157,6 +158,8 @@ class Session:
         self.builds = BuildLock()
         self.debouncer = Debouncer()
         self._lock = threading.RLock()
+        # Which Claude Code the agent image installs is changed by one caller at a time.
+        self._choosing = threading.Lock()
         self._face_failure: str | None = None
         # A face started with an editor whose window waits for the face's first sync.
         self._editor_window_due: Face | None = None
@@ -1117,7 +1120,7 @@ class Session:
                 # no restart and calls no janitor; the tab reopens on their conversation.
                 self.events.emit("agent.quit", tab=tab_id, container=exit.container.name)
                 try:
-                    self._restart_or_crash(tab_id, "quit and did not reopen")
+                    self._restart_or_crash(tab_id, "quit and did not reopen", continues=False)
                 finally:
                     self.store.save(self.intent)
                 return "quit"
@@ -1135,13 +1138,17 @@ class Session:
         except keep.KeepError as exc:
             self.events.emit("kept.prune_failed", reason=str(exc))
 
-    def _reopen(self, tab_id: str) -> str:
+    def _reopen(self, tab_id: str, continues: bool = True) -> str:
         """A crashed tab reopens with its conversation. Returns its new container's id;
-        a failure leaves the tab crashed, said, and raises."""
+        a failure leaves the tab crashed, said, and raises. `--continue` reopens a
+        conversation idle, so a turn its session ended under is said as `mid_turn`
+        (`limits.py` continues it) — read before the new session's start overwrites it, and
+        never for the user's own quit (`continues` false)."""
         tab = self.intent.tabs[tab_id]
+        mid_turn = continues and self._mid_turn(tab_id)
         tab.status = "starting"
         try:
-            return self.restart_agent(tab_id, resume=True)["container"]
+            container = self.restart_agent(tab_id, resume=True)["container"]
         except Exception as exc:
             # `Agents.restart` has said it already when the container was what failed.
             if tab.status != "crashed":
@@ -1150,12 +1157,18 @@ class Session:
                                  instance=self._open_sandbox_of(tab),
                                  message=f"Agent in tab {tab_id} did not reopen: {exc}")
             raise
+        self.events.emit("agent.reopened", tab=tab_id, mid_turn=mid_turn)
+        return container
 
-    def _restart_or_crash(self, tab_id: str, failed: str) -> None:
+    def _mid_turn(self, tab_id: str) -> bool:
+        """Whether the tab's agent last said it was between a prompt and its answer."""
+        return activity.read(self.agents.home(tab_id)).busy
+
+    def _restart_or_crash(self, tab_id: str, failed: str, continues: bool = True) -> None:
         """A reopen with no exit of its own to answer for — the machine shut it down, or its
         container is gone. Its failure goes to the janitor, as a restart's would."""
         try:
-            self._reopen(tab_id)
+            self._reopen(tab_id, continues)
         except Exception as exc:                       # noqa: BLE001 - said as unfixable
             self.supervisor.unfixable(Unit(labels.Role.AGENT, tab_id), naming.agent(tab_id),
                                       f"Agent in tab {tab_id} {failed}: {exc}")
@@ -1264,25 +1277,76 @@ class Session:
         the release's with `pinned`, and every tab follows it, an idle one now and a working
         one as its turn ends (`_renew`). Built outside the session's lock, since a build takes
         minutes and the tabs go on working meanwhile. A build that fails puts the earlier
-        choice back, so the next tab to start is not refused for it."""
+        choice back, so the next tab to start is not refused for it. A move to a newer version
+        is on trial, going back to the last one that worked if its first session fails
+        (`rollback.py`)."""
         containerfile = hostimages.agent(None).containerfile
         newest = None if pinned else claudecode.latest()
-        earlier = claudecode.chosen(self.paths.claude_code)
-        claudecode.choose(self.paths.claude_code, newest, containerfile)
-        try:
-            image = self.agents.image()
-        except Exception:
-            claudecode.choose(self.paths.claude_code, earlier, containerfile)
-            raise
-        version = (claudecode.newer_than_pin(self.paths.claude_code, containerfile)
-                   or claudecode.pinned(containerfile))
-        self.events.emit("claude_code.chosen", version=version, image=image)
+        with self._choosing:
+            earlier = claudecode.chosen(self.paths.claude_code)
+            was = claudecode.on_trial(self.paths.claude_code)
+            # An update during a trial goes back, if it fails, to what last worked.
+            worked = (was["from"] if was is not None
+                      else claudecode.newer_than_pin(self.paths.claude_code, containerfile))
+            image = self._choose_claude_code(newest, earlier, was, containerfile)
+            version = claudecode.newer_than_pin(self.paths.claude_code, containerfile)
+            trial = version is not None and version != worked
+            if trial:
+                claudecode.choose(self.paths.claude_code, version, containerfile,
+                                  trial={"from": worked, "image": image})
+        version = version or claudecode.pinned(containerfile)
+        self.events.emit("claude_code.chosen", version=version, image=image, trial=trial)
         with self._lock:
             moving = self._renew()
             working = sorted(t for t, tab in self.intent.tabs.items()
                              if tab.busy and self._outdated(t) is not None)
         return {"version": version, "pinned": claudecode.pinned(containerfile),
                 "image": image, "moving": moving, "working": working}
+
+    def _choose_claude_code(self, version: str | None, earlier: str | None,
+                            trial: dict[str, str | None] | None, containerfile: Path) -> str:
+        """`version` recorded and its agent image built; a failed build puts `earlier`, and
+        its `trial`, back."""
+        claudecode.choose(self.paths.claude_code, version, containerfile)
+        try:
+            return self.agents.image()
+        except Exception:
+            claudecode.choose(self.paths.claude_code, earlier, containerfile, trial)
+            raise
+
+    def claude_code_proven(self, tab_id: str) -> None:
+        """A first turn on the version on trial answered: it stays (`rollback.py`)."""
+        containerfile = hostimages.agent(None).containerfile
+        with self._choosing:
+            if claudecode.on_trial(self.paths.claude_code) is None:
+                return
+            version = claudecode.chosen(self.paths.claude_code)
+            claudecode.choose(self.paths.claude_code, version, containerfile)
+        self.events.emit("claude_code.proven", tab=tab_id, version=version)
+
+    def roll_back_claude_code(self, tab_id: str, why: str) -> dict[str, Any] | None:
+        """The version on trial failed its first session in `tab_id`: the agent image goes back
+        to the version it replaced, every tab follows it as on an update, and the machine tab
+        is told. None when no version is on trial."""
+        containerfile = hostimages.agent(None).containerfile
+        with self._choosing:
+            trial = claudecode.on_trial(self.paths.claude_code)
+            if trial is None:
+                return None
+            failed = claudecode.chosen(self.paths.claude_code)
+            image = self._choose_claude_code(trial["from"], failed, trial, containerfile)
+        version = trial["from"] or claudecode.pinned(containerfile)
+        machine = self.intent.machine_tab()
+        told = {} if machine is None else {"tab": machine.tab_id, "deliver": {
+            "content": f"Claude Code {failed} failed its first session (tab {tab_id}: {why}), "
+                       f"so every agent is going back to {version}, the one before it. "
+                       "Update again only once a newer release fixes what failed.",
+            "meta": {"from": "daemon"}}}
+        self.events.emit("claude_code.rolled_back", failed=failed, version=version,
+                         image=image, failed_in=tab_id, why=why, **told)
+        with self._lock:
+            moving = self._renew()
+        return {"failed": failed, "version": version, "image": image, "moving": moving}
 
     def close_tab(self, tab_id: str, why: str | None = None) -> dict[str, Any]:
         """The user closes a tab: its sandbox stops and its home, with the conversation in it,
@@ -1324,6 +1388,8 @@ class Session:
                                   managed=tab.managed, stop_when=tab.stop_when,
                                   until=tab.until, continues=tab_id)
             self.intent.tabs[successor.tab_id] = successor
+            if successor.managed and self.intent.run is not None:
+                self.intent.run.tabs.setdefault(successor.tab_id, successor.body)
             closed, released = self._close(tab)
             self.store.save(self.intent)
             self.events.emit("tab.closed", **closed, reason="continued",
@@ -1766,6 +1832,7 @@ class Session:
                     self.intent.run = Run(started=time.time())
                 # A tab handed over before the machine tab reports joins the same run.
                 self.intent.run.ended = self.intent.run.asked = None
+                self.intent.run.tabs.setdefault(tab_id, tab.body)
             else:
                 # A handover and a hold are the machine tab's, ended with its hold on the tab.
                 tab.handover = tab.stop_when = tab.held = tab.until = None
@@ -1876,6 +1943,19 @@ class Session:
         return {"report": run_id(path), **filed, "status": "reported",
                 "next": "The user reads it in the catalog, under Documents, Runs; any tab "
                         "reads it with `document`."}
+
+    def _recover_run_tabs(self) -> None:
+        """Every tab the event log still shows managed in the run joins `Run.tabs`: an
+        intent.json written without that field carries its run on with them."""
+        run = self.intent.run
+        if run is None:
+            return
+        before = dict(run.tabs)
+        for event in self.events.read():
+            if event.type == "tab.managed" and event.data["on"] and event.ts >= run.started:
+                run.tabs.setdefault(event.tab, event.data["body"])
+        if run.tabs != before:
+            self.store.save(self.intent)
 
     def managed_tabs(self) -> set[str]:
         return {t.tab_id for t in self.intent.tabs.values() if t.managed}
@@ -2006,10 +2086,17 @@ class Session:
             self._archive_orphaned_homes()
             self.intent.stopped = None
             # The rest of the start goes on past a tab that does not come back.
+            reopening = [*report.resumable_tabs, *report.crashed_tabs]
+            mid_turn = {t for t in reopening if self._mid_turn(t)}
             for tab_id in report.resumable_tabs:
                 self._restart_or_crash(tab_id, "did not resume after the machine restarted")
             for tab_id in report.crashed_tabs:
                 self._reopen_crashed(tab_id)
+            reopened = [t for t in reopening if self.intent.tabs[t].status != "crashed"]
+            if reopened:
+                # What the machine tab is told, so a run goes on past the restart.
+                self.events.emit("tabs.reopened", rebooted=bool(report.resumable_tabs),
+                                 tabs=reopened, mid_turn=[t for t in reopened if t in mid_turn])
             self._restore_face_desktop()
             try:
                 self._show(self.intent.focused_instance)
@@ -2132,6 +2219,7 @@ class Session:
                 },
                 "definition_errors": self.catalogue.errors,
                 "protected_git_changes": self.instances.protected_changes(),
+                "credentials": credential.standing(self.paths),
             }
 
     def _recent_view_events(self, instance_id: str) -> str:

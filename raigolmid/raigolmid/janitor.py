@@ -55,6 +55,7 @@ TAKEN = frozenset({
     "settings.invalid",           # a save of settings.toml that does not parse (`settings.current`)
     "clipboard.unbridged",        # the user's face's clipboard left the machine's
     "garbage.failed",
+    "claude_code.rollback_failed",  # a Claude Code that failed its first session still in use
     "watch.failed",
     "channel.unheard",            # another tab's session not hearing its channel
     "channel.silent",             # another tab's channel no longer asking

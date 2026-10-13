@@ -184,3 +184,64 @@ def test_growth_across_what_the_machine_built_for_a_chosen_layer_is_the_new_mark
     _filesystem(monkeypatch, 28 * GB)
     watch.tick()
     assert len(h.events_of("disk.grown")) == 1
+
+
+def _line_out(h, monkeypatch, topic: str = "rai-line-test"):
+    from raigolmid import lineout
+    from tests import settingsdoc
+    settingsdoc.write(h.paths.settings, notify={"ntfy_topic": topic})
+    sent: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(lineout, "send", lambda *push: sent.append(push))
+    return lineout.LineOut(h.paths, h.events), sent
+
+
+def _hear(line) -> None:
+    for event in line._sub.drain(timeout=0):
+        line.on_event(event)
+
+
+def test_a_disk_still_short_after_collecting_goes_out_once_a_day_across_restarts(
+        h, monkeypatch):
+    from raigolmid import garbage
+    assert "disk.short" in garbage.AFTER, "what the machine can free is freed first"
+    line, sent = _line_out(h, monkeypatch)
+    _filesystem(monkeypatch, 10 * GB)
+    h.events.emit("disk.short")
+    h.events.emit("garbage.collected", images=3, closures=0, store_paths=0)
+    _hear(line)
+    assert not sent, "what the collection freed is not the line out's"
+
+    _filesystem(monkeypatch, 58 * GB)
+    h.events.emit("disk.short")
+    h.events.emit("garbage.collected", images=0, closures=0, store_paths=0)
+    _hear(line)
+    [(topic, title, message)] = sent
+    assert topic == "rai-line-test" and "Nothing to do" in message and title.isascii()
+
+    again, resent = _line_out(h, monkeypatch)
+    h.events.emit("disk.short")
+    h.events.emit("garbage.collected", images=0, closures=0, store_paths=0)
+    _hear(again)
+    assert not resent and [e.data["cause"] for e in h.events_of("lineout.sent")] == ["disk_full"]
+
+
+def test_the_line_out_is_off_without_a_topic_and_a_push_that_fails_is_said_not_raised(
+        h, monkeypatch):
+    from raigolmid import lineout
+    line, sent = _line_out(h, monkeypatch, topic="")
+    _filesystem(monkeypatch, 58 * GB)
+    h.events.emit("disk.short")
+    h.events.emit("garbage.collected", images=0, closures=0, store_paths=0)
+    _hear(line)
+    assert not sent and not h.events_of("lineout.sent")
+
+    line, _ = _line_out(h, monkeypatch)
+
+    def unreachable(*_push):
+        raise OSError("Network is unreachable")
+    monkeypatch.setattr(lineout, "send", unreachable)
+    h.events.emit("disk.short")
+    h.events.emit("garbage.collected", images=0, closures=0, store_paths=0)
+    _hear(line)
+    [failed] = h.events_of("lineout.failed")
+    assert failed.data["cause"] == "disk_full" and "disk_full" in line._pending

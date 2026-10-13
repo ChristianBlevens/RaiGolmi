@@ -12,13 +12,24 @@ told to continue once what cut them off is over:
   whose reset nobody said — a 429 without the header, or a daemon started during one — is
   probed: one cut tab is told to continue every `PROBE_SECONDS`, and the first turn that ends
   without an error is the account answering again, which resumes the rest.
-- **a transient failure** (`TRANSIENT`) is the tab's own, resumed after `RETRY_SECONDS`.
+- **a transient failure** (`TRANSIENT`) is the tab's own, resumed after `RETRY_SECONDS`, and
+  each that follows it with no clean turn between after twice as long, up to `RETRY_CAP_SECONDS`.
+  Claude Code 2.1.295 reports a connection that fails, times out, is refused or reset, a host
+  name that does not resolve, a 5xx, repeated 529s and the proxy's 502 for an upstream it cannot
+  reach as `server_error`, and an HTTP status or error it does not classify as `unknown`: the
+  network going down is one of these, and a run outlives it.
 - **any other** (a credential, billing, a model or request refused) fails the same way until
   the user acts, so it is said to them (`agent.turn_failed`) and not resumed — except a refusal
   while the claude.ai sign-in is set, which its renewal fixes (`remotecontrol.py`).
 
 A cut tab is one whose last report was the failure (`activity.Activity.failed`), which is how a
-daemon that starts finds the ones cut off while it was down.
+daemon that starts finds the ones cut off while it was down. It is read as this is constructed,
+before the start reopens any tab: a reopened session's start clears it.
+
+**A turn its session ended is continued too** (`agent.reopened` with `mid_turn`, `Session._reopen`):
+a reboot, or an agent that crashed, leaves the reopened conversation idle where the turn stopped.
+Not a tab held for the user, which is theirs, nor the machine tab while it manages a run, which
+the coordinator tells of the restart (`coordinator.py`).
 """
 from __future__ import annotations
 
@@ -37,6 +48,9 @@ TRANSIENT = frozenset({"overloaded", "server_error", "unknown", "max_output_toke
 # Claude Code has already retried a transient error before giving the turn up, so these only
 # set how soon a cut tab is tried again; none decides whether it is.
 RETRY_SECONDS = 120.0
+# A failure that repeats is an outage, which can last hours: each retry of one waits twice the
+# last, up to this, so a long outage costs a turn per half hour rather than one per two minutes.
+RETRY_CAP_SECONDS = 1800.0
 PROBE_SECONDS = 600.0
 # The reset the header names is when the window opens; a request in its first moments can
 # still be refused, and would be probed again.
@@ -45,27 +59,38 @@ GRACE_SECONDS = 30.0
 LONGEST_WINDOW = 8 * 24 * 3600.0
 
 
+# What `continue_message` names for a turn whose session ended under it.
+REOPENED = "reopened"
+
+
 def continue_message(error: str) -> str:
+    if error == REOPENED:
+        return ("Your last turn was cut off: your session ended under it (the machine "
+                "restarted, or your agent stopped) and was reopened on this conversation. A tool "
+                "call it was in may not have finished. Continue the work from where it stopped.")
     cause = "the account's usage limit" if error == LIMIT else f"an API error ({error})"
     return (f"Your last turn was cut off by {cause}, which is over. Continue the work from "
             "where it stopped.")
 
 
 class Limits:
-    """Subscribed at construction; the cut tabs a stopped daemon missed are read in `run`."""
+    """Subscribed, and the cut tabs a stopped daemon missed read, at construction."""
 
     def __init__(self, session: "Session", events: EventLog) -> None:
         self.session = session
         self.events = events
         self._sub = events.subscribe()
         self._cut: dict[str, tuple[str, float]] = {}    # tab -> (error, when)
+        # Transient failures in a row, by tab: a turn that ends clean, or the tab closing, ends
+        # the row; a resumed turn starting does not.
+        self._failures: dict[str, int] = {}
         # Whether the account is limited, and when it resets (None: nobody said).
         self._limited = False
         self._resets_at: float | None = None
         self._probe_at = 0.0
+        self._read_cut()
 
     def run(self, stop: threading.Event) -> None:
-        self._read_cut()
         while not stop.is_set():
             for event in self._sub.drain(timeout=1.0):
                 self.on_event(event)
@@ -86,17 +111,28 @@ class Limits:
             self._limit(event.data["resets_at"], now)
         elif event.tab is None:
             return
-        elif event.type in ("agent.busy", "tab.closed"):
+        elif event.type == "agent.reopened":
+            tab = self.session.intent.tabs.get(event.tab)
+            if (event.data["mid_turn"] and tab is not None and tab.held is None
+                    and not (tab.machine and self.session.intent.hands_off(tab.tab_id))):
+                self._continue(event.tab, REOPENED)
+        elif event.type == "agent.busy":
             self._cut.pop(event.tab, None)
+        elif event.type == "tab.closed":
+            self._cut.pop(event.tab, None)
+            self._failures.pop(event.tab, None)
         elif event.type == "agent.idle":
             error = event.data.get("error")
             if error is None:
                 self._cut.pop(event.tab, None)
+                self._failures.pop(event.tab, None)
                 if self._limited and self._resets_at is None:
                     # A turn the API answered: the limit nobody timed is over.
                     self._resume_limited(now)
                 return
             self._cut[event.tab] = (error, now)
+            if error in TRANSIENT:
+                self._failures[event.tab] = self._failures.get(event.tab, 0) + 1
             if error == LIMIT:
                 self._limit(None, now)
             elif error not in TRANSIENT and not (
@@ -128,8 +164,13 @@ class Limits:
             elif now >= self._probe_at:
                 self._probe(now)
         for tab_id, (error, when) in list(self._cut.items()):
-            if error in TRANSIENT and now >= when + RETRY_SECONDS:
+            if error in TRANSIENT and now >= when + self.retry_after(tab_id):
                 self._continue(tab_id, error)
+
+    def retry_after(self, tab_id: str) -> float:
+        """How long a tab cut by a transient failure waits: doubled by each in a row."""
+        row = self._failures.get(tab_id, 1)
+        return min(RETRY_SECONDS * 2 ** (row - 1), RETRY_CAP_SECONDS)
 
     def _resume_limited(self, now: float) -> None:
         self._limited, self._resets_at = False, None
@@ -157,6 +198,6 @@ class Limits:
         """A tab the user sits in front of is theirs to resume; it stays cut until it works."""
         if not self._unattended(tab_id):
             return
-        self._cut.pop(tab_id)
+        self._cut.pop(tab_id, None)
         self.events.emit("limits.continued", tab=tab_id, error=error, deliver={
             "content": continue_message(error), "meta": {"from": "daemon"}})

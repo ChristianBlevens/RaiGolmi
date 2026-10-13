@@ -191,18 +191,20 @@ def _logs(session: Session, instance_id: str, tail: int) -> dict[str, Any]:
 def _machine_state(session: Session) -> dict[str, Any]:
     """What runs beside the daemon's own record, for the janitor: every container raigolmid
     manages as docker has it, and the host compositor's outputs and windows as sway has
-    them. A compositor that cannot be addressed is said as unasked, never as broken."""
-    from . import labels
+    them, and the sign-ins with when each ends (`credential.standing`). A compositor that cannot
+    be addressed is said as unasked, never as broken."""
+    from . import credential, labels
     containers = [{"name": c.name, "role": c.labels.get(labels.ROLE), "image": c.image,
                    "status": c.status, "exit_code": c.exit_code, "started_at": c.started_at}
                   for c in session.runtime.list({labels.MANAGED: "true"})]
+    credentials = credential.standing(session.paths)
     host = session.faces.host
     if not host.available:
-        return {"containers": containers,
+        return {"containers": containers, "credentials": credentials,
                 "sway": {"unasked": "SWAYSOCK names no socket in this daemon's environment"}}
     outputs = [{k: o.get(k) for k in ("name", "active", "rect", "scale", "current_mode",
                                       "current_workspace")} for o in host.outputs()]
-    return {"containers": containers,
+    return {"containers": containers, "credentials": credentials,
             "sway": {"outputs": outputs, "windows": _windows(host.tree(), None)}}
 
 

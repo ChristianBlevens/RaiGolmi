@@ -4,13 +4,14 @@ it answers and directs them, and it restarts one fresh at the context budget."""
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
 from raigolmid import naming
 from raigolmid.api import with_marks, with_tab_states
 from raigolmid.channel import Channels
-from raigolmid.coordinator import Coordinator
+from raigolmid.coordinator import IDLE_SECONDS, Coordinator
 from raigolmid.janitor import TAKEN
 from raigolmid.questions import Questions
 from raigolmid.scopes import build_tab_methods
@@ -624,3 +625,64 @@ def test_a_direction_on_its_way_to_a_tab_that_ends_its_conversation_goes_to_its_
     assert directed["meta"]["carried_from"] == BODY
     [told] = [q for q in m.queued(MACHINE) if "ended its own conversation" in q["content"]]
     assert '"add the lexer tests"' in told["content"]
+
+
+def _wakes(m) -> list[str]:
+    return [q["content"] for q in m.queued(MACHINE) if "From the daemon: you" in q["content"]]
+
+
+def test_a_run_gone_idle_wakes_the_machine_tab_once_with_where_each_tab_stands(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+    now = time.time()
+    m.coordinator.tick(now + IDLE_SECONDS - 5)
+    assert _wakes(m) == []
+    m.coordinator.tick(now + IDLE_SECONDS + 1)
+    [woken] = _wakes(m)
+    assert "every tab you manage have been idle for 20 minutes" in woken
+    assert f"Tab {BODY} (myapi), which you manage, is done" in woken
+    m.coordinator.tick(now + 3 * IDLE_SECONDS)
+    assert len(_wakes(m)) == 1, "once per idle stretch"
+    h.session.hold(BODY, "the parser passes; which CLI library?")
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+    m.coordinator.tick(time.time() + 2 * IDLE_SECONDS)
+    assert len(_wakes(m)) == 1, "a run whose every tab is held waits on the user"
+
+
+def test_the_machine_tab_idle_with_a_question_waiting_on_it_is_woken(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    id = m.referred(BODY)
+    m.tab(BODY)["agent_activity"](busy=True)        # the run is not idle; the machine tab is
+    m.coordinator.tick(time.time() + IDLE_SECONDS + 1)
+    [woken] = _wakes(m)
+    assert f"Tab {BODY} asked {id}: 'which port?'" in woken and "answer_question" in woken
+
+
+def test_a_runs_report_names_the_tabs_the_event_log_has_rotated_away(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    (h.session.agents.home(BODY) / "thoughts.md").write_text("the parser is green\n")
+    h.paths.events.write_text("")                   # two months of events later
+    m.tab(MACHINE)["manage"](tab=BODY, on=False)
+    m.pump()
+    [asked] = [q for q in m.queued(MACHINE) if "report_run" in q["content"]]
+    assert f"Tab {BODY} (myapi), the tail of its thought doc:\nthe parser is green" \
+        in asked["content"]
+
+
+def test_a_run_saved_without_its_tabs_loads_with_those_the_event_log_shows(h):
+    h.session.manage(BODY, True)
+    saved = json.loads(h.paths.intent.read_text())
+    del saved["run"]["tabs"]
+    h.paths.intent.write_text(json.dumps(saved))
+    from raigolmid.session import Session
+    h.session = Session(h.runtime, h.paths, h.search, h.events, epoch=2,
+                        compose_cli=h.compose)
+    assert h.session.intent.run.tabs == {BODY: "myapi"}
+    assert json.loads(h.paths.intent.read_text())["run"]["tabs"] == {BODY: "myapi"}

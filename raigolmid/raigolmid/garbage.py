@@ -5,8 +5,10 @@ closure (gigabytes for a compiler) the moment a sandbox runs on it. A machine le
 weeks would hold every one until it restarted. So the toolbelts' half of the daemon's own
 collection (`Session.collect_garbage(bodies=False)`) runs whenever what a toolbelt is changes
 in use — a new image locked as the one a sandbox works on (`toolbelt.locked`) — and when a
-layer is deleted from the catalog (`catalog.deleted`). A body's images keep their own
-supersession (`superseded.py`) and the collection at the start.
+layer is deleted from the catalog (`catalog.deleted`), and when the disk is short
+(`disk.short`), so what the machine can free is freed before anyone is told it is full
+(`lineout.py`). A body's images keep their own supersession (`superseded.py`) and the collection
+at the start.
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-AFTER = frozenset({"toolbelt.locked", "catalog.deleted"})
+AFTER = frozenset({"toolbelt.locked", "catalog.deleted", "disk.short"})
 
 
 class Garbage:

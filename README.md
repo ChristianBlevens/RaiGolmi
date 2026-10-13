@@ -446,6 +446,12 @@ the display scale, the model the agents run and their conversation budgets. Edit
 Keys and looks change right away, and the model and budget at a tab's next start. If a save
 doesn't parse, it's refused and you're told why.
 
+The last setting, `[notify] ntfy_topic`, is a phone line of last resort. Pick a long name nobody
+could guess (the name is the only secret), put it there, and subscribe to that topic in the
+ntfy app on a phone. The machine then sends a plain-words message, at most once a day per cause,
+only when nothing on it can carry on: no sign-in works, the disk is full even after cleaning
+up, or Claude has refused every tab for a day. It can't tell you when Windows itself is down.
+
 ### Files and clipboard on Windows
 
 Copy and paste works both ways between Windows and the machine. Drop a file on the window

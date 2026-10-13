@@ -39,6 +39,8 @@ _MODEL = re.compile(r"^[A-Za-z0-9._\[\]-]+$")
 _LAYOUT = re.compile(r"^[a-z0-9_-]+(,[a-z0-9_-]+)*$")
 _VARIANT = re.compile(r"^[A-Za-z0-9_,-]*$")
 _COLOUR = re.compile(r"^#[0-9a-fA-F]{6}$")
+# ntfy's own rule for a topic name; empty is the line out turned off.
+_TOPIC = re.compile(r"^[A-Za-z0-9_-]{0,64}$")
 
 SHIPPED = Path(__file__).with_name("settings.toml")
 
@@ -62,6 +64,7 @@ SCHEMA: dict[str, dict[str, str]] = {
                  "catalog_backdrop")}},
     "questions": {"lapse_minutes": "positive"},
     "history": {"kept_days": "positive"},
+    "notify": {"ntfy_topic": "topic"},
 }
 
 
@@ -79,6 +82,7 @@ class Settings:
     look: dict[str, object]     # the fields of `ui.theme.Look`
     lapse_seconds: float
     kept_seconds: float
+    ntfy_topic: str             # empty: no line out (`lineout.py`)
 
 
 def install(path: Path) -> list[str]:
@@ -229,7 +233,9 @@ def parse(text: str, source: str) -> Settings:
         scale=_positive(raw, "display", "scale", source),
         look=_look(raw, source),
         lapse_seconds=_positive(raw, "questions", "lapse_minutes", source) * 60,
-        kept_seconds=_positive(raw, "history", "kept_days", source) * 24 * 3600)
+        kept_seconds=_positive(raw, "history", "kept_days", source) * 24 * 3600,
+        ntfy_topic=_named(raw, "notify", "ntfy_topic", source, _TOPIC,
+                          "empty, or an ntfy topic: letters, digits, _ and -, at most 64"))
 
 
 def load(path: Path) -> Settings:

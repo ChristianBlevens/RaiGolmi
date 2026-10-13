@@ -34,6 +34,8 @@ from .channel import Channels
 from .clipboard import ClipboardBridge
 from .coordinator import Coordinator
 from .limits import Limits
+from .lineout import LineOut
+from .rollback import Rollback
 from .remotecontrol import RemoteControl
 from .stalls import Stalls
 from .disk import Disk
@@ -147,6 +149,8 @@ class Daemon:
         self.coordinator = Coordinator(self.session, self.events, self.questions,
                                        self.channels)
         self.limits = Limits(self.session, self.events)
+        self.rollback = Rollback(self.session, self.events)
+        self.line_out = LineOut(self.paths, self.events)
         self.stalls = Stalls(self.session, self.events)
         self.disk = Disk(self.session, self.events)
         self.garbage = Garbage(self.session, self.events)
@@ -228,6 +232,8 @@ class Daemon:
                              (lambda: self.channels.messages.run(self._stop), "messages"),
                              (lambda: self.coordinator.run(self._stop), "coordinator"),
                              (lambda: self.limits.run(self._stop), "limits"),
+                             (lambda: self.rollback.run(self._stop), "rollback"),
+                             (lambda: self.line_out.run(self._stop), "line-out"),
                              (lambda: self.stalls.run(self._stop), "stalls"),
                              (lambda: self.session.jobs.run(self._stop), "jobs"),
                              (lambda: self.remote_control.run(self._stop), "remote-control"),

@@ -6,6 +6,7 @@ over a session with tabs open, not a hand-written dict."""
 from __future__ import annotations
 
 import argparse
+import time
 
 import pytest
 
@@ -64,3 +65,23 @@ def test_the_ai_terminal_lists_every_tab_by_its_window_name(h, monkeypatch, caps
     out = capsys.readouterr().out
     assert f"{h.tab(None)} machine" in out
     assert f"{h.tab('myapi')} myapi" in out
+
+
+def test_rai_status_says_when_each_sign_in_ends_and_never_its_secret(h, monkeypatch, capsys):
+    from raigolmid import claude_login, credential
+    credential.write(h.paths.registry_token, "GITHUB_TOKEN", "gho_secretgithub",
+                     credential.REGISTRY_KEYS)
+    ends = 1_790_000_000
+    claude_login.write(h.paths.claude_login, {
+        "claudeAiOauth": {"accessToken": "secret-access", "refreshToken": "secret-refresh",
+                          "expiresAt": ends * 1000, "refreshTokenExpiresAt": None,
+                          "scopes": [claude_login.SESSIONS_SCOPE]},
+        "oauthAccount": {"organizationUuid": "org-1"}})
+    monkeypatch.setattr(rai_main, "_client", lambda: _answering(h))
+    assert rai_main.cmd_status(argparse.Namespace(json=False)) == 0
+    out = capsys.readouterr().out
+    assert "setup-token, no expiry stated" in out
+    assert "OAuth token, does not expire" in out
+    assert (f"token until {time.strftime('%Y-%m-%d %H:%M', time.localtime(ends))}, "
+            "renewable until not stated") in out
+    assert "secret" not in out and "test-token" not in out

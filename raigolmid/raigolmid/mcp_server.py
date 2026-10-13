@@ -493,11 +493,15 @@ def build_server(client: ApiClient):
     def layer_delete(kind: str, id: str) -> dict[str, Any]:
         return call("layer_delete", kind=kind, id=id)
 
-    @tool(server, description="Machine tab only, when the user asks: move every agent to the "
-                             "newest Claude Code, or back to the one this release pins with "
-                             "`pinned`, as `rai claude-update` does. It builds the agent image, "
-                             "a minute or two; idle tabs then restart on their conversations, "
-                             "and working ones, you included, as their turns end.")
+    @tool(server, description="Machine tab only: when the user asks, or on your own only when "
+                             "the Claude Code agents run is failing — an update fixes a failure "
+                             "you are hitting, or the API refuses this version. Moves every "
+                             "agent to the newest Claude Code, or back to the one this release "
+                             "pins with `pinned`, as `rai claude-update` does. It builds the "
+                             "agent image, a minute or two; idle tabs then restart on their "
+                             "conversations, and working ones, you included, as their turns "
+                             "end. A newer one that fails its first session is gone back from "
+                             "by the daemon, which tells you.")
     def update_claude_code(pinned: bool = False) -> dict[str, Any]:
         return call("update_claude_code", pinned=pinned)
 
@@ -646,8 +650,9 @@ def build_machine_server(client: ApiClient):
 
     @tool(server, description="What runs beside raigolmid's own record: every container it "
                              "manages as docker has it (role, image, status, exit code, "
-                             "start), and the host compositor's outputs and every window on "
-                             "it, by workspace, as sway has them.")
+                             "start), the sign-ins and when each ends, and the host "
+                             "compositor's outputs and every window on it, by workspace, as "
+                             "sway has them.")
     def machine_state() -> dict[str, Any]:
         return call("machine_state")
 

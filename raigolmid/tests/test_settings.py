@@ -58,6 +58,7 @@ def test_a_setting_left_out_is_refused_naming_it(section, key):
     ("look", "drawer_share", 1.5),
     ("look", "terminal_height_percent", 120),
     ("look", "tab_depth", 0),
+    ("notify", "ntfy_topic", "../other-topic"),
 ])
 def test_a_wrong_value_is_refused_naming_it(section, key, value):
     with pytest.raises(SettingsError, match=key):

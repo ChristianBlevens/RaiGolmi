@@ -79,10 +79,28 @@ def _status_text(status: dict) -> tuple[str, list[str]]:
             mark = "●" if agent.get("marked") else " "
             lines.append(f"{mark} {agent['tab']:<10} {where:<24} [{agent['status']}, "
                          f"{agent['state']}]")
+    lines += ["", "sign-ins:", *_credential_lines(status["credentials"])]
     warnings = [f"definition error: {error}" for error in status.get("definition_errors", [])]
     warnings += [f"WARNING protected git files changed in {iid}: {', '.join(changed)}"
                  for iid, changed in (status.get("protected_git_changes") or {}).items()]
     return "\n".join(lines), warnings
+
+
+def _credential_lines(credentials: dict) -> list[str]:
+    """Each sign-in the machine keeps, and when it ends where that is known."""
+    def when(ts: float | None) -> str:
+        return "not stated" if ts is None else time.strftime("%Y-%m-%d %H:%M",
+                                                             time.localtime(ts))
+    login, agent, github = (credentials[k] for k in ("claude_login", "agent", "github"))
+    return [
+        ("  claude.ai  " + (f"token until {when(login['expires_at'])}, renewable until "
+                            f"{when(login['refresh_token_expires_at'])}"
+                            if login["set"] else f"not set — {login['why']}")),
+        ("  agent      " + (f"{agent['kind']}, {agent['expiry']}"
+                            if agent["set"] else f"not set — {agent['why']}")),
+        ("  github     " + (f"{github['kind']}, {github['expiry']}"
+                            if github["set"] else f"not set — {github['why']}")),
+    ]
 
 
 def _follow_status() -> int:

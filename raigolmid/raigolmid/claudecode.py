@@ -6,6 +6,11 @@ still take the newest: `rai claude-update` records it in `Paths.claude_code`, an
 is then built with it as a build argument, so its tag names the version too (`hostimages.agent`).
 A choice no newer than the pin is no choice — a later release that pins past it wins — and
 `rai claude-update --pinned` removes it.
+
+A move to a newer one is on trial until a tab's first turn on its image says whether it works:
+the choice holds the version it replaced and the image it made (`trial`), and the version goes
+back to that one when the first session on it fails (`rollback.py`). The pin is the release's
+own, never on trial.
 """
 from __future__ import annotations
 
@@ -68,13 +73,29 @@ def newer_than_pin(choice: Path, containerfile: Path) -> str | None:
     return version
 
 
-def choose(choice: Path, version: str | None, containerfile: Path) -> None:
-    """Record `version`; None, or one no newer than the pin, goes back to the release's."""
+def choose(choice: Path, version: str | None, containerfile: Path,
+           trial: dict[str, str | None] | None = None) -> None:
+    """Record `version`, on `trial` when given; None, or one no newer than the pin, goes back
+    to the release's."""
     if version is None or (_parsed(version, "the choice")
                            <= _parsed(pinned(containerfile), str(containerfile))):
         choice.unlink(missing_ok=True)
         return
-    save_json(choice, {"version": version})
+    save_json(choice, {"version": version, **({"trial": trial} if trial is not None else {})})
+
+
+def on_trial(choice: Path) -> dict[str, str | None] | None:
+    """The chosen version's trial: `from`, the version it replaced (None for the pin), and
+    `image`, the agent image it made; None once it has proven itself or when nothing is
+    chosen."""
+    data = load_json(choice, "Claude Code choice")
+    if data is None or "trial" not in data:
+        return None
+    trial = data["trial"]
+    if (not isinstance(trial, dict) or not isinstance(trial.get("image"), str)
+            or not isinstance(trial.get("from"), (str, type(None)))):
+        raise ClaudeCodeError(f"{choice} holds a trial that is not one: {trial!r}")
+    return trial
 
 
 def latest(fetch: Callable[[str], bytes] | None = None) -> str:

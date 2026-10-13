@@ -209,7 +209,8 @@ to another tab, tell the user which one and how to reach it, and do not do it he
   machine's plugins and templates, and the Claude Code every agent runs, are the machine tab's.
 - **The machine tab** works on the machine: faces, toolbelts and bodies as layers — the
   registry's too, listed, downloaded, installed and deleted as the user's catalog does
-  (`layers`); no tab uploads one — the plugins and templates, the Claude Code every agent runs (`update_claude_code`, when the user asks),
+  (`layers`); no tab uploads one — the plugins and templates, the Claude Code every agent runs (`update_claude_code`, when the user asks or the one
+  pinned is failing; one that fails its first session is gone back from for you),
   and the body tabs it manages, which it steers with `direct`. The project work inside a body
   is that body's tab's.
 - **The janitor** repairs the machine's failures; nobody works in it.

@@ -150,3 +150,53 @@ def test_a_sign_in_that_has_ended_is_removed_so_it_is_asked_again(tmp_path, auth
     lost = [e.data["error"] for e in events.tail(10) if e.type == "claude_login.lost"]
     assert len(lost) == 2 and "status code 400" in lost[0] and "expired" in lost[1]
     assert not any(e.type == "claude_login.refresh_failed" for e in events.tail(10))
+
+
+def _line_out(tmp_path, monkeypatch):
+    from raigolmid import lineout
+    from tests import settingsdoc
+    from tests.harness import Harness
+    h = Harness(tmp_path, monkeypatch)
+    settingsdoc.write(h.paths.settings, notify={"ntfy_topic": "rai-line-test"})
+    sent: list[str] = []
+    monkeypatch.setattr(lineout, "send", lambda _topic, title, _message: sent.append(title))
+    line = lineout.LineOut(h.paths, h.events)
+
+    def hear() -> None:
+        for event in line._sub.drain(timeout=0):
+            line.on_event(event)
+    return h, line, hear, sent
+
+
+def test_the_agent_credential_refused_with_no_sign_in_goes_out_on_the_line(
+        tmp_path, monkeypatch):
+    h, line, hear, sent = _line_out(tmp_path, monkeypatch)
+    _written(h.paths.claude_login, _login(3600))
+    h.events.emit("agent.turn_failed", tab="tab-1", error=claude_login.TURN_REFUSED)
+    hear()
+    assert not sent, "a sign-in still set is renewed by the daemon"
+
+    h.paths.claude_login.unlink()
+    h.events.emit("agent.turn_failed", tab="tab-1", error=claude_login.TURN_REFUSED)
+    hear()
+    assert len(sent) == 1 and "sign in" in sent[0]
+
+
+def test_every_tab_refused_for_a_day_goes_out_and_an_answered_turn_ends_it(
+        tmp_path, monkeypatch):
+    from raigolmid import lineout
+    h, line, hear, sent = _line_out(tmp_path, monkeypatch)
+    h.events.emit("agent.turn_failed", tab="tab-1", error="billing_error")
+    hear()
+    started = line._refused_since
+    h.events.emit("agent.idle", tab="tab-2", done=True, error=None)
+    hear()
+    line.tick(started + lineout.REFUSED_FOR + 1)
+    assert not sent
+
+    h.events.emit("agent.turn_failed", tab="tab-1", error="billing_error")
+    hear()
+    line.tick(line._refused_since + lineout.REFUSED_FOR - 60)
+    assert not sent
+    line.tick(line._refused_since + lineout.REFUSED_FOR + 1)
+    assert len(sent) == 1 and "refuses" in sent[0]

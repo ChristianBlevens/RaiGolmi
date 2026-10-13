@@ -11,6 +11,7 @@ from raigolmid import claudecode, hostimages, naming
 from raigolmid.channel import Channels
 from raigolmid.hostimages import HostImageError
 from raigolmid.questions import Questions
+from raigolmid.rollback import Rollback
 from raigolmid.scopes import build_tab_methods
 from raigolmid.session import SessionError
 
@@ -94,3 +95,52 @@ def test_the_machine_tab_updates_and_moves_as_its_turn_ends_and_no_other_tab_can
     assert report["version"] == "2.1.295" and machine in report["working"]
     h.session.agent_activity(machine, busy=False)
     _settles(lambda: _image_of(h, machine) == report["image"])
+
+
+def _decide(rollback: Rollback) -> None:
+    for event in rollback._sub.drain(timeout=0):
+        rollback.on_event(event)
+
+
+def _on_trial(h):
+    tab, old = h.tab(None), _image_of(h, h.tab(None))
+    rollback = Rollback(h.session, h.events)
+    report = h.session.update_claude_code()
+    assert claudecode.on_trial(h.paths.claude_code) == {"from": None, "image": report["image"]}
+    _settles(lambda: _image_of(h, tab) == report["image"])
+    return tab, old, rollback
+
+
+def test_a_refusal_on_the_first_turn_goes_back_and_tells_the_machine_tab(h):
+    tab, old, rollback = _on_trial(h)
+    h.events.emit("agent.turn_failed", tab=tab, error="invalid_request", message="refused")
+    _decide(rollback)
+
+    assert not h.paths.claude_code.exists()
+    [back] = h.events_of("claude_code.rolled_back")
+    assert (back.data["failed"], back.data["version"], back.tab) == ("2.1.295", PIN, tab)
+    assert "2.1.295" in back.data["deliver"]["content"]
+    _settles(lambda: _image_of(h, tab) == old)
+
+
+def test_an_agent_that_does_not_come_up_on_it_goes_back(h):
+    tab, old, rollback = _on_trial(h)
+    h.events.emit("agent.crashed", tab=tab, message=f"Agent in tab {tab} did not restart")
+    _decide(rollback)
+    assert not h.paths.claude_code.exists() and h.events_of("claude_code.rolled_back")
+    _settles(lambda: _image_of(h, tab) == old)
+
+
+def test_a_first_turn_answered_keeps_it_and_a_later_failure_does_not_go_back(h):
+    tab, _, rollback = _on_trial(h)
+    h.session.agent_session_started(tab)
+    h.session.agent_activity(tab, busy=True)
+    h.session.agent_activity(tab, busy=False)
+    _decide(rollback)
+    assert claudecode.on_trial(h.paths.claude_code) is None
+    assert claudecode.chosen(h.paths.claude_code) == "2.1.295"
+
+    h.events.emit("agent.turn_failed", tab=tab, error="invalid_request", message="refused")
+    _decide(rollback)
+    assert claudecode.chosen(h.paths.claude_code) == "2.1.295"
+    assert not h.events_of("claude_code.rolled_back")
