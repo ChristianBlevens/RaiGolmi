@@ -1,5 +1,5 @@
-#  RaiGolmi host image: kernel, systemd, networking, Docker + Compose, Sway, raigolmid,
-#  foot + tmux, minimal fonts, and nothing else. Python is raigolmid's own runtime; work
+#  RaiGolmi host image: kernel, systemd, networking, Docker + Compose, Sway, PipeWire,
+#  raigolmid, foot + tmux, minimal fonts, and nothing else. Python is raigolmid's own runtime; work
 #  happens in bodies and session views, which bring their own.
 #
 #  Built by CI (see ci/): bootc-image-builder needs privileges an unprivileged builder lacks.
@@ -12,6 +12,7 @@ COPY host/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
 RUN dnf -y install \
         docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
         sway foot tmux wl-clipboard \
+        pipewire pipewire-pulseaudio wireplumber \
         git \
         openssh-server \
         nftables \
@@ -101,6 +102,8 @@ COPY host/systemd/raigolmi-docker-store.service \
 COPY host/systemd/docker-store.sh          /usr/libexec/raigolmi/docker-store
 #  The base image's update timer is masked: the OS updates only when the user asks, and its
 #  `--apply` reboots without a word.
+#  The desktop user's sound server, whose two sockets a face is handed (`faces.py`):
+#  pipewire-pulse starts on its first client, and WirePlumber suspends an output nothing plays to.
 RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh && \
     mkdir -p /usr/lib/systemd/user/sway-session.target.wants && \
     ln -s ../raigolmid.service \
@@ -113,7 +116,8 @@ RUN ln -s /usr/share/raigolmi/profile-sway.sh /etc/profile.d/raigolmi-sway.sh &&
           /usr/libexec/raigolmi/drop-rollback /usr/libexec/raigolmi/docker-store && \
     systemctl enable docker.service sshd.service raigolmi-timezone.service \
         raigolmi-firewall.service raigolmi-trim.service raigolmi-docker-store.service && \
-    systemctl mask bootc-fetch-apply-updates.timer
+    systemctl mask bootc-fetch-apply-updates.timer && \
+    systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
 
 #  bootc's own check that the image is a valid bootable container: a base that lost its
 #  kernel or its initramfs fails here rather than at first boot.

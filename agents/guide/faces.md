@@ -134,6 +134,31 @@ WebKit browsers die (their sandbox cannot create a namespace here).
 A face's first start builds its image and closure, which can take minutes with the user's
 screen blank; after that a switch is under a second.
 
+## Sound
+
+The user's face plays through the machine's PipeWire: `PULSE_SERVER` and `PIPEWIRE_REMOTE` name
+its PulseAudio and PipeWire sockets, so any program speaking either (Firefox, mpv, SDL,
+GStreamer) is heard with nothing to configure, a body's program run in the face included. A
+trial has no sound.
+
+An ALSA program (cpal's default, so Bevy and rodio) plays through the same server: the face's
+`ALSA_CONFIG_PATH` sends ALSA's default to the `pulse` plugin, which comes from the program's
+own libraries, so its image or closure carries it: Debian `libasound2-plugins`, Fedora
+`alsa-plugins-pulseaudio`, Nix `alsa-plugins`. alsa-lib looks for it in `alsa-lib/` beside the
+libasound it loaded, which is where Debian and Fedora put it; a Nix build is run with
+`ALSA_PLUGIN_DIR` naming its `alsa-plugins`' `lib/alsa-lib`, as nixpkgs wraps `aplay`. Debian's
+libpulse finds `libpulsecommon` in `/usr/lib/x86_64-linux-gnu/pulseaudio`, so a Debian body's
+program run through `/body`'s loader needs `/body/usr/lib/x86_64-linux-gnu/pulseaudio` on its
+library path.
+
+Volume and mute are the user's: the machine is one entry (QEMU) in Windows' volume mixer, and
+inside it `wpctl set-volume @DEFAULT_AUDIO_SINK@ 50%` and `wpctl set-mute @DEFAULT_AUDIO_SINK@
+toggle`. A face that shows a volume control puts `wireplumber` (`wpctl`) or `pulseaudio`
+(`pactl`) in its `apps`; both find the server from the environment.
+
+Silence costs nothing: an output nothing plays to is suspended. Sound playing is a stream to
+Windows, like frames, so a face makes none when nothing is happening (no looping ambience).
+
 ## The host's edges and keys
 
 Three edges are the host's, each a 120×24 px tab that opens on hover: the **left** edge's
@@ -180,6 +205,7 @@ An app that takes the mouse itself (an editor's `mouse=a`) takes this away from 
   A face tried off the user's screen is refused all three.
 - **The AI terminal**: `python3 -m rai ai --show` brings it out (for a button or a key in the
   face). Only the host puts it away.
+- **The machine's sound server** (Sound, above).
 
 Nothing else of the host is there.
 

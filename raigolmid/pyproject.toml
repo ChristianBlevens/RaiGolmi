@@ -40,8 +40,10 @@ packages = [
 # so it is not an optional extra. It is a program rather than a module: it runs
 # under the toolbelt's interpreter inside the view, where `raigolmid` is not importable. The
 # face's editor glue is mounted into the face the same way. `settings.toml` is the
-# document the user's settings start from (`settings.install`).
-"raigolmid" = ["launcher/view/*.py", "nvim/lua/*.lua", "settings.toml"]
+# document the user's settings start from (`settings.install`). `body-asound.conf` and
+# `face-asound.conf` are a body's and the face's ALSA output, mounted from here.
+"raigolmid" = ["launcher/view/*.py", "nvim/lua/*.lua", "settings.toml", "body-asound.conf",
+               "face-asound.conf"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

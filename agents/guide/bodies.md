@@ -72,6 +72,20 @@ The body runs as the owner of its working copy, not as its image's user, so what
 in `/work` is the user's. An image whose program needs root at run time (a port under 1024, writes
 to its own system paths) has to be written not to.
 
+## The GPU and sound
+
+A body has the GPU's render node (`/dev/dri/renderD128`), not its display node: it renders
+headless with GL (EGL, surfaceless) through the Mesa drivers its image installs. The GPU is a
+virtual one (virgl), so the work lands on the user's real GPU through QEMU.
+
+A body has no speakers and no sound server. Its ALSA default output (the machine's
+`/etc/asound.conf`, which replaces the image's own) opens for any program built on the image's
+libasound and takes the audio into nothing, or as a WAV into the file `RAIGOLMI_AUDIO_FILE`
+names: `RAIGOLMI_AUDIO_FILE=/tmp/run.wav ./game`. It takes audio as fast as it is written,
+not in real time, so a program paced by its audio runs unpaced, and one that writes whenever
+there is room keeps a CPU busy while it plays. A program that speaks only PulseAudio or
+PipeWire finds no server; point it at ALSA (SDL: `SDL_AUDIODRIVER=alsa`).
+
 ## A body is git
 
 The working copy is a git repository: tabs commit there as themselves

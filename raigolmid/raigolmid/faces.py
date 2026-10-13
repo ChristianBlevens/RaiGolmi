@@ -62,6 +62,18 @@ CODE_MOUNT = f"{FACE_PRIVATE}/code"
 # The host's display, the one file of the host's runtime dir the user's face is given:
 # its compositor is a client of it, and its apps are clients of the face's own.
 HOST_WAYLAND = f"{FACE_PRIVATE}/host-wayland"
+# The host's sound server, as two more single files: PipeWire's own socket and its PulseAudio
+# one, so an app reaches the speakers by either protocol. pipewire-pulse starts on its first
+# client and WirePlumber suspends an output nothing plays to, so silence costs nothing.
+HOST_PIPEWIRE = f"{FACE_PRIVATE}/host-pipewire"
+HOST_PULSE = f"{FACE_PRIVATE}/host-pulse"
+# An ALSA-only program reaches the same server through ALSA's `pulse` plugin. Only the config
+# is the face's: the plugin is found beside the program's own libasound (alsa-lib's
+# `$ORIGIN/alsa-lib`, or the `ALSA_PLUGIN_DIR` a Nix build wraps it with), so a body's binary
+# loads one built against its own libraries. Setting `ALSA_PLUGIN_DIR` here would override
+# that lookup for every program in the face.
+FACE_ASOUND = Path(__file__).resolve().parent / "face-asound.conf"
+FACE_ALSA_CONF = f"{FACE_PRIVATE}/alsa.conf"
 # The face's own socket (`scopes.FaceSockets`), where `rai` in the face finds it, and
 # beside it `focused` (`Paths.focused_view`).
 FACE_SOCKET_MOUNT = "/run/raigolmid"
@@ -371,7 +383,8 @@ class Faces:
 
     # --- lifecycle ---------------------------------------------------------------------
     def start(self, face: Face) -> FaceRuntimeState:
-        """The user's face: nested in the host compositor and fullscreen on their screen."""
+        """The user's face: nested in the host compositor and fullscreen on their screen, and
+        heard through the host's sound server, which a trial never reaches."""
         image = self._image(face)
         wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
         if not wayland_display:
@@ -379,6 +392,14 @@ class Faces:
                 "WAYLAND_DISPLAY is unset, so there is no host compositor to nest in. The "
                 "host config imports it into the user manager (host/sway/config:56)."
             )
+        # Docker makes a missing bind source a root-owned directory, which would then stand
+        # where the sound server's socket belongs.
+        for sound in (self.paths.host_pipewire, self.paths.host_pulse):
+            if not sound.is_socket():
+                raise FaceError(
+                    f"{sound} is not a socket, so the face would have no sound server. The "
+                    "host image enables pipewire.socket and pipewire-pulse.socket for the "
+                    "desktop user (host/Containerfile).")
         name = naming.face(face.id)
         if self.runtime.inspect(name) is not None:
             # Residue from a crash or from a stop that did not complete. Removing it here
@@ -393,8 +414,12 @@ class Faces:
         self.paths.transfer.mkdir(parents=True, exist_ok=True)
         display, pid = self._launch(
             face, image, name, labels.Role.FACE, runtime_dir,
-            {"WAYLAND_DISPLAY": HOST_WAYLAND},
+            {"WAYLAND_DISPLAY": HOST_WAYLAND, "PIPEWIRE_REMOTE": HOST_PIPEWIRE,
+             "PULSE_SERVER": f"unix:{HOST_PULSE}", "ALSA_CONFIG_PATH": FACE_ALSA_CONF},
             (Mount(source=str(host_display), target=HOST_WAYLAND),
+             Mount(source=str(self.paths.host_pipewire), target=HOST_PIPEWIRE),
+             Mount(source=str(self.paths.host_pulse), target=HOST_PULSE),
+             Mount(source=str(FACE_ASOUND), target=FACE_ALSA_CONF, read_only=True),
              Mount(source=str(self.paths.face_home), target=FACE_HOME),
              Mount(source=str(self.paths.transfer), target=f"{FACE_HOME}/Transfer")),
             trial=False)

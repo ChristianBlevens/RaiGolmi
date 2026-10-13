@@ -23,6 +23,20 @@ from .definitions import Body
 from .runtime import RuntimeError_
 
 
+# The GPU's render nodes, not the whole of /dev/dri: a render node is the unprivileged half of
+# a GPU (rendering and compute, no display), and systemd's udev rules make it world-writable,
+# so the body's user opens it without the render group. A machine with none passes none.
+DRI = Path("/dev/dri")
+# A body's ALSA default (`body-asound.conf`): audio opens and plays with no device, and never
+# on the owner's speakers.
+BODY_ASOUND = Path(__file__).resolve().parent / "body-asound.conf"
+ASOUND_CONF = "/etc/asound.conf"
+
+
+def render_nodes(dri: Path) -> list[str]:
+    return [str(node) for node in sorted(dri.glob("renderD*"))]
+
+
 class ComposeError(RuntimeError_):
     """A Compose invocation failed. Carries the command and its stderr — the user or the
     agent has to act on the actual message, not on a summary of it."""
@@ -67,6 +81,7 @@ def render(body: Body, placement: BodyPlacement, epoch: int,
         # being made, as root, wherever the definition named.
         "volumes": [{"type": "bind", "source": str(placement.working_copy), "target": "/work",
                      "bind": {"create_host_path": False}},
+                    f"{BODY_ASOUND}:{ASOUND_CONF}:ro",
                     *(f"{m.source}:{m.target}:ro" for m in localtime.mounts(localtime.LOCALTIME))],
         "working_dir": "/work",
         "user": placement.user,
@@ -74,6 +89,9 @@ def render(body: Body, placement: BodyPlacement, epoch: int,
         # rebuild sequence responds to, not something to paper over with a retry loop.
         "restart": "no",
     }
+    devices = render_nodes(DRI)
+    if devices:
+        service["devices"] = [f"{node}:{node}:rw" for node in devices]
     if body.command:
         service["command"] = list(body.command)
     # The user's timezone, as every container they read a clock in has it; a body naming its

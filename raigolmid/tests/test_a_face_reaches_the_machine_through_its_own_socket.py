@@ -8,7 +8,8 @@ import pytest
 
 from raigolmid import hostsurfaces
 from raigolmid.client import ApiClient, ApiError
-from raigolmid.faces import FACE_HOME, FACE_SOCKET_MOUNT, HOST_WAYLAND, Faces
+from raigolmid.faces import (FACE_ALSA_CONF, FACE_ASOUND, FACE_HOME, FACE_SOCKET_MOUNT,
+                             HOST_PIPEWIRE, HOST_PULSE, HOST_WAYLAND, Faces)
 from raigolmid.runtime.base import Mount
 from raigolmid.scopes import FACE, TRIAL_TERMINAL, FaceSockets, build_face_methods
 from raigolmid.session import SessionError
@@ -26,7 +27,7 @@ def _spec_of(runtime, monkeypatch, start):
     return spec
 
 
-def test_the_users_face_is_given_the_hosts_display_and_nothing_else_of_its_runtime_dir(
+def test_the_users_face_is_given_the_hosts_display_and_sound_and_nothing_else_of_its_runtime_dir(
         rig, tmp_path, monkeypatch):
     """The user's runtime dir holds the host compositor's IPC socket, D-Bus, the user's
     systemd and the daemon's unscoped socket, each of which runs host commands."""
@@ -38,8 +39,14 @@ def test_the_users_face_is_given_the_hosts_display_and_nothing_else_of_its_runti
                     if m.source == str(paths.runtime)
                     or m.source.startswith(f"{paths.runtime}/")]
     assert {m.source for m in from_runtime} == {
-        str(paths.runtime / "wayland-0"), str(paths.face_runtime),
-        str(paths.face_socket_dir(trial=False))}
+        str(paths.runtime / "wayland-0"), str(paths.host_pipewire), str(paths.host_pulse),
+        str(paths.face_runtime), str(paths.face_socket_dir(trial=False))}
+    assert spec.environment["PIPEWIRE_REMOTE"] == HOST_PIPEWIRE
+    assert spec.environment["PULSE_SERVER"] == f"unix:{HOST_PULSE}"
+    # An ALSA-only program, a body's included, reaches the same server through ALSA's pulse plugin.
+    assert spec.environment["ALSA_CONFIG_PATH"] == FACE_ALSA_CONF
+    assert Mount(source=str(FACE_ASOUND), target=FACE_ALSA_CONF, read_only=True) in spec.mounts
+    assert "type pulse" in FACE_ASOUND.read_text(encoding="utf-8")
     assert spec.environment["XDG_RUNTIME_DIR"] == str(paths.face_runtime)
     assert Mount(source=str(paths.face_socket_dir(trial=False)), target=FACE_SOCKET_MOUNT,
                  read_only=True) in spec.mounts
@@ -59,7 +66,8 @@ def test_a_trial_has_its_own_socket_and_none_of_the_users_things(rig, tmp_path, 
 
     assert Mount(source=str(paths.face_socket_dir(trial=True)), target=FACE_SOCKET_MOUNT,
                  read_only=True) in spec.mounts
-    assert not any(m.target.startswith(FACE_HOME) or m.target == HOST_WAYLAND
+    assert not any(m.target.startswith(FACE_HOME)
+                   or m.target in (HOST_WAYLAND, HOST_PIPEWIRE, HOST_PULSE, FACE_ALSA_CONF)
                    for m in spec.mounts)
     # It shows no instance, so no launcher of one is within its reach.
     assert not any(m.source == str(paths.view_sockets)

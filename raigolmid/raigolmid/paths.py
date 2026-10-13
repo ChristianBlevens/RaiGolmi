@@ -92,6 +92,12 @@ class Paths:
         return self.state / "claude-code.json"
 
     @property
+    def line_out(self) -> Path:
+        """When each cause last went out on the phone line, and since when the API has
+        refused every tab (`lineout.py`), so a restart neither resends nor forgets."""
+        return self.state / "line-out.json"
+
+    @property
     def jobs(self) -> Path:
         """Each tab's long jobs and the launcher that runs each (`jobs.py`)."""
         return self.state / "jobs.json"
@@ -306,9 +312,19 @@ class Paths:
         """The user's face's runtime dir (`Faces.start`): its display, its sway's IPC socket,
         its editor's socket and its apps' logs. Its own rather than the user's, which holds the
         host compositor's IPC socket, D-Bus and the user's systemd, each of which runs host
-        commands. Beyond the host's display, the face reaches the host only through
-        `face_socket_dir`'s socket."""
+        commands. Beyond the host's display and sound server (`host_pipewire`, `host_pulse`),
+        the face reaches the host only through `face_socket_dir`'s socket."""
         return self.runtime / "raigolmid-face"
+
+    @property
+    def host_pipewire(self) -> Path:
+        """The host's PipeWire socket, which `pipewire.socket` holds for the desktop user."""
+        return self.runtime / "pipewire-0"
+
+    @property
+    def host_pulse(self) -> Path:
+        """The host's PulseAudio socket, served by PipeWire's `pipewire-pulse.socket`."""
+        return self.runtime / "pulse" / "native"
 
     def face_runtimes(self) -> dict[str, Path]:
         """Each face's runtime dir, by the role its container is labelled with."""

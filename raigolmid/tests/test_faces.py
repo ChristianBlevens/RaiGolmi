@@ -127,6 +127,10 @@ def rig(tmp_path, monkeypatch):
     settings.install(paths.settings)
     paths.face_runtime.mkdir()
     (runtime_dir / "wayland-0").touch()
+    paths.host_pulse.parent.mkdir()
+    for sound in (paths.host_pipewire, paths.host_pulse):
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(sound))
     runtime = FakeRuntime()
     runtime.one_shot[naming.closure_copy()] = ClosureCopies(runtime)
     back_faces(runtime)
