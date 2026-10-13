@@ -152,7 +152,8 @@ class Machine
         m.Settings.ApplyStartAtLogin();
         m.MemoryMiB = Settings.MemoryMiB(m.Settings.Memory);
         m.NoSound = AudioEndpoints.Missing();
-        m.Qemu = Require(Launcher.QemuPath(@"bin\qemu-system-x86_64w.exe"));
+        m.Qemu = m.Settings.Venus ? RequireVenus(Launcher.QemuPath(VenusQemu))
+                                  : Require(Launcher.QemuPath(@"bin\qemu-system-x86_64w.exe"));
         m.Firmware = Require(Launcher.QemuPath(@"share\qemu\edk2-x86_64-code.fd"));
         m.Log = Path.Combine(Application.StartupPath, "qemu.log");
         m.Screen = Path.Combine(Application.StartupPath, "screen.ppm");
@@ -178,6 +179,22 @@ class Machine
         m.WatchPort = FreePort();
         m.CommandLine = m.Arguments();
         return m;
+    }
+
+    // Venus runs the patched QEMU's copy beside the winq-emu fork's virglrenderer, which
+    // raigolmi-packages' virglrenderer-venus installs; the default DLL in bin is a different
+    // build, so without the copy Venus does not start at all.
+    const string VenusQemu = @"raigolmi-venus\qemu-system-x86_64w.exe";
+
+    static string RequireVenus(string path)
+    {
+        if (!File.Exists(path))
+            throw new LauncherError(path + " does not exist, and the experimental Venus (Vulkan) " +
+                                    "setting runs QEMU from there. Run setup.bat, which installs it, " +
+                                    "or set venus=off in " + Path.Combine(Environment.GetFolderPath(
+                                    Environment.SpecialFolder.LocalApplicationData), "RaiGolmi",
+                                    "settings.ini") + ", then start RaiGolmi again.");
+        return path;
     }
 
     static string Require(string path)
@@ -346,8 +363,11 @@ class Window : Form
         info.RedirectStandardError = true;
         info.RedirectStandardOutput = true;
         info.WorkingDirectory = Path.GetDirectoryName(machine.Qemu);
-        // QEMU's DLLs (ANGLE, virglrenderer, GLib) are MSYS2's, beside it.
-        info.Environment["PATH"] = info.WorkingDirectory + ";" + info.Environment["PATH"];
+        // QEMU's DLLs (ANGLE, virglrenderer, GLib) are MSYS2's, in bin. Venus's copy of QEMU
+        // sits elsewhere with only virglrenderer beside it, which Windows takes from the exe's
+        // own directory before any on PATH.
+        info.Environment["PATH"] = info.WorkingDirectory + ";" + Launcher.QemuPath("bin") + ";" +
+                                   info.Environment["PATH"];
         qemu = new Process();
         qemu.StartInfo = info;
         qemu.EnableRaisingEvents = true;

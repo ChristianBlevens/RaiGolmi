@@ -173,6 +173,9 @@ function Apply-Upgrade([string]$image, [string]$archive) {
 $packages = 'https://github.com/ChristianBlevens/raigolmi-packages/releases'
 $qemuVersion = '11.1.1-3.1'
 $virglVersion = '1.3.0-1.1'
+# Venus's virglrenderer (the winq-emu fork) beside a copy of that QEMU's exe, in
+# ucrt64\raigolmi-venus: the launcher starts that copy when the Venus setting is on.
+$venusVersion = '1.3.0.e80354b8-1'
 # Each file's SHA-256, from the release's own assets (GitHub lists each asset's digest), so a
 # file replaced on the release, or changed on the way, is refused before pacman installs it
 # unsigned. A new version changes these with the pins above.
@@ -182,6 +185,7 @@ $patchedSha256 = @{
     'mingw-w64-ucrt-x86_64-qemu-guest-agent-11.1.1-3.1-any.pkg.tar.zst'   = '952a833c32cc1e96d95fc4d13f7f8425cbf68bd7025ea99a898d523d4454aa31'
     'mingw-w64-ucrt-x86_64-qemu-image-util-11.1.1-3.1-any.pkg.tar.zst'    = '576ee1f59b7c8c881979ded7fd65db386fd72ce5a98e3ca126e360f5ead97cd1'
     'mingw-w64-ucrt-x86_64-virglrenderer-1.3.0-1.1-any.pkg.tar.zst'       = '9d79600ca8d8a10eb7fb17e672a6e2e7d968a6eba590ae44efec6fe28d51f0e3'
+    'mingw-w64-ucrt-x86_64-virglrenderer-venus-1.3.0.e80354b8-1-any.pkg.tar.zst' = '73abbaafd52e70953bd318df55739103b821f43e94fc62ca311535d28e2c0371'
 }
 
 function Msys([string]$command) {
@@ -207,9 +211,11 @@ function Patched-Installed([string[]]$names, [string]$version) {
     -not ($full | Where-Object { ($said -notcontains "$_ $version") -or ($said -notcontains "IgnorePkg = $_") })
 }
 
-# A release's packages, pinned and then installed over the stock ones. Downloaded first and
-# installed as local files: those are what MSYS2's pacman takes unsigned.
-function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
+# Releases' packages, pinned and then installed over the stock ones in one transaction, so a
+# package that depends on another's exact version arrives with it. Each release is
+# @{ Tag; Version; Names }. Downloaded first and installed as local files: those are what
+# MSYS2's pacman takes unsigned.
+function Install-Patched([hashtable[]]$releases) {
     if (Get-Process -Name qemu-system-x86_64w -ErrorAction SilentlyContinue) {
         Fail 'QEMU is running and holds the files being replaced: close the RaiGolmi window, then run this again.'
     }
@@ -218,14 +224,17 @@ function Install-Patched([string]$tag, [string]$version, [string[]]$names) {
     New-Item -ItemType Directory -Force $dir | Out-Null
     # Windows PowerShell redraws its progress bar per chunk, which slows a download many times.
     $ProgressPreference = 'SilentlyContinue'
-    $full = $names | ForEach-Object { "mingw-w64-ucrt-x86_64-$_" }
-    foreach ($name in $full) {
-        $file = "$name-$version-any.pkg.tar.zst"
-        if (-not $patchedSha256.ContainsKey($file)) { Fail "No SHA-256 is pinned for $file in common.ps1." }
-        Invoke-WebRequest "$packages/download/$tag/$file" -OutFile "$dir\$file" -UseBasicParsing
-        $hash = (Get-FileHash "$dir\$file" -Algorithm SHA256).Hash.ToLower()
-        if ($hash -ne $patchedSha256[$file]) {
-            Fail "$file arrived with SHA-256 $hash, not the $($patchedSha256[$file]) pinned in common.ps1; nothing was installed."
+    $full = @()
+    foreach ($release in $releases) {
+        foreach ($name in ($release.Names | ForEach-Object { "mingw-w64-ucrt-x86_64-$_" })) {
+            $full += $name
+            $file = "$name-$($release.Version)-any.pkg.tar.zst"
+            if (-not $patchedSha256.ContainsKey($file)) { Fail "No SHA-256 is pinned for $file in common.ps1." }
+            Invoke-WebRequest "$packages/download/$($release.Tag)/$file" -OutFile "$dir\$file" -UseBasicParsing
+            $hash = (Get-FileHash "$dir\$file" -Algorithm SHA256).Hash.ToLower()
+            if ($hash -ne $patchedSha256[$file]) {
+                Fail "$file arrived with SHA-256 $hash, not the $($patchedSha256[$file]) pinned in common.ps1; nothing was installed."
+            }
         }
     }
     foreach ($name in $full) {
@@ -340,13 +349,19 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     if (-not (Patched-Installed @('virglrenderer') $virglVersion)) {
         $missing += @{ What = "the patched virglrenderer $virglVersion (without it the boot screen never shows; MSYS2 is brought up to date first, as MSYS2 requires)"
                        How  = "$packages/virglrenderer-$virglVersion"
-                       Do   = { Install-Patched "virglrenderer-$virglVersion" $virglVersion @('virglrenderer') } }
+                       Do   = { Install-Patched @(@{ Tag = "virglrenderer-$virglVersion"; Version = $virglVersion
+                                                     Names = @('virglrenderer') }) } }
     }
-    if (-not (Patched-Installed @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') $qemuVersion)) {
-        $missing += @{ What = "the patched QEMU $qemuVersion (without it the disk image never shrinks; MSYS2 is brought up to date first, as MSYS2 requires)"
-                       How  = "$packages/qemu-$qemuVersion"
-                       Do   = { Install-Patched "qemu-$qemuVersion" $qemuVersion `
-                                    @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') } }
+    # The Venus build carries a copy of the patched QEMU's exe and depends on exactly that QEMU,
+    # so the two are installed together.
+    if (-not ((Patched-Installed @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') $qemuVersion) -and
+              (Patched-Installed @('virglrenderer-venus') $venusVersion))) {
+        $missing += @{ What = "the patched QEMU $qemuVersion, with the Venus build $venusVersion beside it (without it the disk image never shrinks, and the Venus setting has no QEMU to run; MSYS2 is brought up to date first, as MSYS2 requires)"
+                       How  = "$packages/qemu-$qemuVersion and $packages/virglrenderer-venus-$venusVersion"
+                       Do   = { Install-Patched @(@{ Tag = "qemu-$qemuVersion"; Version = $qemuVersion
+                                                     Names = @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') },
+                                                  @{ Tag = "virglrenderer-venus-$venusVersion"; Version = $venusVersion
+                                                     Names = @('virglrenderer-venus') }) } }
     }
 
     return $missing
