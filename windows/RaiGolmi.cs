@@ -422,8 +422,12 @@ class Window : Form
     {
         if (m.Msg == Native.WM_CLIPBOARDUPDATE)
             windowsChanged = true;
-        if (m.Msg == Native.WM_SYSCOMMAND && ChooseSetting((uint)(m.WParam.ToInt64() & 0xFFF0)))
+        if (m.Msg == Native.WM_SYSCOMMAND && (m.WParam.ToInt64() & 0xFFF0) == MenuSettings)
+        {
+            ShowSettings();
+            m.Result = IntPtr.Zero;
             return;
+        }
         // Answered here rather than by Form, whose answer to WM_QUERYENDSESSION is the close
         // button's: a cancelled close, which tells Windows the session may not end, and asks
         // the user on a second one (Form.WmClose).
@@ -445,36 +449,86 @@ class Window : Form
         base.WndProc(ref m);
     }
 
-    // --- the settings menu, in the window menu the title bar's icon opens ----------------
+    // --- the settings drop-down, opened from the window menu the title bar's icon opens --
     //
     // The caption is Windows' own, which takes no buttons of a program's; its icon's menu is
-    // the drop-down that title bar already has.
+    // the drop-down that title bar already has, and it holds one item that opens this.
+    // A Win32 menu closes on every choice, so the settings are a ToolStripDropDown, which stays
+    // open while its items are clicked (an ItemClicked close is cancelled, in the Memory
+    // drop-down too, since a nested item's click closes only its own drop-down first) and closes
+    // when the user clicks off it, presses Esc, or leaves for another program.
+    // It is shown without taking activation (ToolStripDropDown shows SW_SHOWNOACTIVATE), so
+    // the window stays the active form: `KeysToGuest` is false while it is open, or the
+    // keyboard hook would hand its keys to the guest.
 
-    const uint MenuStartAtLogin = 0x1000, MenuKeepAwake = 0x1010, MenuVenus = 0x1020, MenuMemory = 0x1100;
-    IntPtr settingsMenu, memoryMenu;
+    const uint MenuSettings = 0x1000;
+    ContextMenuStrip settings;
+    ToolStripMenuItem startAtLogin, keepAwake, venus;
+    readonly List<ToolStripMenuItem> memory = new List<ToolStripMenuItem>();
 
     void AddSettingsMenu()
     {
         IntPtr system = Native.GetSystemMenu(Handle, false);
-        settingsMenu = Native.CreatePopupMenu();
-        memoryMenu = Native.CreatePopupMenu();
-        if (system == IntPtr.Zero || settingsMenu == IntPtr.Zero || memoryMenu == IntPtr.Zero)
-            throw new LauncherError("The window's settings menu could not be made: error " +
-                                    Marshal.GetLastWin32Error());
-        MenuItem(settingsMenu, Native.MF_STRING, MenuStartAtLogin, "Start RaiGolmi when I sign in to Windows");
-        MenuItem(settingsMenu, Native.MF_STRING, MenuKeepAwake, "Keep Windows awake while RaiGolmi runs");
-        for (int i = 0; i < Settings.MemoryChoices.Length; i++)
-        {
-            string choice = Settings.MemoryChoices[i];
-            bool refused = Settings.Refusal(choice) != null;
-            MenuItem(memoryMenu, refused ? Native.MF_GRAYED : Native.MF_STRING, MenuMemory + (uint)i * 0x10,
-                     Settings.MemoryLabel(choice) + (refused ? " — more than this PC can spare" : ""));
-        }
-        MenuItem(settingsMenu, Native.MF_POPUP, (ulong)memoryMenu.ToInt64(), "Memory (applies at next start)");
-        MenuItem(settingsMenu, Native.MF_STRING, MenuVenus, "Venus (Vulkan), experimental (applies at next start)");
+        if (system == IntPtr.Zero)
+            throw new LauncherError("The window's menu could not be read, so Settings cannot be added to it.");
         MenuItem(system, Native.MF_SEPARATOR, 0, null);
-        MenuItem(system, Native.MF_POPUP, (ulong)settingsMenu.ToInt64(), "Settings");
+        MenuItem(system, Native.MF_STRING, MenuSettings, "Settings");
+
+        settings = new ContextMenuStrip();
+        startAtLogin = Toggle("Start RaiGolmi when I sign in to Windows", delegate
+        {
+            machine.Settings.StartAtLogin = !machine.Settings.StartAtLogin;
+            ApplySetting(machine.Settings.ApplyStartAtLogin);
+        });
+        keepAwake = Toggle("Keep Windows awake while RaiGolmi runs", delegate
+        {
+            machine.Settings.KeepAwake = !machine.Settings.KeepAwake;
+            ApplySetting(machine.Settings.ApplyKeepAwake);
+        });
+        var memoryItem = new ToolStripMenuItem("Memory (applies at next start)");
+        foreach (string choice in Settings.MemoryChoices)
+        {
+            string chosen = choice;
+            bool refused = Settings.Refusal(choice) != null;
+            var item = new ToolStripMenuItem(choice + " GB" + (refused ? " — more than this PC can spare" : ""));
+            item.Enabled = !refused;
+            item.Click += delegate
+            {
+                machine.Settings.Memory = chosen;
+                ApplySetting(null);
+            };
+            memory.Add(item);
+            memoryItem.DropDownItems.Add(item);
+        }
+        venus = Toggle("Venus (Vulkan), experimental (applies at next start)", delegate
+        {
+            machine.Settings.Venus = !machine.Settings.Venus;
+            ApplySetting(null);
+        });
+        settings.Items.AddRange(new ToolStripItem[] { startAtLogin, keepAwake, memoryItem, venus });
+        settings.Closing += StayOpenOnClick;
+        memoryItem.DropDown.Closing += StayOpenOnClick;
+        settings.Opening += delegate { keyboard.Release(); };
+        // The window has the keyboard back unless the user went to another program.
+        settings.Closed += (sender, e) =>
+        {
+            if (e.CloseReason != ToolStripDropDownCloseReason.AppFocusChange)
+                Activate();
+        };
         CheckSettings();
+    }
+
+    static ToolStripMenuItem Toggle(string text, EventHandler click)
+    {
+        var item = new ToolStripMenuItem(text);
+        item.Click += click;
+        return item;
+    }
+
+    static void StayOpenOnClick(object sender, ToolStripDropDownClosingEventArgs e)
+    {
+        if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked)
+            e.Cancel = true;
     }
 
     static void MenuItem(IntPtr menu, uint flags, ulong id, string text)
@@ -484,53 +538,22 @@ class Window : Form
                                     Marshal.GetLastWin32Error());
     }
 
+    // Opened just below the caption icon, after the window menu's own loop has returned.
+    void ShowSettings()
+    {
+        BeginInvoke(new Action(() => settings.Show(this, Point.Empty)));
+    }
+
+    public bool KeysToGuest { get { return Form.ActiveForm == this && !settings.Visible; } }
+
     void CheckSettings()
     {
         Settings s = machine.Settings;
-        Native.CheckMenuItem(settingsMenu, MenuStartAtLogin, s.StartAtLogin ? Native.MF_CHECKED : 0);
-        Native.CheckMenuItem(settingsMenu, MenuKeepAwake, s.KeepAwake ? Native.MF_CHECKED : 0);
-        Native.CheckMenuItem(settingsMenu, MenuVenus, s.Venus ? Native.MF_CHECKED : 0);
+        startAtLogin.Checked = s.StartAtLogin;
+        keepAwake.Checked = s.KeepAwake;
+        venus.Checked = s.Venus;
         for (int i = 0; i < Settings.MemoryChoices.Length; i++)
-            Native.CheckMenuItem(memoryMenu, MenuMemory + (uint)i * 0x10,
-                                 s.Memory == Settings.MemoryChoices[i] ? Native.MF_CHECKED : 0);
-    }
-
-    // True when `id` is one of the settings, which is then changed, saved and applied.
-    bool ChooseSetting(uint id)
-    {
-        Settings s = machine.Settings;
-        if (id == MenuStartAtLogin)
-        {
-            s.StartAtLogin = !s.StartAtLogin;
-            ApplySetting(s.ApplyStartAtLogin);
-        }
-        else if (id == MenuKeepAwake)
-        {
-            s.KeepAwake = !s.KeepAwake;
-            ApplySetting(s.ApplyKeepAwake);
-        }
-        else if (id == MenuVenus)
-        {
-            s.Venus = !s.Venus;
-            ApplySetting(null);
-        }
-        else if (id >= MenuMemory && id < MenuMemory + Settings.MemoryChoices.Length * 0x10)
-        {
-            string choice = Settings.MemoryChoices[(id - MenuMemory) / 0x10];
-            string refused = Settings.Refusal(choice);
-            if (refused != null)
-            {
-                MessageBox.Show(this, refused, "RaiGolmi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return true;
-            }
-            s.Memory = choice;
-            ApplySetting(null);
-        }
-        else
-            return false;
-        Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
-             ", memory " + s.Memory + ", venus " + s.Venus);
-        return true;
+            memory[i].Checked = s.Memory == Settings.MemoryChoices[i];
     }
 
     // Saves the settings, then makes `apply` true of Windows now; either failing is shown.
@@ -547,6 +570,9 @@ class Window : Form
         {
             Warn("A setting could not be applied: " + e.Message);
         }
+        Settings s = machine.Settings;
+        Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
+             ", memory " + s.Memory + ", venus " + s.Venus);
         CheckSettings();
     }
 
@@ -863,8 +889,6 @@ class Window : Form
     protected override void OnDeactivate(EventArgs e) { base.OnDeactivate(e); keyboard.Release(); ReleaseButtons(false); }
     protected override void OnMouseCaptureChanged(EventArgs e) { base.OnMouseCaptureChanged(e); if (!Capture) ReleaseButtons(true); }
 
-    public bool Active { get { return Form.ActiveForm == this; } }
-
     public void SendKey(bool down, int qnum)
     {
         Display d = display;
@@ -1105,12 +1129,49 @@ class Window : Form
             string log;
             lock (stderr) log = stderr.ToString();
             string tail = log.Length > 3000 ? log.Substring(log.Length - 3000) : log;
-            string said = Explain(log);
-            Launcher.Fail((said != null ? said + "\n\n" : "") +
-                          "QEMU exited with code " + qemu.ExitCode + ". Its output is in " +
-                          machine.Log + ":\n\n" + tail);
+            string exit = "QEMU exited with code " + qemu.ExitCode + ". Its output is in " +
+                          machine.Log + ":\n\n" + tail;
+            if (log.Contains(MemoryMapRefused) && machine.Settings.Memory != Settings.DefaultMemory)
+                OfferDefaultMemory(exit);
+            else
+            {
+                string said = Explain(log);
+                Launcher.Fail((said != null ? said + "\n\n" : "") + exit);
+            }
         }
         Close();
+    }
+
+    // What QEMU prints when WHvMapGpaRange refuses the guest's RAM; the HRESULT is not printed
+    // (accel/whpx/whpx-common.c, whpx_set_phys_mem), so the setting is the one thing to name.
+    const string MemoryMapRefused = "WHPX: failed to map GPA range";
+
+    // The memory setting goes back to 8 GB only on the user's Yes.
+    void OfferDefaultMemory(string exit)
+    {
+        Settings s = machine.Settings;
+        DialogResult answer = MessageBox.Show(
+            "Windows' hypervisor refused the machine's memory setting, " + s.Memory + " GB (" +
+            machine.MemoryMiB + " MiB), so the machine could not start. Set memory back to " +
+            Settings.DefaultMemory + " GB?\n\n" + exit,
+            "RaiGolmi", MessageBoxButtons.YesNo, MessageBoxIcon.Error);
+        if (answer != DialogResult.Yes)
+            return;
+        s.Memory = Settings.DefaultMemory;
+        try
+        {
+            s.Save();
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException ||
+                                  e is System.Security.SecurityException)
+        {
+            Launcher.Fail("Memory could not be set back to " + Settings.DefaultMemory + " GB: " +
+                          e.Message + "\n\nSet memory=" + Settings.DefaultMemory + " in settings.ini.");
+            return;
+        }
+        Note("settings: memory set back to " + s.Memory + " after the hypervisor refused it");
+        MessageBox.Show("Memory is set back to " + Settings.DefaultMemory + " GB. Open RaiGolmi again.",
+                        "RaiGolmi", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // The failures a stranger's PC meets, by what QEMU says of each
@@ -1137,8 +1198,8 @@ class Window : Form
     }
 }
 
-// The keyboard is the guest's while this window is active and the pointer is over it, and
-// Windows' otherwise — Super, Alt+Tab and all. A low-level hook
+// The keyboard is the guest's while this window is active, its settings drop-down closed and
+// the pointer over it, and Windows' otherwise — Super, Alt+Tab and all. A low-level hook
 // is the only way to take Super from Windows, as QEMU's own ui/win32-kbd-hook.c does. Keys
 // travel as scancodes, so the guest's layout decides what they mean.
 //
@@ -1191,7 +1252,7 @@ class Keyboard : IDisposable
 
     IntPtr OnKey(int code, IntPtr wparam, IntPtr lparam)
     {
-        if (code == Native.HC_ACTION && hovering && window.Active)
+        if (code == Native.HC_ACTION && hovering && window.KeysToGuest)
         {
             var k = (Native.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lparam, typeof(Native.KBDLLHOOKSTRUCT));
             // AltGr sends a phantom left Ctrl with this scancode bit set; the guest's AltGr
@@ -2098,12 +2159,10 @@ static class Native
 
     public const int WM_CLIPBOARDUPDATE = 0x031D;
     public const int WM_QUERYENDSESSION = 0x0011, WM_ENDSESSION = 0x0016, WM_SYSCOMMAND = 0x0112;
-    public const uint MF_STRING = 0x0, MF_GRAYED = 0x1, MF_CHECKED = 0x8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
+    public const uint MF_STRING = 0x0, MF_SEPARATOR = 0x800;
     [DllImport("user32.dll")] public static extern IntPtr GetSystemMenu(IntPtr hwnd, bool revert);
-    [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr CreatePopupMenu();
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern bool AppendMenu(IntPtr menu, uint flags, UIntPtr id, string text);
-    [DllImport("user32.dll")] public static extern uint CheckMenuItem(IntPtr menu, uint id, uint check);
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern bool ShutdownBlockReasonCreate(IntPtr hwnd, string reason);
     [DllImport("user32.dll")] public static extern bool ShutdownBlockReasonDestroy(IntPtr hwnd);

@@ -59,8 +59,8 @@ Closing it shuts the machine down properly, and so does Windows restarting or sh
 
 Click the icon at the window's top left for **Settings** (all off until you choose them, kept in
 `%LOCALAPPDATA%\RaiGolmi\settings.ini`): *Start RaiGolmi when I sign in to Windows*, *Keep
-Windows awake while RaiGolmi runs* (the screen can still turn off), *Memory* for the machine (8
-GB to half your PC's, from its next start), and *Venus (Vulkan)*, an experiment that needs a
+Windows awake while RaiGolmi runs* (the screen can still turn off), *Memory* for the machine (8,
+12, 16 or 24 GB, from its next start), and *Venus (Vulkan)*, an experiment that needs a
 QEMU built for it. To leave it running unattended, also turn on Windows' automatic sign-in
 (`netplwiz`, or Sysinternals Autologon) and your BIOS's "power on after AC loss".
 

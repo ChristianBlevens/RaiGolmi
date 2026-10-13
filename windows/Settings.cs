@@ -5,7 +5,7 @@
 //
 //   start-at-login = on | off     the launcher in HKCU\...\Run, so Windows starts it at sign-in
 //   keep-awake     = on | off     Windows does not sleep while the launcher runs
-//   memory         = 8 | 12 | 16 | 24 | half    the machine's RAM in GB, at its next start
+//   memory         = 8 | 12 | 16 | 24     the machine's RAM in GB, at its next start
 //   venus          = on | off     the GPU offers Vulkan (Venus), at its next start
 using System;
 using System.Collections.Generic;
@@ -21,7 +21,7 @@ sealed class Settings
     readonly string path;
 
     public const string DefaultMemory = "8";
-    public static readonly string[] MemoryChoices = { "8", "12", "16", "24", "half" };
+    public static readonly string[] MemoryChoices = { "8", "12", "16", "24" };
     // What Windows keeps for itself whatever the machine is given.
     const long HostReserveMiB = 4096;
 
@@ -90,19 +90,18 @@ sealed class Settings
 
     // --- memory ------------------------------------------------------------------------
 
-    // The machine's RAM for `-m`, in MiB. The long-standing 8 GB is given as before on any PC;
-    // a larger choice must leave Windows its reserve, and one that does not is refused, never
-    // quietly made smaller.
+    // The machine's RAM for `-m`, in MiB: a whole number of GiB. The long-standing 8 GB is
+    // given on any PC; a larger choice must leave Windows its reserve, and one that does not is
+    // refused, never quietly made smaller.
     public static int MemoryMiB(string choice)
     {
-        if (choice == DefaultMemory)
-            return 8192;
-        long want = choice == "half" ? HostMiB() / 2 : long.Parse(choice) * 1024;
         string refused = Refusal(choice);
         if (refused != null)
             throw new LauncherError(refused);
-        return (int)want;
+        return ChoiceMiB(choice);
     }
+
+    static int ChoiceMiB(string choice) { return int.Parse(choice) * 1024; }
 
     // Why this PC cannot give the machine `choice`, or null when it can.
     public static string Refusal(string choice)
@@ -110,17 +109,11 @@ sealed class Settings
         if (choice == DefaultMemory)
             return null;
         long host = HostMiB();
-        long want = choice == "half" ? host / 2 : long.Parse(choice) * 1024;
-        if (want <= host - HostReserveMiB)
+        if (ChoiceMiB(choice) <= host - HostReserveMiB)
             return null;
-        return "The machine cannot have " + Gb(want) + " GB of memory: this PC has " + Gb(host) +
+        return "The machine cannot have " + choice + " GB of memory: this PC has " + Gb(host) +
                " GB and Windows keeps " + Gb(HostReserveMiB) + " GB of it. Choose less in the " +
                "settings menu, or set memory=8 in settings.ini.";
-    }
-
-    public static string MemoryLabel(string choice)
-    {
-        return choice == "half" ? "Half of this PC (" + Gb(HostMiB() / 2) + " GB)" : choice + " GB";
     }
 
     static string Gb(long mib) { return (mib / 1024.0).ToString("0.#"); }
