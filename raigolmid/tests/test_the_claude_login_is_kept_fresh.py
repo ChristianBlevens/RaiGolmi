@@ -154,10 +154,11 @@ def test_a_sign_in_that_has_ended_is_removed_so_it_is_asked_again(tmp_path, auth
 
 def _line_out(tmp_path, monkeypatch):
     from raigolmid import lineout
-    from tests import settingsdoc
     from tests.harness import Harness
     h = Harness(tmp_path, monkeypatch)
-    settingsdoc.write(h.paths.settings, notify={"ntfy_topic": "rai-line-test"})
+    handed_in = tmp_path / "ntfy-topic"
+    handed_in.write_text("rai-line-test")
+    monkeypatch.setattr(lineout, "TOPIC_FILE", handed_in)
     sent: list[str] = []
     monkeypatch.setattr(lineout, "send", lambda _topic, title, _message: sent.append(title))
     line = lineout.LineOut(h.paths, h.events)

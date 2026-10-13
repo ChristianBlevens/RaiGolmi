@@ -8,14 +8,16 @@ and the history's age at their next check.
 
 The document ships as `settings.toml` beside this module and is written to the user's config the
 first time the daemon starts (`install`); from then on the file is the only place a value
-lives, and is only ever added to: a setting a later release brings goes in with its shipped
-value. A file that is missing, missing a setting, or wrong is an error that names it, because
+lives, and the daemon changes it only by release: a setting a later release brings goes in
+with its shipped value, and one a release withdraws comes out (`WITHDRAWN`). A file that is
+missing, missing a setting, or wrong is an error that names it, because
 filling the gap would be the daemon inventing an answer; the catalog's save runs `parse`
 first, so a wrong file is refused before it is written, and one written past that check holds
 the last right save in its place (`in_force`).
 """
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import tomllib
@@ -30,6 +32,9 @@ if TYPE_CHECKING:
     from .paths import Paths
 
 
+logger = logging.getLogger(__name__)
+
+
 class SettingsError(Exception):
     pass
 
@@ -39,8 +44,6 @@ _MODEL = re.compile(r"^[A-Za-z0-9._\[\]-]+$")
 _LAYOUT = re.compile(r"^[a-z0-9_-]+(,[a-z0-9_-]+)*$")
 _VARIANT = re.compile(r"^[A-Za-z0-9_,-]*$")
 _COLOUR = re.compile(r"^#[0-9a-fA-F]{6}$")
-# ntfy's own rule for a topic name; empty is the line out turned off.
-_TOPIC = re.compile(r"^[A-Za-z0-9_-]{0,64}$")
 
 SHIPPED = Path(__file__).with_name("settings.toml")
 
@@ -64,7 +67,12 @@ SCHEMA: dict[str, dict[str, str]] = {
                  "catalog_backdrop")}},
     "questions": {"lapse_minutes": "positive"},
     "history": {"kept_days": "positive"},
-    "notify": {"ntfy_topic": "topic"},
+}
+
+# (section, key) → where the setting lives now. Taken out of a user's file at the daemon's start
+# (`install`), so a file written before the release that moved it still parses.
+WITHDRAWN: dict[str, dict[str, str]] = {
+    "notify": {"ntfy_topic": "the Windows launcher's settings.ini, ntfy-topic (lineout.py)"},
 }
 
 
@@ -82,20 +90,23 @@ class Settings:
     look: dict[str, object]     # the fields of `ui.theme.Look`
     lapse_seconds: float
     kept_seconds: float
-    ntfy_topic: str             # empty: no line out (`lineout.py`)
 
 
 def install(path: Path) -> list[str]:
     """The shipped document becomes the user's, once. A file they have is only added to: each
     setting it lacks goes in with its shipped value and comment at the end of its section, and
     nothing they wrote moves. A file that is not TOML is left for `parse` to refuse. The
-    settings added, as `[section].key`."""
+    settings added, as `[section].key`. A withdrawn setting is taken out first (`_withdraw`)."""
     shipped = SHIPPED.read_text(encoding="utf-8")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         _write(path, shipped)
         return []
-    text = path.read_text(encoding="utf-8")
+    text, withdrawn = _withdraw(path.read_text(encoding="utf-8"))
+    if withdrawn:
+        _write(path, text)
+        for name, home in withdrawn:
+            logger.info("%s: %s is withdrawn and taken out; it is set in %s", path, name, home)
     try:
         theirs = tomllib.loads(text)
     except tomllib.TOMLDecodeError:
@@ -122,6 +133,42 @@ def install(path: Path) -> list[str]:
     if added:
         _write(path, "\n".join(lines) + "\n")
     return added
+
+
+def _withdraw(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """The document without its `WITHDRAWN` settings — each one's line and the comments directly
+    above it, and its section's header once nothing is left under it — and those taken out, as
+    (`[section].key`, where it lives now)."""
+    lines = text.splitlines()
+    out: list[str] = []
+    taken: list[tuple[str, str]] = []
+    section = None
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+        elif "=" in stripped and not stripped.startswith("#"):
+            key = stripped.split("=")[0].strip()
+            home = WITHDRAWN.get(section or "", {}).get(key)
+            if home is not None:
+                while out and out[-1].lstrip().startswith("#"):
+                    out.pop()
+                taken.append((f"[{section}].{key}", home))
+                continue
+        out.append(line)
+    if not taken:
+        return text, []
+    kept: list[str] = []
+    for i, line in enumerate(out):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped[1:-1] in WITHDRAWN:
+            rest = next((later for later in out[i + 1:] if later.strip()), "")
+            if not rest or rest.lstrip().startswith("["):
+                while kept and not kept[-1].strip():
+                    kept.pop()
+                continue
+        kept.append(line)
+    return "\n".join(kept) + "\n", taken
 
 
 def _blocks(document: str) -> dict[str, dict[str, list[str]]]:
@@ -233,9 +280,7 @@ def parse(text: str, source: str) -> Settings:
         scale=_positive(raw, "display", "scale", source),
         look=_look(raw, source),
         lapse_seconds=_positive(raw, "questions", "lapse_minutes", source) * 60,
-        kept_seconds=_positive(raw, "history", "kept_days", source) * 24 * 3600,
-        ntfy_topic=_named(raw, "notify", "ntfy_topic", source, _TOPIC,
-                          "empty, or an ntfy topic: letters, digits, _ and -, at most 64"))
+        kept_seconds=_positive(raw, "history", "kept_days", source) * 24 * 3600)
 
 
 def load(path: Path) -> Settings:
@@ -289,7 +334,7 @@ def _read(paths: "Paths") -> tuple[Settings, tuple[int, int] | None, str | None]
             if known is not None:
                 held = known[1]
             elif kept.is_file():
-                held = parse(kept.read_text(encoding="utf-8"), str(kept))
+                held = parse(_withdraw(kept.read_text(encoding="utf-8"))[0], str(kept))
             else:
                 raise
             _in_force[path] = (save, held, str(exc))

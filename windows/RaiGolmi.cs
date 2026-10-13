@@ -266,9 +266,10 @@ class Machine
     // (hw/audio/hda-codec.c hda_audio_set_running), the voice's disable stops the DirectSound
     // buffer, and the mixer's timer runs only while a voice is enabled (audio/audio-mixeng-be.c
     // audio_is_timer_needed). SDL, the other needing no server, feeds its WASAPI stream silence
-    // from its own thread while paused (SDL2 SDL_audio.c SDL_RunAudio). The 40 ms DirectSound buffer
-    // in place of its 93 ms default bounds how far sound can lag, and still holds four of the
-    // mixer's 10 ms periods.
+    // from its own thread while paused (SDL2 SDL_audio.c SDL_RunAudio). The DirectSound buffer is
+    // QEMU's default, 92880 us (audio/dsound_template.h, audio_buffer_bytes): the mixer's timer
+    // fills it on Windows' ~15.6 ms timer resolution, which a shorter buffer underruns between
+    // ticks however steadily the guest plays.
     string Arguments()
     {
         var a = new List<string>();
@@ -284,16 +285,20 @@ class Machine
         a.Add("-device " + (Settings.Venus ? "virtio-vga-gl,blob=on,hostmem=4G,venus=on" : "virtio-vga-gl") +
               " -device qemu-xhci,id=xhci -device usb-tablet,bus=xhci.0");
         if (NoSound == null)
-            a.Add("-audiodev dsound,id=snd0,out.buffer-length=40000 -device ich9-intel-hda " +
+            a.Add("-audiodev dsound,id=snd0 -device ich9-intel-hda " +
                   "-device hda-output,audiodev=snd0");
         a.Add("-netdev user,id=net0,hostfwd=tcp:127.0.0.1:" + SshPort + "-:22 -device virtio-net,netdev=net0");
-        // Boot credentials (systemd reads SMBIOS type 11): the login keys, and Windows' own
-        // timezone, which the guest makes its own (host/systemd/set-timezone).
+        // Boot credentials (systemd reads SMBIOS type 11): the login keys, Windows' own
+        // timezone, which the guest makes its own (host/systemd/set-timezone), and the phone
+        // alerts' ntfy topic when one is set (host/tmpfiles/raigolmi.conf); none is no alerts.
         var credentials = new List<string>();
         if (Ssh != null)
             credentials.Add("path=" + Opt(Native.Ascii(Ssh.Credential)));
         credentials.Add("value=" + Opt("io.systemd.credential:raigolmi.timezone=" +
                                        Native.IanaZone(TimeZoneInfo.Local.Id)));
+        if (Settings.NtfyTopic.Length > 0)
+            credentials.Add("value=" + Opt("io.systemd.credential:raigolmi.ntfy_topic=" +
+                                           Settings.NtfyTopic));
         a.Add("-smbios " + Quote("type=11," + string.Join(",", credentials)));
         a.Add("-display dbus,p2p=yes,gl=on");
         a.Add("-qmp tcp:127.0.0.1:" + ControlPort + ",server=on,wait=off");
@@ -459,11 +464,15 @@ class Window : Form
     // when the user clicks off it, presses Esc, or leaves for another program.
     // It is shown without taking activation (ToolStripDropDown shows SW_SHOWNOACTIVATE), so
     // the window stays the active form: `KeysToGuest` is false while it is open, or the
-    // keyboard hook would hand its keys to the guest.
+    // keyboard hook would hand its keys to the guest. A click in the topic box activates the
+    // drop-down and focuses the box (WinForms ToolStrip.WndProc, WM_MOUSEACTIVATE), and the menu
+    // filter leaves keys with the box while it has focus (ToolStripManager.ModalMenuFilter); the
+    // window is then not the active form, so `KeysToGuest` is false on both counts.
 
     const uint MenuSettings = 0x1000;
     ContextMenuStrip settings;
     ToolStripMenuItem startAtLogin, keepAwake, venus;
+    ToolStripTextBox ntfyTopic;
     readonly List<ToolStripMenuItem> memory = new List<ToolStripMenuItem>();
 
     void AddSettingsMenu()
@@ -505,7 +514,20 @@ class Window : Form
             machine.Settings.Venus = !machine.Settings.Venus;
             ApplySetting(null);
         });
-        settings.Items.AddRange(new ToolStripItem[] { startAtLogin, keepAwake, memoryItem, venus });
+        var ntfyLabel = new ToolStripLabel("Phone alerts: ntfy topic, empty for none (applies at next start)");
+        ntfyTopic = new ToolStripTextBox { AutoSize = false, Width = 320, MaxLength = 64 };
+        ntfyTopic.KeyDown += (sender, e) =>
+        {
+            if (e.KeyCode != Keys.Enter)
+                return;
+            e.SuppressKeyPress = true;
+            CommitTopic();
+        };
+        ntfyTopic.LostFocus += delegate { CommitTopic(); };
+        var testAlert = new ToolStripMenuItem("Send a test alert", null, delegate { SendTestAlert(); });
+        settings.Items.AddRange(new ToolStripItem[] {
+            startAtLogin, keepAwake, memoryItem, venus, new ToolStripSeparator(), ntfyLabel, ntfyTopic,
+            testAlert });
         settings.Closing += StayOpenOnClick;
         memoryItem.DropDown.Closing += StayOpenOnClick;
         settings.Opening += delegate { keyboard.Release(); };
@@ -554,7 +576,74 @@ class Window : Form
         venus.Checked = s.Venus;
         for (int i = 0; i < Settings.MemoryChoices.Length; i++)
             memory[i].Checked = s.Memory == Settings.MemoryChoices[i];
+        ntfyTopic.Text = s.NtfyTopic;
     }
+
+    // The topic box's text becomes the setting when it is one; any other is refused aloud and
+    // the box shows the setting again.
+    void CommitTopic()
+    {
+        string typed = ntfyTopic.Text.Trim();
+        if (typed == machine.Settings.NtfyTopic)
+            return;
+        string refused = Settings.TopicRefusal(typed);
+        if (refused != null)
+        {
+            ntfyTopic.Text = machine.Settings.NtfyTopic;
+            Warn("The ntfy topic '" + typed + "' is refused: " + refused + ".");
+            return;
+        }
+        machine.Settings.NtfyTopic = typed;
+        ApplySetting(null);
+    }
+
+    // One push to the saved topic straight from Windows (https://docs.ntfy.sh/publish/: a POST
+    // to ntfy.sh/<topic>, the body the message, `Title` a header), so a phone's subscription can
+    // be checked without the machine. What came of it is shown either way.
+    async void SendTestAlert()
+    {
+        CommitTopic();
+        string topic = machine.Settings.NtfyTopic;
+        if (topic.Length == 0)
+        {
+            Warn("Type an ntfy topic into the settings first; the test alert goes to it.");
+            return;
+        }
+        string outcome;
+        try
+        {
+            using (var request = new System.Net.Http.HttpRequestMessage(
+                       System.Net.Http.HttpMethod.Post, "https://ntfy.sh/" + topic))
+            {
+                request.Content = new System.Net.Http.StringContent(
+                    "A test from RaiGolmi on " + Environment.MachineName +
+                    ": this phone gets its alerts.", Encoding.UTF8);
+                request.Headers.Add("Title", "RaiGolmi test alert");
+                using (var answer = await Ntfy.SendAsync(request))
+                {
+                    string body = await answer.Content.ReadAsStringAsync();
+                    outcome = answer.IsSuccessStatusCode ? null :
+                        "ntfy.sh answered " + (int)answer.StatusCode + " " + answer.ReasonPhrase + ": " + body.Trim();
+                }
+            }
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException ||
+                                  e is System.Threading.Tasks.TaskCanceledException)
+        {
+            outcome = "it could not reach ntfy.sh: " + e.Message;
+        }
+        if (outcome != null)
+        {
+            Warn("The test alert to '" + topic + "' did not go: " + outcome);
+            return;
+        }
+        Note("test alert sent to the ntfy topic");
+        MessageBox.Show(this, "A test alert went to '" + topic + "'. A phone subscribed to it in the " +
+                        "ntfy app shows it now.", "RaiGolmi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    static readonly System.Net.Http.HttpClient Ntfy =
+        new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 
     // Saves the settings, then makes `apply` true of Windows now; either failing is shown.
     void ApplySetting(Action apply)
@@ -572,7 +661,8 @@ class Window : Form
         }
         Settings s = machine.Settings;
         Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
-             ", memory " + s.Memory + ", venus " + s.Venus);
+             ", memory " + s.Memory + ", venus " + s.Venus +
+             ", ntfy topic " + (s.NtfyTopic.Length > 0 ? "set" : "none"));
         CheckSettings();
     }
 

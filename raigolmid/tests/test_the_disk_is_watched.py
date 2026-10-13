@@ -186,10 +186,14 @@ def test_growth_across_what_the_machine_built_for_a_chosen_layer_is_the_new_mark
     assert len(h.events_of("disk.grown")) == 1
 
 
-def _line_out(h, monkeypatch, topic: str = "rai-line-test"):
+def _line_out(h, monkeypatch, topic: str | None = "rai-line-test"):
+    """`topic` as the launcher hands it in (`lineout.TOPIC_FILE`); None hands in none."""
     from raigolmid import lineout
-    from tests import settingsdoc
-    settingsdoc.write(h.paths.settings, notify={"ntfy_topic": topic})
+    handed_in = h.paths.state / "ntfy-topic"
+    handed_in.unlink(missing_ok=True)
+    if topic is not None:
+        handed_in.write_text(topic)
+    monkeypatch.setattr(lineout, "TOPIC_FILE", handed_in)
     sent: list[tuple[str, str, str]] = []
     monkeypatch.setattr(lineout, "send", lambda *push: sent.append(push))
     return lineout.LineOut(h.paths, h.events), sent
@@ -228,12 +232,19 @@ def test_a_disk_still_short_after_collecting_goes_out_once_a_day_across_restarts
 def test_the_line_out_is_off_without_a_topic_and_a_push_that_fails_is_said_not_raised(
         h, monkeypatch):
     from raigolmid import lineout
-    line, sent = _line_out(h, monkeypatch, topic="")
+    line, sent = _line_out(h, monkeypatch, topic=None)
     _filesystem(monkeypatch, 58 * GB)
     h.events.emit("disk.short")
     h.events.emit("garbage.collected", images=0, closures=0, store_paths=0)
     _hear(line)
     assert not sent and not h.events_of("lineout.sent")
+
+    line, sent = _line_out(h, monkeypatch, topic="../other-topic")
+    h.events.emit("disk.short")
+    h.events.emit("garbage.collected", images=0, closures=0, store_paths=0)
+    _hear(line)
+    [wrong] = h.events_of("lineout.failed")
+    assert not sent and "no ntfy topic" in wrong.data["error"]
 
     line, _ = _line_out(h, monkeypatch)
 
@@ -243,5 +254,5 @@ def test_the_line_out_is_off_without_a_topic_and_a_push_that_fails_is_said_not_r
     h.events.emit("disk.short")
     h.events.emit("garbage.collected", images=0, closures=0, store_paths=0)
     _hear(line)
-    [failed] = h.events_of("lineout.failed")
-    assert failed.data["cause"] == "disk_full" and "disk_full" in line._pending
+    failed = h.events_of("lineout.failed")[-1]
+    assert "unreachable" in failed.data["error"] and "disk_full" in line._pending

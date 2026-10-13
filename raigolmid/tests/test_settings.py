@@ -36,6 +36,15 @@ def test_a_setting_a_later_release_brings_is_added_and_nothing_of_theirs_moves(t
     assert settings.install(path) == []
 
 
+def test_a_withdrawn_setting_is_taken_out_and_the_file_parses(tmp_path):
+    path = tmp_path / "settings.toml"
+    theirs = settingsdoc.text(agents={"model": "their-model"})
+    path.write_text(theirs + "\n[notify]\n# their note on it\nntfy_topic = \"theirs\"\n")
+    assert settings.install(path) == []
+    assert path.read_text() == theirs
+    assert settings.load(path).model == "their-model"
+
+
 @pytest.mark.parametrize("section, key", [
     (section, key) for section, keys in settings.SCHEMA.items() for key in keys])
 def test_a_setting_left_out_is_refused_naming_it(section, key):
@@ -58,7 +67,6 @@ def test_a_setting_left_out_is_refused_naming_it(section, key):
     ("look", "drawer_share", 1.5),
     ("look", "terminal_height_percent", 120),
     ("look", "tab_depth", 0),
-    ("notify", "ntfy_topic", "../other-topic"),
 ])
 def test_a_wrong_value_is_refused_naming_it(section, key, value):
     with pytest.raises(SettingsError, match=key):

@@ -87,10 +87,3 @@ lapse_minutes = 30
 [history]
 # history older than this is deleted
 kept_days = 7
-
-[notify]
-# the phone line out of last resort: a push to whoever subscribes to this topic in the ntfy app
-# (ntfy.sh), sent only when neither an agent nor the daemon can put something right, at most once
-# a day per cause. The name is the secret — anyone who knows it can read and send — so make it
-# long and unguessable. Empty sends nothing
-ntfy_topic = ""

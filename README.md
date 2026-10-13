@@ -60,8 +60,9 @@ Closing it shuts the machine down properly, and so does Windows restarting or sh
 Click the icon at the window's top left for **Settings** (all off until you choose them, kept in
 `%LOCALAPPDATA%\RaiGolmi\settings.ini`): *Start RaiGolmi when I sign in to Windows*, *Keep
 Windows awake while RaiGolmi runs* (the screen can still turn off), *Memory* for the machine (8,
-12, 16 or 24 GB, from its next start), and *Venus (Vulkan)*, an experiment that needs a
-QEMU built for it. To leave it running unattended, also turn on Windows' automatic sign-in
+12, 16 or 24 GB, from its next start), *Venus (Vulkan)*, an experiment that needs a
+QEMU built for it, and *Phone alerts*, a box for an ntfy topic (below; from the machine's next
+start) with *Send a test alert* beside it. To leave it running unattended, also turn on Windows' automatic sign-in
 (`netplwiz`, or Sysinternals Autologon) and your BIOS's "power on after AC loss".
 
 To update, get the newest scripts first (`git pull` in the folder, or download the ZIP
@@ -446,9 +447,13 @@ the display scale, the model the agents run and their conversation budgets. Edit
 Keys and looks change right away, and the model and budget at a tab's next start. If a save
 doesn't parse, it's refused and you're told why.
 
-The last setting, `[notify] ntfy_topic`, is a phone line of last resort. Pick a long name nobody
-could guess (the name is the only secret), put it there, and subscribe to that topic in the
-ntfy app on a phone. The machine then sends a plain-words message, at most once a day per cause,
+### Phone alerts
+
+The window's **Settings** take an ntfy topic under *Phone alerts*, a phone line of last resort.
+Pick a long name nobody could guess (the name is the only secret: letters, digits, `_` and `-`,
+up to 64), type it in and press Enter, and subscribe to that topic in the ntfy app on a phone.
+*Send a test alert* sends one from Windows straight away, so you can check the phone without
+the machine. From the machine's next start it sends a plain-words message, at most once a day per cause,
 only when nothing on it can carry on: no sign-in works, the disk is full even after cleaning
 up, or Claude has refused every tab for a day. It can't tell you when Windows itself is down.
 

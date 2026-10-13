@@ -2,9 +2,12 @@
 
 Whoever reads it knows nothing about computers, so it says in plain words what is wrong and the
 one physical thing to do, or that there is nothing to do. It is sent only for what neither an
-agent nor the daemon can put right, each cause at most once a day, and only while
-`[notify] ntfy_topic` names a topic (`settings.toml`). The causes, each where the daemon already
-knows it:
+agent nor the daemon can put right, each cause at most once a day, and only while `TOPIC_FILE`
+names a topic. The topic is set on Windows (`ntfy-topic` in the launcher's settings.ini) and
+handed in at boot as the credential `raigolmi.ntfy_topic`, which `systemd-tmpfiles-setup` writes
+to `TOPIC_FILE` (host/tmpfiles/raigolmi.conf): a user manager does not see the system's
+credentials, so the daemon reads the file. No credential, no file, and the line out is off.
+The causes, each where the daemon already knows it:
 
 - **no credential works**: a turn refused on the agent credential (`agent.turn_failed` with
   `claude_login.TURN_REFUSED`) while there is no claude.ai sign-in (`claude_login.lost` removed
@@ -23,12 +26,14 @@ from __future__ import annotations
 import http.client
 import logging
 import os
+import re
 import threading
 import time
 import urllib.request
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import claude_login, settings
+from . import claude_login
 from .disk import SHORT_FRACTION
 from .events import Event, EventLog
 from .intent import load_json, save_json
@@ -39,6 +44,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NTFY = "https://ntfy.sh"
+TOPIC_FILE = Path("/run/raigolmi/ntfy-topic")
+# ntfy's rule for a topic name; the launcher refuses any other (windows/Settings.cs).
+TOPIC = re.compile(r"[A-Za-z0-9_-]{1,64}")
 DAY = 24 * 3600.0
 # How long every turn has been refused before it is the line out's; a day, the owner's word.
 REFUSED_FOR = DAY
@@ -63,6 +71,20 @@ MESSAGES = {
         "Claude's service has refused the home computer's AI for a whole day, so no work is "
         "getting done. " + NOTHING_TO_DO),
 }
+
+
+def topic() -> str | None:
+    """The topic handed in at boot, or None when none was. Raises `ValueError` on a file that
+    is not one topic name, which only a hand edit of /run can make."""
+    try:
+        text = TOPIC_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    name = text.strip()
+    if not TOPIC.fullmatch(name):
+        raise ValueError(f"{TOPIC_FILE} holds {name!r}, which is no ntfy topic: letters, "
+                         f"digits, _ and -, at most 64")
+    return name
 
 
 def send(topic: str, title: str, message: str) -> None:
@@ -140,14 +162,14 @@ class LineOut:
         if now - self._sent.get(cause, 0.0) < DAY:
             self._pending.pop(cause, None)
             return
-        topic = settings.in_force(self.paths).ntfy_topic
-        if not topic:
-            self._pending.pop(cause, None)
-            return
         title, message = MESSAGES[cause]
         try:
-            send(topic, title, message)
-        except (OSError, http.client.HTTPException) as exc:
+            name = topic()
+            if name is None:
+                self._pending.pop(cause, None)
+                return
+            send(name, title, message)
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             self._pending[cause] = now + RETRY_SECONDS
             self.events.emit("lineout.failed", cause=cause, error=str(exc))
             logger.warning("the line out could not send %s: %s", cause, exc)

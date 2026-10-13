@@ -1,16 +1,20 @@
 // The launcher's own settings: how Windows treats RaiGolmi and what QEMU is started with. They
 // live in %LOCALAPPDATA%\RaiGolmi\settings.ini as `key=value` lines and are read once at start;
-// none of them reaches inside the OS. Every one is off, or the launcher's long-standing value,
-// until it is chosen, from the window's title-bar menu or by editing the file.
+// only the ntfy topic reaches inside the OS, handed in at boot. Every one is off, or the
+// launcher's long-standing value, until it is chosen, from the window's title-bar menu or by
+// editing the file.
 //
 //   start-at-login = on | off     the launcher in HKCU\...\Run, so Windows starts it at sign-in
 //   keep-awake     = on | off     Windows does not sleep while the launcher runs
 //   memory         = 8 | 12 | 16 | 24     the machine's RAM in GB, at its next start
 //   venus          = on | off     the GPU offers Vulkan (Venus), at its next start
+//   ntfy-topic     = <topic>      the phone alerts' ntfy topic, at the machine's next start;
+//                                 empty is no alerts (raigolmid/raigolmid/lineout.py)
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -18,6 +22,7 @@ sealed class Settings
 {
     public bool StartAtLogin, KeepAwake, Venus;
     public string Memory = DefaultMemory;
+    public string NtfyTopic = "";
     readonly string path;
 
     public const string DefaultMemory = "8";
@@ -57,6 +62,12 @@ sealed class Settings
                                             string.Join(", ", MemoryChoices));
                     s.Memory = value;
                     break;
+                case "ntfy-topic":
+                    string refused = TopicRefusal(value);
+                    if (refused != null)
+                        throw s.Bad(number, "gives ntfy-topic as " + value + ": " + refused);
+                    s.NtfyTopic = value;
+                    break;
                 default:
                     throw s.Bad(number, "names " + key + ", which is not a setting");
             }
@@ -83,10 +94,26 @@ sealed class Settings
             "start-at-login=" + OnOff(StartAtLogin) + Environment.NewLine +
             "keep-awake=" + OnOff(KeepAwake) + Environment.NewLine +
             "memory=" + Memory + Environment.NewLine +
-            "venus=" + OnOff(Venus) + Environment.NewLine);
+            "venus=" + OnOff(Venus) + Environment.NewLine +
+            "ntfy-topic=" + NtfyTopic + Environment.NewLine);
     }
 
     static string OnOff(bool on) { return on ? "on" : "off"; }
+
+    // --- the phone alerts' topic ---------------------------------------------------------
+
+    // ntfy's rule for a topic name (https://docs.ntfy.sh/publish/: letters, numbers, underscores
+    // and dashes, up to 64 characters); empty is no alerts. The guest checks the same
+    // (raigolmid/raigolmid/lineout.py TOPIC).
+    static readonly Regex Topic = new Regex(@"\A[A-Za-z0-9_-]{0,64}\z");
+
+    // Why `topic` is no ntfy topic, or null when it is one or is empty.
+    public static string TopicRefusal(string topic)
+    {
+        if (Topic.IsMatch(topic))
+            return null;
+        return "an ntfy topic is letters, digits, _ and - only, at most 64 of them";
+    }
 
     // --- memory ------------------------------------------------------------------------
 
