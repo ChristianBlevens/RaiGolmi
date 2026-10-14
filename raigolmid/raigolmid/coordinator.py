@@ -21,7 +21,8 @@ that document: `restart_fresh` first pushes the wrap-up (`wrap_up_message`); onc
 started and ended the tab is ready, the machine tab is told, reads its `SESSION-START.md`, and
 the next `restart_fresh` hands the work on. **Every tab can hand itself on**
 (`end_conversation`, `ENDING`): it says its `SESSION-START.md` is ready, and when that turn
-ends a new tab takes over from it; a managed tab's machine tab is told. The machine tab is
+ends a new tab takes over from it; a managed tab's machine tab is told, with what that last
+turn ended on, since a closed tab cannot be viewed. The machine tab is
 asked to at its own budget while it manages tabs, since nobody else is there to close it.
 The janitor has no such verb: the daemon gives it a fresh conversation per failure
 (`janitor.py`).
@@ -619,6 +620,11 @@ class Coordinator:
         pending waits, since a restart would withdraw it."""
         if error is not None or self.questions.tab_state(tab.tab_id) is not None:
             return
+        # Its last turn's end, read before its home is archived: the machine tab hears it here
+        # in place of `coordinator.idle`, and cannot view a closed tab.
+        home = self.session.agents.home(tab.tab_id)
+        last = transcript_tail(home, 1) if tab.managed else []
+        tokens = context_tokens(home) if tab.managed else None
         try:
             successor = self.session.succeed_tab(tab.tab_id, by="self")
         except Exception as exc:  # noqa: BLE001 — said, and this thread must not end
@@ -646,10 +652,17 @@ class Coordinator:
             "content": restart_message(successor.tab_id, tab.tab_id, opened),
             "meta": {"from": "daemon"}})
         if tab.managed:
+            used = (f" at {tokens // 1000}k of the "
+                    f"{self.session.context_budget(tab.tab_id) // 1000}k budget"
+                    if tokens is not None else "")
+            report = (f" Its last turn ended{used}, saying:\n\n{last[0]['said']}"
+                      if last and last[0]["role"] == "assistant" else
+                      f" Its last turn ended{used} with nothing said.")
             self._to_machine(successor.tab_id, "coordinator.continued_itself", (
                 f"Tab {tab.tab_id} ({tab.body}) ended its own conversation; "
                 f"{successor.tab_id} takes over its work from its SESSION-START.md, and you "
-                "manage it now." + handed_on_line(handed, successor.tab_id)), why="continued")
+                "manage it now." + handed_on_line(handed, successor.tab_id) + report),
+                why="continued")
 
     def _machine_idle(self, tab_id: str, handover: str | None, error: str | None) -> None:
         """The machine tab asked to hand itself on, only while the user is away

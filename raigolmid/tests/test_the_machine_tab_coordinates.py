@@ -607,6 +607,7 @@ def test_a_managed_tab_ending_its_own_conversation_is_told_to_the_machine_tab(h)
     m.tab(BODY)["end_conversation"]()
     with pytest.raises(SessionError, match="ending its own conversation"):
         m.tab(MACHINE)["restart_fresh"](tab=BODY)
+    _usage(h.session.agents.home(BODY), 105_000)
     m.tab(BODY)["agent_activity"](busy=False)
     m.pump()
 
@@ -614,6 +615,8 @@ def test_a_managed_tab_ending_its_own_conversation_is_told_to_the_machine_tab(h)
     assert successor.managed
     [told] = [q for q in m.queued(MACHINE) if "ended its own conversation" in q["content"]]
     assert successor.tab_id in told["content"]
+    assert "ended at 105k of the" in told["content"], "its last turn's end, as `idle` says it"
+    assert told["content"].endswith("saying:\n\nhalfway"), "the closed tab's report"
 
 
 def test_a_direction_on_its_way_to_a_tab_that_ends_its_conversation_goes_to_its_successor(h):
