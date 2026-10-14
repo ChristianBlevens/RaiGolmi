@@ -175,7 +175,7 @@ $qemuVersion = '11.1.1-3.1'
 $virglVersion = '1.3.0-1.1'
 # Venus's virglrenderer (the winq-emu fork) beside a copy of that QEMU's exe, in
 # ucrt64\raigolmi-venus: the launcher starts that copy when the Venus setting is on.
-$venusVersion = '1.3.0.e80354b8-3'
+$venusVersion = '1.3.0.e80354b8-4'
 # Each file's SHA-256, from the release's own assets (GitHub lists each asset's digest), so a
 # file replaced on the release, or changed on the way, is refused before pacman installs it
 # unsigned. A new version changes these with the pins above.
@@ -185,7 +185,7 @@ $patchedSha256 = @{
     'mingw-w64-ucrt-x86_64-qemu-guest-agent-11.1.1-3.1-any.pkg.tar.zst'   = '952a833c32cc1e96d95fc4d13f7f8425cbf68bd7025ea99a898d523d4454aa31'
     'mingw-w64-ucrt-x86_64-qemu-image-util-11.1.1-3.1-any.pkg.tar.zst'    = '576ee1f59b7c8c881979ded7fd65db386fd72ce5a98e3ca126e360f5ead97cd1'
     'mingw-w64-ucrt-x86_64-virglrenderer-1.3.0-1.1-any.pkg.tar.zst'       = '9d79600ca8d8a10eb7fb17e672a6e2e7d968a6eba590ae44efec6fe28d51f0e3'
-    'mingw-w64-ucrt-x86_64-virglrenderer-venus-1.3.0.e80354b8-3-any.pkg.tar.zst' = 'bb96dedb7e6af195fc0aeaa3f971c0502911996f8d5f6de8fe3f615ec48dbded'
+    'mingw-w64-ucrt-x86_64-virglrenderer-venus-1.3.0.e80354b8-4-any.pkg.tar.zst' = '836b80a67a0dbb8acc6ed1de011955583938b6bc8c37ba4f1677cad85871355e'
 }
 
 function Msys([string]$command) {
