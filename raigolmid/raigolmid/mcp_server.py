@@ -430,7 +430,8 @@ def build_server(client: ApiClient):
 
     @tool(server, description="Machine tab only: tell a tab you manage what to do. A working "
                              "tab reads it at its next tool call, an idle one starts on it; "
-                             "nothing comes back but the note that its turn ended.")
+                             "nothing comes back but the note that its turn ended. One to a "
+                             "tab that has handed on goes to the tab continuing its work.")
     def direct(tab: str, content: str) -> dict[str, Any]:
         return call("direct", tab=tab, content=content)
 

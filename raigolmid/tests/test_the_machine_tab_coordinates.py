@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -250,6 +252,11 @@ def test_a_fresh_restart_readies_the_tabs_documents_then_hands_its_work_to_a_new
     assert "lexer" not in start["content"]
     [row] = m.tab(MACHINE)["managed"]()
     assert (row["tab"], row["continues"]) == (new, BODY)
+    # A direction to the tab that handed on goes to the one that took its work over.
+    directed = m.tab(MACHINE)["direct"](tab=BODY, content="keep the lexer change")
+    assert (directed["tab"], directed["ended"]) == (new, BODY)
+    assert "keep the lexer change" in m.queued(new)[-1]["content"]
+    m.channels._tabs[new].queue.pop()
     # The machine tab hears of the new tab's turns without managing it again.
     m.channels._tabs[MACHINE].queue.clear()
     h.session.agent_session_started(new)
@@ -663,6 +670,19 @@ def test_the_machine_tab_idle_with_a_question_waiting_on_it_is_woken(h):
     [woken] = _wakes(m)
     assert f"Tab {BODY} asked {id}: 'which port?'" in woken and "answer_question" in woken
 
+
+def test_a_message_that_lands_on_a_long_idle_machine_tab_wakes_it_only_once_it_has_waited(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(BODY)["agent_activity"](busy=True)        # the run is not idle; the machine tab is
+    later = time.time() + IDLE_SECONDS + 1
+    with mock.patch("raigolmid.messages.time", SimpleNamespace(time=lambda: later)):
+        sent = m.tab(BODY)["message"](to="machine", content="which port?")
+    m.coordinator.tick(later + 1)
+    assert _wakes(m) == [], "its own delivery is on its way; a notice now outlives the reply"
+    m.coordinator.tick(later + IDLE_SECONDS + 1)
+    [woken] = _wakes(m)
+    assert f"Tab {BODY} asks you, as message {sent['message']}" in woken
 
 def test_a_runs_report_names_the_tabs_the_event_log_has_rotated_away(h):
     m = Machine(h)

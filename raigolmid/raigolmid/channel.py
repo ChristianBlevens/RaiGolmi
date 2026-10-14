@@ -68,10 +68,12 @@ PUSHES_BEFORE_DEAF = 3
 # The channel asks every second, so this only sets how soon a poller that stopped is said.
 SILENT_SECONDS = 30.0
 # What reaches a working tab at its next tool call (`take_midturn`): words a person or another
-# tab would type into it — a direction, the janitor's word, a tab's message, the user's words
-# through a face. Everything else needs a turn of its own and waits for the tab to be idle.
+# tab would type into it — a direction, the janitor's word, a tab's message and the answer to
+# one, the user's words through a face. Everything else needs a turn of its own and waits for
+# the tab to be idle, which a run tab working its session in one turn reaches only as it ends.
 DIRECTED = "coordinator.directed"
-MIDTURN = frozenset({DIRECTED, "janitor.told", "message.sent", "face.asked"})
+MIDTURN = frozenset({DIRECTED, "janitor.told", "message.sent", "message.answered",
+                     "face.asked"})
 # The message that opens a tab taking over another's work (`coordinator.py`): it says to start
 # from `SESSION-START.md`, so it goes ahead of what was carried over from the closed tab.
 OPENING = frozenset({"coordinator.continued", "coordinator.restarted",

@@ -199,9 +199,12 @@ def test_a_working_tab_reads_every_direction_at_its_next_tool_call_and_nothing_e
     _send(h, "the answer to q1")
     h.events.emit("coordinator.directed", tab=TAB, deliver={
         "content": "after the answer", "meta": {"from": "machine"}})
+    h.events.emit("message.answered", tab=TAB, deliver={
+        "content": "Tab machine answered your message m1: 32px", "meta": {"message": "m1"}})
     assert c.take(TAB) is None, "nothing is pushed into a busy session"
     assert c.take_midturn(TAB) == ["From the machine tab: park the parser", "target/ holds 30 GB",
-                                   "after the answer"], "a message that waits holds nothing behind it"
+                                   "after the answer", "Tab machine answered your message m1: 32px"
+                                   ], "a message that waits holds nothing behind it"
     assert c.take_midturn(TAB) == [], "an answer waits for a turn of its own"
     h.session.agent_activity(TAB, busy=False)
     assert c.take(TAB)["content"] == "the answer to q1"

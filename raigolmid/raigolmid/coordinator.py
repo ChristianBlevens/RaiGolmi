@@ -479,13 +479,17 @@ class Coordinator:
         managed = [t for t in intent.tabs.values() if t.managed]
         ids = {t.tab_id for t in managed}
         pending = self.questions.pending()
+        # What has itself waited the span, not what arrived as the machine tab's quiet passed
+        # it: a notice built in the second a message lands is pushed after the reply to it.
         waiting = [f"Tab {i['tab']} asked {i['id']}: {i['message']!r}; answer it with "
                    "`answer_question`." for i in pending
-                   if i["kind"] == "question" and i["tab"] in ids]
+                   if i["kind"] == "question" and i["tab"] in ids
+                   and now - i["asked_at"] >= IDLE_SECONDS]
         waiting += [f"Tab {m['sender']} asks you, as message {m['id']}: "
                     f"{m['content'][:DIRECTION_EXCERPT]!r}; answer it with `reply`."
                     for m in self.channels.messages.items()
-                    if m["state"] == "open" and m["to"] == machine.tab_id]
+                    if m["state"] == "open" and m["to"] == machine.tab_id
+                    and now - m["sent_at"] >= IDLE_SECONDS]
         resumed = {limits.LIMIT, *limits.TRANSIENT}
         run_idle = (
             now - self._quiet_since >= IDLE_SECONDS
@@ -905,17 +909,20 @@ class Verbs:
 
     def direct(self, tab: str, content: str) -> dict[str, Any]:
         """One way: a working tab reads it at its next tool call, an idle one starts on it;
-        nothing comes back."""
+        nothing comes back. One to a tab that has handed on goes to the tab that took its
+        work over, as what was already on its way to it did."""
+        addressed, tab = tab, self._successor(tab)
         agent = self._unheld(tab)
         if not content.strip():
             raise SessionError("a directive needs words")
         self.events.emit(DIRECTED, tab=tab, deliver={
             "content": DIRECTION + content, "meta": {"from": "machine"}})
+        handed = {"ended": addressed} if addressed != tab else {}
         if agent.busy:
-            return {"tab": tab, "status": "queued",
+            return {"tab": tab, **handed, "status": "queued",
                     "next": "The tab is working: it reads this at its next tool call, or as its "
                             "next message if this turn ends first; you are told when it is idle."}
-        return {"tab": tab, "status": "pushed",
+        return {"tab": tab, **handed, "status": "pushed",
                 "next": "The tab is idle, so it starts on this now, after anything already on "
                         "its way to it; you are told when that turn ends."}
 
@@ -1003,6 +1010,16 @@ class Verbs:
                                "it is making its documents ready and is given back to them "
                                "once that turn ends")
         return agent
+
+    def _successor(self, tab: str) -> str:
+        """The open tab doing *tab*'s work: itself, or the one that `continues` it."""
+        tabs = self.session.intent.tabs
+        if tab in tabs:
+            return tab
+        for agent in tabs.values():
+            if agent.continues == tab:
+                return agent.tab_id
+        raise SessionError(f"{tab} has ended and no open tab continues its work")
 
     def _managed(self, tab: str):
         agent = self.session.intent.tabs.get(tab)
