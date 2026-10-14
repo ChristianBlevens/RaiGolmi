@@ -189,7 +189,7 @@ def test_a_daemon_starting_while_a_session_comes_up_does_not_count_it_up(h, c):
     assert Channels(h.session, h.events).take(TAB)["content"] == "keep it"
 
 
-def test_a_working_tab_reads_a_direction_at_its_next_tool_call_and_nothing_else(h, c):
+def test_a_working_tab_reads_every_direction_at_its_next_tool_call_and_nothing_else(h, c):
     _up(h)
     h.session.agent_activity(TAB, busy=True)
     h.events.emit("coordinator.directed", tab=TAB, deliver={
@@ -200,7 +200,8 @@ def test_a_working_tab_reads_a_direction_at_its_next_tool_call_and_nothing_else(
     h.events.emit("coordinator.directed", tab=TAB, deliver={
         "content": "after the answer", "meta": {"from": "machine"}})
     assert c.take(TAB) is None, "nothing is pushed into a busy session"
-    assert c.take_midturn(TAB) == ["From the machine tab: park the parser", "target/ holds 30 GB"]
-    assert c.take_midturn(TAB) == [], "an answer waits for a turn of its own, and what is behind it"
+    assert c.take_midturn(TAB) == ["From the machine tab: park the parser", "target/ holds 30 GB",
+                                   "after the answer"], "a message that waits holds nothing behind it"
+    assert c.take_midturn(TAB) == [], "an answer waits for a turn of its own"
     h.session.agent_activity(TAB, busy=False)
     assert c.take(TAB)["content"] == "the answer to q1"

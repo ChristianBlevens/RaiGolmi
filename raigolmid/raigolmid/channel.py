@@ -409,7 +409,8 @@ class Channels:
         which Claude Code adds to the turn as the harness's own context: a push into a busy
         session arrives as an untrusted channel event the model does not act on, while what
         a person types is read at that same boundary. Taken in order, up to `MIDTURN_CHARS`,
-        stopping at the first message that must wait for the tab to be idle."""
+        passing over what must wait for the tab to be idle: a run tab can work a whole session
+        in one turn, so a notice waiting at the head would hold every direction until it ends."""
         self._catch_up()
         agent = self.session.intent.tabs.get(tab_id)
         if agent is None or not agent.busy or time.time() < self._hold_until:
@@ -419,15 +420,21 @@ class Channels:
             tab = self._tabs.get(tab_id)
             if tab is None:
                 return []
-            while tab.queue and tab.queue[0].cause in MIDTURN:
-                if sum(map(len, taken)) + len(tab.queue[0].content) > MIDTURN_CHARS and taken:
-                    break
+            waiting: deque[Message] = deque()
+            while tab.queue:
                 message = tab.queue.popleft()
+                if message.cause not in MIDTURN:
+                    waiting.append(message)
+                    continue
+                if sum(map(len, taken)) + len(message.content) > MIDTURN_CHARS and taken:
+                    tab.queue.appendleft(message)
+                    break
                 taken.append(message.content[:MIDTURN_CHARS])
                 if message.cause == DIRECTED:
                     tab.this_turn.append(message)
                 self.events.emit("channel.midturn", tab=tab_id, cause=message.cause,
                                  meta=message.meta)
+            tab.queue.extendleft(reversed(waiting))
             if taken:
                 self._save()
         return taken
