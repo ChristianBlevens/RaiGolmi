@@ -2,8 +2,9 @@
 
 `wl-copy` and `wl-paste` are doubles on PATH, and they keep each display's selection in a file
 beside its socket. They refuse what the real tools refuse: no socket, no clipboard; a watch reports the selection it finds as it
-starts, runs its command only for a text offer, and ends when its compositor goes; a
-compositor without data-control refuses the watch.
+starts, runs its command for every offer, text or not (wl-clipboard 2.2.1 without `--type`), and
+ends when its compositor goes; a compositor without data-control refuses the watch; `--type text`
+refuses an offer with no text type.
 """
 from __future__ import annotations
 
@@ -60,12 +61,25 @@ tmp.rename(selection)   # a new inode: a copy of the same text is still a new se
 
 _WL_PASTE = _COMMON + r'''
 args = sys.argv[1:]
-assert args[:5] == ["--no-newline", "--type", "text", "--watch", "sh"], args
+image_only = Path(f"{socket}.image-only").exists()
+if args == ["--list-types"]:
+    if not selection.exists():
+        print("No selection", file=sys.stderr)
+        sys.exit(1)
+    print("image/png" if image_only else "text/plain;charset=utf-8")
+    sys.exit(0)
+if args == ["--no-newline", "--type", "text"]:
+    if not selection.exists() or image_only:
+        print("No suitable type of content copied", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.buffer.write(selection.read_bytes())
+    sys.exit(0)
+assert args[:3] == ["--no-newline", "--watch", "sh"], args
 if Path(f"{socket}.no-data-control").exists():
     print("Watch mode requires a compositor that supports the wlroots data-control protocol",
           file=sys.stderr)
     sys.exit(1)
-command, seen = args[4:], None
+command, seen = args[2:], None
 while True:
     if not compositor_up():
         print("Error reading from the Wayland display: Broken pipe", file=sys.stderr)
@@ -76,9 +90,7 @@ while True:
         now = 0
     if now != seen:
         seen = now
-        if now and Path(f"{socket}.image-only").exists():
-            pass   # no text type offered: the command is not run
-        elif now:
+        if now:
             with open(selection, "rb") as data:
                 subprocess.run(command, stdin=data, env=dict(os.environ, CLIPBOARD_STATE="data"))
         else:
@@ -266,6 +278,21 @@ def test_a_cleared_selection_and_an_image_are_not_carried(rig):
         clips.copy(clips.host(), b"\x89PNG")
         time.sleep(0.5)
         assert clips.held(clips.face()) == b"kept"
+
+
+def test_the_bridge_starts_while_the_host_holds_only_an_image(rig):
+    """A watch that reports nothing for one ends the bridge, and the daemon with it."""
+    paths, events, log, compositors = rig
+    host = paths.runtime / "wayland-1"
+    Path(f"{host}.image-only").touch()
+    Clipboards.copy(host, b"\x89PNG")
+    with Clipboards(paths, events, log) as clips:
+        _face_up(events, compositors, clips.face())
+        _joined(clips)
+        Path(f"{host}.image-only").unlink()
+        clips.copy(host, b"text after")
+        _until(lambda: clips.held(clips.face()) == b"text after")
+        assert clips.raised == []
 
 
 def test_a_trial_face_is_never_joined(rig):

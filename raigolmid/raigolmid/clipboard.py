@@ -3,7 +3,7 @@
 A face's nested compositor keeps its own selection, so without this, text copied on Windows reaches the host and stops there, and a face
 app's copy never leaves the face. The bridge watches both selections with `wl-paste --watch`
 and gives each change to the other side with `wl-copy`. Text only: an offer with no text type
-runs no watch command at all.
+is reported as an empty selection, which is never carried.
 
 It follows whichever of the user's faces is up — the one found running when the daemon starts,
 which covers a face adopted across a restart, then `face.started` and `face.stopped`. A trial
@@ -36,10 +36,14 @@ from .events import Event, EventLog
 from .faces import FaceRuntimeState
 from .paths import Paths
 
-# One line of base64 per change, and an empty line for an empty selection. `--watch` reports
-# the selection it finds as it starts, empty or not, so the host's first line always comes.
-WATCH = ("wl-paste", "--no-newline", "--type", "text", "--watch", "sh", "-c",
-         '[ "$CLIPBOARD_STATE" = data ] && base64 -w0; echo')
+# One line of base64 per change, and an empty line for a selection holding no text. `--watch`
+# reports the selection it finds as it starts, so the host's first line always comes; with
+# `--type text` it would run nothing for an offer with no text type (an image copied on Windows),
+# so the type is chosen inside, by the names wl-paste's own `text` matches.
+WATCH = ("wl-paste", "--no-newline", "--watch", "sh", "-c",
+         'cat >/dev/null; [ "$CLIPBOARD_STATE" = data ] && wl-paste --list-types'
+         ' | grep -q "^text/\\|^UTF8_STRING$\\|^STRING$\\|^TEXT$"'
+         ' && wl-paste --no-newline --type text | base64 -w0; echo')
 # The host's first report is immediate; one that never comes is a watch that is not working.
 FIRST_REPORT_TIMEOUT = 10.0
 # Named rather than sniffed from the content, which could offer text as something else.
