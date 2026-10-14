@@ -1298,15 +1298,18 @@ def cmd_agent_activity(args) -> int:
     # that body is its tab's (the primer's "Which tab you are"). The janitor keeps the machine.
     thoughts = str(Path.home() / "thoughts.md")
     others: tuple[str, ...] = ()
+    owed = None
     if os.environ["RAIGOLMI_SCOPE"] == "tab":
         from raigolmid.mcp_server import SeenInside
+        # Its commits since the last declared against its body's principles doc, if it names one.
+        owed = SeenInside(_client()).call("principles_owed")
         bodies = SeenInside(_client()).call("list_items", kind="body")["bodies"]
         others = tuple(f"{b['directory']}/" for b in bodies
                        if b["tab"] not in (None, os.environ["RAIGOLMI_TAB"]) and b["directory"])
     undeclared = {doc: portions for doc, portions in undeclared_documents(
                       main_rows(Path(hook["transcript_path"])), Path.home()).items()
                   if doc != thoughts and os.access(doc, os.W_OK) and not doc.startswith(others)}
-    decision = decide(hook, memory, undeclared)
+    decision = decide(hook, memory, undeclared, owed)
     store.parent.mkdir(exist_ok=True)
     store.write_text(json.dumps(decision.memory.to_json()))
     if decision.refusal is not None:

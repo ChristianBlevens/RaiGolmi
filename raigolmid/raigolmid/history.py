@@ -169,6 +169,16 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
                              f"{_gb(e.data['size'])} GB free; the janitor is looking"),
     "budget.exceeded": lambda e: f"{e.data['message']}; its tab is checking",
     "budget.untended": lambda e: f"{e.data['message']}; the janitor is looking",
+    "principles.declared": lambda e: None if not e.data["drift"] else (
+        f"{e.data['body']}: {len(e.data['drift'])} commit(s) do not hold to its principles: "
+        + "; ".join(f"{d['commit']}, {d['note']}" for d in e.data["drift"])),
+    "principles.checked": lambda e: (
+        f"the machine tab {'audited' if e.data['deep'] else 'checked'} {e.data['body']}'s work "
+        f"against its principles ({e.data['tabs']}): "
+        + ("no drift" if e.data["drift"].lower() == "none"
+           else f"drift: {e.data['drift']}; sent: {e.data['direction']}")),
+    "principles.unread": lambda e: (f"{e.data['body']}'s commits cannot be read for its "
+                                    f"principles check: {e.data['error']}"),
     "memory.oom_killed": lambda e: (f"a process in {e.data['container']} was killed for want "
                                     "of memory; the janitor is looking"),
     "memory.short": lambda e: (f"the machine has {_gb(e.data['available'])} GB of memory "

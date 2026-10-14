@@ -524,6 +524,33 @@ def build_server(client: ApiClient):
     def report_run(report: str) -> dict[str, Any]:
         return call("report_run", report=report)
 
+    @tool(server, description="Declare your commits against your project's principles doc "
+                             "(`[principles] doc` in its body.toml), as the end of your turn "
+                             "asks once HEAD has moved. `commits` is a list of {commit, for, "
+                             "judged_by, holds, note}: what it was for, what it was judged by, "
+                             "whether that holds (true or false), and a note (a false says what "
+                             "comes next). `set_aside` is a list of {what, why} for work set "
+                             "aside or reverted. One line each.")
+    def declare_principles(commits: list[dict[str, Any]],
+                           set_aside: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        return call("declare_principles", commits=commits, set_aside=set_aside)
+
+    @tool(server, description="Machine tab only: a body's principles doc and its ledger since "
+                             "your last check: each commit its tabs declared, work set aside, "
+                             "and the directions you sent its tabs. Read when the daemon asks "
+                             "for a principles check or audit.")
+    def principles(body: str, rows: int = 60) -> dict[str, Any]:
+        return call("principles", body=body, rows=rows)
+
+    @tool(server, description="Machine tab only: say what a principles check found for a body: "
+                             "`tabs` the tabs and sessions read, `drift` \"none\" or what drifted, "
+                             "`direction` what you sent to correct it, `deep` true for the audit "
+                             "every ten sessions. Shown to the user in the history menu.")
+    def principles_checked(body: str, tabs: str, drift: str, direction: str = "",
+                           deep: bool = False) -> dict[str, Any]:
+        return call("principles_checked", body=body, tabs=tabs, drift=drift,
+                    direction=direction, deep=deep)
+
     @tool(server, description="Your hands on the face on the user's screen: `type` text, "
                              "press a `key` (`ctrl+s`, `Return`), `move` the pointer or "
                              "`click` (`button` left, middle or right) at `x`, `y` — the "

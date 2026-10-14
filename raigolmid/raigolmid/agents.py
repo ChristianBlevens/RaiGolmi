@@ -329,7 +329,9 @@ each a size like `"2G"` — is the range a regular run stays within with nothing
 stale, set close to what a regular run keeps: never a ceiling with room to spare. You are asked
 for one when the project first builds or keeps output. Passing it is not an error: you are
 told, and check — if the excess is what the work now regularly needs, set the new range; if it
-is leftovers, clear back within it. A tab working with nothing changing is handed to the janitor tab, which
+is leftovers, clear back within it. **A project that names a principles doc** (`[principles]
+doc` in its body.toml) has each new commit asked about at your turn's end: declare it with
+`declare_principles`, one line each. A tab working with nothing changing is handed to the janitor tab, which
 may stop its turn and say why.
 
 **Ending a conversation.** A fresh conversation is a new tab, and it starts from

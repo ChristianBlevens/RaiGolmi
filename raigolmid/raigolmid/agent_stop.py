@@ -16,8 +16,11 @@ read, and a declaration answers for those alone, so a few lines read never oblig
 rest. A doc not declared is asked about once per turn; a turn that answers nothing still ends,
 and the next turn's end asks again.
 
-`decide` is pure. The hook's input, the documents still undeclared and the tab's memory of what
-it has asked are the inputs, and the report, the refusal and the new memory are the outputs.
+A body that names a principles doc has its new commits asked about the same way, once a turn
+(`principles.py`): what each was for, what it was judged by, and whether that holds.
+
+`decide` is pure. The hook's input, the documents still undeclared, the commits owed a
+declaration and the tab's memory of what it has asked are the inputs, and the report, the refusal and the new memory are the outputs.
 """
 from __future__ import annotations
 
@@ -34,16 +37,18 @@ class Memory:
     asked: set[str] = field(default_factory=set)
     waiting: set[str] = field(default_factory=set)
     documents: set[str] = field(default_factory=set)    # asked about in this turn's stops
+    commits: set[str] = field(default_factory=set)      # likewise, owed to the principles
 
     def to_json(self) -> dict[str, list[str]]:
         return {"asked": sorted(self.asked), "waiting": sorted(self.waiting),
-                "documents": sorted(self.documents)}
+                "documents": sorted(self.documents), "commits": sorted(self.commits)}
 
     @classmethod
     def from_json(cls, data: dict[str, list[str]]) -> Memory:
-        # A memory written before documents were asked about has asked about none.
+        # A memory written before documents or commits were asked about has asked about none.
         return cls(asked=set(data["asked"]), waiting=set(data["waiting"]),
-                   documents=set(data.get("documents", ())))
+                   documents=set(data.get("documents", ())),
+                   commits=set(data.get("commits", ())))
 
 
 @dataclass
@@ -111,9 +116,32 @@ def _declare(documents: Mapping[str, list[str]]) -> str:
         "`declare_documents` with each path and `current` or `updated`.")
 
 
+def _owed_keys(owed: Mapping[str, Any] | None) -> set[str]:
+    if owed is None:
+        return set()
+    return {c["commit"] for c in owed["commits"]} | {f"left:{sha}" for sha in owed["left"]}
+
+
+def _principles(owed: Mapping[str, Any]) -> str:
+    lines = "\n".join(f"  - {c['commit'][:10]} {c['subject']}" for c in owed["commits"])
+    more = (f"\n  (and {owed['more']} more, asked at a later turn's end)" if owed["more"]
+            else "")
+    left = (f"\nHEAD no longer holds {len(owed['left'])} commit(s) it had "
+            f"({', '.join(sha[:10] for sha in owed['left'][:5])}): name in `set_aside` what "
+            "was set aside or reverted, and why." if owed["left"] else "")
+    return (
+        f"Your project's work is judged against {owed['doc']}, and these commits are not yet "
+        f"declared against it:\n{lines}{more}{left}\n"
+        "Call `declare_principles` with each: `for` (what it was for), `judged_by` (what it was "
+        "judged by), `holds` (true or false) and `note` (a false says what comes next); and in "
+        "`set_aside` any work set aside or reverted this turn, with why. One line each.")
+
+
 def decide(hook: dict[str, Any], memory: Memory,
-           undeclared: Mapping[str, list[str]] | None = None) -> Decision:
+           undeclared: Mapping[str, list[str]] | None = None,
+           owed: Mapping[str, Any] | None = None) -> Decision:
     undeclared = undeclared or {}
+    owed_keys = _owed_keys(owed)
     running = _running(hook)
     own = _own(running)
     if hook["stop_hook_active"]:
@@ -123,17 +151,25 @@ def decide(hook: dict[str, Any], memory: Memory,
         if answers:
             named = {w.strip("`") for w in answers[-1].replace(",", " ").split()} - {"none"}
             memory = Memory(asked=memory.asked | set(running),
-                            waiting=(named & set(running)) | own, documents=memory.documents)
+                            waiting=(named & set(running)) | own, documents=memory.documents,
+                            commits=memory.commits)
+        ask_owed = bool(owed_keys - memory.commits)
     else:
         unasked = [t for i, t in running.items() if i not in memory.asked and i not in own]
         if unasked:
             return Decision(None, _ask(unasked), memory)
         memory = Memory(asked=memory.asked, waiting=(memory.waiting & set(running)) | own)
         unasked_documents = dict(undeclared)
-    if unasked_documents:
-        return Decision(None, _declare(unasked_documents),
+        ask_owed = bool(owed_keys)
+    if unasked_documents or ask_owed:
+        asked = [_declare(unasked_documents)] if unasked_documents else []
+        if ask_owed:
+            assert owed is not None
+            asked.append(_principles(owed))
+        return Decision(None, "\n\n".join(asked),
                         Memory(memory.asked, memory.waiting,
-                               memory.documents | set(unasked_documents)))
+                               memory.documents | set(unasked_documents),
+                               memory.commits | owed_keys))
     if hook["stop_hook_active"] and not answers and not set(running) - own <= memory.asked:
         # Unanswered, so nothing is settled: kept rather than closed, as an interrupt is.
         return Decision("busy" if running else "idle", None, memory)

@@ -799,7 +799,11 @@ def methods(session: "Session", questions: Questions, channels: Channels,
                                            "pause", "resume")),
         ("report_run", report_run),
         # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
-        ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)))
+        ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)),
+        # What the tabs it manages declared against their principles (`principles.py`).
+        ("principles", lambda body, rows=60: session.principles.ledger(body, rows)),
+        ("principles_checked", lambda body, tabs, drift, direction="", deep=False:
+            session.principles.checked(body, tabs, drift, direction, deep)))
     } | {"document_save": document_save, "end_conversation": end_conversation}
 
 

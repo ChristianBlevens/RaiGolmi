@@ -214,6 +214,10 @@ def build_tab_methods(session: Session, questions: Questions, channels: Channels
             tab_id, name, reason, observed, expect_more),
         "job_stop": lambda name, reason: session.jobs.stop(tab_id, name, reason),
         "jobs": lambda: session.jobs.list(tab_id),
+        # Asked by its Stop hook; declared by the tab (`principles.py`).
+        "principles_owed": lambda: session.principles.owed(tab_id),
+        "declare_principles": lambda commits, set_aside=None: session.principles.declare(
+            tab_id, commits, set_aside),
         "rebuild_body": lambda: session.rebuild_body(
             here(), why=f"{tab_id}'s request").to_dict(),
         "restart_body": lambda: session.restart_body(here()),

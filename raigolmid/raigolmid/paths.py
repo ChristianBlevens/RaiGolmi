@@ -107,6 +107,17 @@ class Paths:
         may be its build context: a row written there would make the body outdated."""
         return self.state / "job-ledgers" / f"{body}.jsonl"
 
+    def principles_ledger(self, body: str) -> Path:
+        """One row per commit a body's tabs declared against its principles, each work set
+        aside, each direction the machine tab sent, and each of its checks (`principles.py`).
+        Out of the body's directory for `job_ledger`'s reason."""
+        return self.state / "principles" / f"{body}.jsonl"
+
+    @property
+    def principles(self) -> Path:
+        """Each body's last HEAD declared for, and the machine tab's count to its next check."""
+        return self.state / "principles.json"
+
     @property
     def budget_asks(self) -> Path:
         """The bodies whose tabs were asked to set a budget (`budgets.py`)."""

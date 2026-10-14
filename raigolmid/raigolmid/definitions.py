@@ -289,6 +289,22 @@ def _budget(raw: dict[str, Any], path: Path) -> Budget | None:
     return Budget(**{k: _size(v, path, k) for k, v in table.items()})
 
 
+def _principles(raw: dict[str, Any], path: Path) -> str | None:
+    """The doc a body's work is judged against (`[principles] doc`), relative to its project;
+    checked to be inside it and a file once the project's root is known (`load_body`)."""
+    table = raw.get("principles")
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        raise DefinitionError(f"{path}: 'principles' is a table: [principles] with doc")
+    _reject_unknown(table, {"doc"}, path, "[principles]")
+    doc = _require(table, "doc", path)
+    if not isinstance(doc, str) or not doc.strip():
+        raise DefinitionError(f"{path}: [principles] doc is a path in the project, like "
+                              "\"PRINCIPLES.md\"")
+    return doc
+
+
 @dataclass(frozen=True, slots=True)
 class Body:
     id: str
@@ -311,6 +327,8 @@ class Body:
     thumbnail: Path | None = None
     # None: its tab has set no budget yet.
     budget: Budget | None = None
+    # None: its work is never asked to declare against principles (`principles.py`).
+    principles: str | None = None
 
     kind = labels.Kind.BODY
 
@@ -454,7 +472,8 @@ def load_body(directory: Path, private: tuple[Path, ...]) -> Body:
     raw = _load_toml(path)
     _reject_unknown(raw, {"id", "name", "image", "dockerfile", "target", "context",
                           "working_copy", "command", "ports", "runtime", "shell",
-                          "read_only", "environment", "develop", "budget", *ABOUT_KEYS},
+                          "read_only", "environment", "develop", "budget", "principles",
+                          *ABOUT_KEYS},
                     path, "body.toml")
 
     dockerfile_name = raw.get("dockerfile")
@@ -490,6 +509,7 @@ def load_body(directory: Path, private: tuple[Path, ...]) -> Body:
         environment={str(k): str(v) for k, v in raw.get("environment", {}).items()},
         watch=tuple(watch),
         budget=_budget(raw, path),
+        principles=_principles(raw, path),
         **_about(raw, path),
     )
     # Checked after construction, because where the Dockerfile *is* depends on the working
@@ -502,6 +522,10 @@ def load_body(directory: Path, private: tuple[Path, ...]) -> Body:
                       "dockerfile")
         for rule in body.watch:
             _confined(rule.path, root, path, "[[develop.watch]] path")
+        if body.principles is not None and not _confined(
+                body.principles, root, path, "[principles] doc").is_file():
+            raise DefinitionError(f"{path}: [principles] doc '{body.principles}' is not a file "
+                                  f"in {root}")
     if body.builds_from_source:
         resolved = body.dockerfile
         if resolved is None or not resolved.is_file():

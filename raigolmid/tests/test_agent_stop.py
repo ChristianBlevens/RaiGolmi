@@ -85,6 +85,17 @@ def test_a_document_read_and_not_declared_is_asked_about_once_a_turn():
     assert decide(_stop(), again.memory, {"/work/DESIGN.md": ["lines 61-80"]}).refusal is not None
 
 
+def test_commits_owed_to_the_principles_are_asked_about_once_a_turn_beside_the_documents():
+    owed = {"doc": "/work/PRINCIPLES.md", "commits": [{"commit": "a" * 40, "subject": "hire"}],
+            "more": 0, "left": []}
+    d = decide(_stop(), Memory(), {"/work/DESIGN.md": ["lines 61-80"]}, owed)
+    assert "declare_documents" in d.refusal and "declare_principles" in d.refusal
+    assert "aaaaaaaaaa hire" in d.refusal
+    again = decide(_stop(active=True), d.memory, {"/work/DESIGN.md": ["lines 61-80"]}, owed)
+    assert (again.report, again.refusal) == ("idle", None)
+    assert "declare_principles" in decide(_stop(), again.memory, {}, owed).refusal
+
+
 def test_documents_are_asked_about_after_the_commands_are_answered():
     asked = decide(_stop("b1"), Memory(), {"/work/DESIGN.md": ["lines 61-80"]})
     assert "b1" in asked.refusal and "DESIGN" not in asked.refusal

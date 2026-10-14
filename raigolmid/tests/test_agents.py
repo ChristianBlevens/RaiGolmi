@@ -644,8 +644,8 @@ def test_what_arrives_mid_turn_names_the_paths_the_agent_sees(monkeypatch, capsy
 
 
 class _Bodies:
-    """The daemon a tab's stop hook asks: the bodies, each with its tab, and the turn's end.
-    Any other call is refused."""
+    """The daemon a tab's stop hook asks: the bodies, each with its tab, the commits owed its
+    principles (none here), and the turn's end. Any other call is refused."""
 
     def __init__(self, bodies):
         self.bodies = bodies
@@ -653,6 +653,8 @@ class _Bodies:
     def call(self, method, **params):
         if method == "list_items" and params == {"kind": "body"}:
             return {"bodies": self.bodies}
+        if method == "principles_owed" and params == {}:
+            return None
         if method == "agent_activity":
             return None
         raise AssertionError(f"{method} {params} is not what a turn's end asks")

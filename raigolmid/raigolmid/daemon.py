@@ -236,6 +236,7 @@ class Daemon:
                              (lambda: self.line_out.run(self._stop), "line-out"),
                              (lambda: self.stalls.run(self._stop), "stalls"),
                              (lambda: self.session.jobs.run(self._stop), "jobs"),
+                             (lambda: self.session.principles.run(self._stop), "principles"),
                              (lambda: self.remote_control.run(self._stop), "remote-control"),
                              (lambda: self.claude_login.run(self._stop), "claude-login"),
                              (lambda: self.disk.run(self._stop), "disk"),

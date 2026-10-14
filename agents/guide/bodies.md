@@ -1,4 +1,4 @@
-<!-- purpose: how a body is written: its body.toml, its working copy, and the budget its tab sets
+<!-- purpose: how a body is written: its body.toml, its working copy, the budget its tab sets, and the principles doc it names
 not-here: faces (faces.md), toolbelts (toolbelts.md)
 shape: bounded
 audited: 2614 2026-10-05
@@ -64,6 +64,16 @@ sets that range) or leftovers (and clears back within it).
 caches = "2G"
 output = "500M"
 memory = "3G"
+```
+
+`[principles]` names the doc the project's work is judged against, a file in the project. When
+it is set, each commit's tab is asked at its turn's end to declare it: what it was for, what it
+was judged by, whether that holds; and any work set aside or reverted, with why. A project
+that names none is never asked.
+
+```toml
+[principles]
+doc = "PRINCIPLES.md"
 ```
 A `dockerfile` is resolved against the working copy when one is set, otherwise against the
 definition directory.

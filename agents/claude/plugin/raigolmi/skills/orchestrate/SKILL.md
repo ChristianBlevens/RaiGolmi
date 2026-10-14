@@ -69,6 +69,11 @@ audited: 7102 2026-10-05
 - Send a hypothesis as a reading — "measure X and say whether" — never as a direction. Yours are
   often wrong, and a reading keeps them cheap.
 - A tab stopping well under its budget is sent on, not restarted.
+- **A project naming a principles doc** (`[principles]` in its body.toml) has its tabs declare
+  each commit against it. Every few managed turn-ends the daemon asks you to check: `principles`
+  gives the doc, the declarations and your own directions since your last check; judge whether
+  each thing was judged by what it is for and whether your steering kept to the doc, then
+  `principles_checked`. Every ten sessions it asks for a deeper audit (`deep`).
 
 ## Rulings and limits that keep a run honest
 
