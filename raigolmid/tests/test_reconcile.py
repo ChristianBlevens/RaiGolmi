@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -326,6 +327,21 @@ def test_an_agent_the_machine_shut_down_resumes_rather_than_crashing(h, monkeypa
     assert agent is not None and agent.running
     assert h.events_of("agent.restarted")
     assert h.session.intent.stopped is None, "a stop record is evidence for one start only"
+
+
+def test_an_agent_the_machine_lost_without_a_shutdown_resumes(h, monkeypatch):
+    """No stop record: the daemon died with the machine. The container's last start is
+    before this boot, so the machine ended it, not the agent."""
+    h.runtime.stop(naming.agent(TAB))
+    monkeypatch.setattr(boot, "started", lambda: datetime.now(UTC) + timedelta(seconds=60))
+    from raigolmid.session import Session
+    h.session = Session(h.runtime, h.paths, h.search, h.events, epoch=2,
+                        compose_cli=h.compose)
+
+    report = h.session.reconcile()
+
+    assert report.resumable_tabs == [TAB] and TAB not in report.crashed_tabs
+    assert h.runtime.inspect(naming.agent(TAB)).running
 
 
 def test_an_agent_that_died_within_one_boot_is_still_a_crash(h, monkeypatch):

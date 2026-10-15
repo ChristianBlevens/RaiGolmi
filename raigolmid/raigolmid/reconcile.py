@@ -326,8 +326,11 @@ class Reconciler:
             if container in orphans:
                 orphans.remove(container)
 
-        # Positive evidence only: the daemon saw the agent running as it stopped, and the
-        # machine has booted since. Without the record it is a crash, as it always was.
+        # Positive evidence only, of two kinds. The daemon saw the agent running as it stopped
+        # and the machine has booted since; or the machine ended without the daemon stopping
+        # (a power cut, a QEMU killed), the agent's container last started in an earlier boot,
+        # and the tab was not crashed when the daemon last wrote its state, so the agent was
+        # alive when the machine went. Neither is the agent's own failure.
         rebooted = intent.stopped is not None and intent.stopped.boot != boot.current()
         for tab_id, tab in intent.tabs.items():
             container = agent_containers.get(tab_id)
@@ -335,7 +338,8 @@ class Reconciler:
                 continue
             if tab.status in ("crashed", "paused"):
                 continue
-            if rebooted and tab_id in intent.stopped.running_tabs:
+            if (rebooted and tab_id in intent.stopped.running_tabs) or (
+                    container is not None and boot.before_this_boot(container.started_at)):
                 report.resumable_tabs.append(tab_id)
                 continue
             mark_crashed(self.events, tab_id, tab, intent.sandbox_of(tab_id))

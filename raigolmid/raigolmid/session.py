@@ -1423,8 +1423,8 @@ class Session:
         if tab is None:
             raise SessionError(f"no tab {tab_id}")
         if tab.janitor:
-            raise SessionError("the janitor tab is the daemon's; it closes nothing the "
-                               "user works in")
+            raise SessionError("the janitor tab is the daemon's and is never closed; "
+                               "`rai ai restart janitor` reopens it")
         return tab
 
     def _close(self, tab: TabIntent) -> tuple[dict[str, Any], str | None]:
