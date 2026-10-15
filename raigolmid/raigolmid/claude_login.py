@@ -39,6 +39,7 @@ from typing import Any, Callable, Iterator
 
 from . import hostimages, labels, naming
 from .events import Event, EventLog
+from .intent import save_json
 from .runtime.base import ContainerRuntime, ContainerSpec, Mount, RuntimeError_
 
 REFRESH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_REFRESH_TOKEN"
@@ -102,14 +103,8 @@ def is_set(path: Path) -> bool:
 
 
 def write(path: Path, login: dict[str, Any]) -> None:
-    """Replaced whole, 0600 from the moment it exists (`credential.write`)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(login, handle)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    """Replaced whole, 0600 from the moment it exists (`save_text`)."""
+    save_json(path, login)
 
 
 def from_claude_home(home: Path, with_account: bool = True) -> dict[str, Any]:

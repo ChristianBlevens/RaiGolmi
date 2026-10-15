@@ -7,10 +7,10 @@ missed while it was down.
 """
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from .intent import load_json, save_json
 
 FILE = Path(".raigolmi") / "activity.json"
 
@@ -28,9 +28,8 @@ class Activity:
 
 
 def read(home: Path) -> Activity:
-    try:
-        raw = json.loads((home / FILE).read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    raw = load_json(home / FILE, "agent activity")
+    if raw is None:
         return Activity()
     return Activity(busy=raw["busy"], session=raw.get("session", ""),
                     failed=raw.get("failed", ""))
@@ -44,6 +43,4 @@ def record(home: Path, *, busy: bool, session: str | None = None, failed: str = 
     path.parent.mkdir(exist_ok=True)
     if session is None:
         session = read(home).session
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"busy": busy, "session": session, "failed": failed}))
-    os.replace(tmp, path)
+    save_json(path, {"busy": busy, "session": session, "failed": failed})

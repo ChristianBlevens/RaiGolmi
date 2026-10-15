@@ -40,7 +40,7 @@ def version(path: Path) -> str | None:
         return None
 
 
-def _replace(path: Path, text: str) -> None:
+def replace(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         mode = path.stat().st_mode & 0o7777
@@ -75,7 +75,7 @@ def write(path: Path, text: str, expected: str | None) -> str:
         if version(path) != expected:
             raise StaleDocument(f"{path.name} was written after you opened it; this is the "
                                 "newer text. Your edit was not saved.")
-        _replace(path, text)
+        replace(path, text)
         return version(path)
 
 
@@ -83,4 +83,4 @@ def update(path: Path, change: Callable[[str | None], str]) -> None:
     """The daemon's own read-modify-write, under the same lock as the user's saves."""
     with _LOCK:
         text = path.read_text(encoding="utf-8") if path.exists() else None
-        _replace(path, change(text))
+        replace(path, change(text))

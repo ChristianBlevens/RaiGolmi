@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import hostkeys
+from . import docwrite, hostkeys
 
 if TYPE_CHECKING:
     from .events import EventLog
@@ -100,11 +100,11 @@ def install(path: Path) -> list[str]:
     shipped = SHIPPED.read_text(encoding="utf-8")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        _write(path, shipped)
+        docwrite.replace(path, shipped)
         return []
     text, withdrawn = _withdraw(path.read_text(encoding="utf-8"))
     if withdrawn:
-        _write(path, text)
+        docwrite.replace(path, text)
         for name, home in withdrawn:
             logger.info("%s: %s is withdrawn and taken out; it is set in %s", path, name, home)
     try:
@@ -131,7 +131,7 @@ def install(path: Path) -> list[str]:
             lines[end:end] = new
         added += [f"[{section}].{k}" for k in missing]
     if added:
-        _write(path, "\n".join(lines) + "\n")
+        docwrite.replace(path, "\n".join(lines) + "\n")
     return added
 
 
@@ -190,10 +190,6 @@ def _blocks(document: str) -> dict[str, dict[str, list[str]]]:
     return blocks
 
 
-def _write(path: Path, text: str) -> None:
-    staged = path.with_name(f".{path.name}.new")
-    staged.write_text(text, encoding="utf-8")
-    staged.replace(path)
 
 
 def _positive(raw: dict, section: str, key: str, source: str) -> float:

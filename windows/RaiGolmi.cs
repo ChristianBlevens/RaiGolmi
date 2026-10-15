@@ -37,13 +37,13 @@ static class Launcher
         Environment.GetEnvironmentVariable("RAIGOLMI_MSYS2") ?? @"C:\msys64", "ucrt64");
 
     [STAThread]
-    static int Main()
+    static int Main(string[] args)
     {
         Native.SetProcessDPIAware();
-        bool first;
-        using (var single = new Mutex(true, @"Local\RaiGolmi-launcher", out first))
+        int recoveries = args.Length == 2 && args[0] == RecoverFlag ? int.Parse(args[1]) : 0;
+        using (var single = new Mutex(false, @"Local\RaiGolmi-launcher"))
         {
-            if (!first)
+            if (!Own(single, recoveries > 0))
             {
                 RaiseRunningInstance();
                 return 0;
@@ -63,8 +63,25 @@ static class Launcher
                 return 0;        // the disk picker was cancelled
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
             AppDomain.CurrentDomain.UnhandledException += (sender, e) => Crashed(machine, e.ExceptionObject);
-            Application.Run(new Window(machine));
+            Application.Run(new Window(machine, recoveries));
             return 0;
+        }
+    }
+
+    // Passed to the launcher a recovering one starts, with how many recoveries in a row led to it.
+    public const string RecoverFlag = "--recovered";
+
+    // A successor waits for the launcher that started it to let go; anyone else finding the
+    // machine running hands its window back. A mutex its owner never released still passes.
+    static bool Own(Mutex single, bool successor)
+    {
+        try
+        {
+            return single.WaitOne(successor ? TimeSpan.FromMinutes(2) : TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            return true;
         }
     }
 
@@ -334,7 +351,12 @@ class Window : Form
     IntPtr job;
     Renderer renderer;
     volatile Display display;
-    bool shutdownSent, exited;
+    bool shutdownSent, exited, poweredOff;
+    // Why this launcher is restarting the machine, once it has decided to; null until then.
+    string recovering;
+    int unanswered;
+    readonly int recoveries;
+    readonly DateTime started = DateTime.UtcNow;
     readonly StringBuilder stderr = new StringBuilder();
     System.Threading.Timer watcher;
     string lastStatus;
@@ -343,9 +365,10 @@ class Window : Form
     readonly Keyboard keyboard;
     readonly Bridge bridge;
 
-    public Window(Machine machine)
+    public Window(Machine machine, int recoveries)
     {
         this.machine = machine;
+        this.recoveries = recoveries;
         Text = "RaiGolmi";
         BackColor = Color.Black;
         // The swap chain owns every pixel of the client area; nothing is painted over it.
@@ -643,29 +666,9 @@ class Window : Form
             Warn("Type an ntfy topic into the settings first; the test alert goes to it.");
             return;
         }
-        string outcome;
-        try
-        {
-            using (var request = new System.Net.Http.HttpRequestMessage(
-                       System.Net.Http.HttpMethod.Post, "https://ntfy.sh/" + topic))
-            {
-                request.Content = new System.Net.Http.StringContent(
-                    "A test from RaiGolmi on " + Environment.MachineName +
-                    ": this phone gets its alerts.", Encoding.UTF8);
-                request.Headers.Add("Title", "RaiGolmi test alert");
-                using (var answer = await Ntfy.SendAsync(request))
-                {
-                    string body = await answer.Content.ReadAsStringAsync();
-                    outcome = answer.IsSuccessStatusCode ? null :
-                        "ntfy.sh answered " + (int)answer.StatusCode + " " + answer.ReasonPhrase + ": " + body.Trim();
-                }
-            }
-        }
-        catch (Exception e) when (e is System.Net.Http.HttpRequestException ||
-                                  e is System.Threading.Tasks.TaskCanceledException)
-        {
-            outcome = "it could not reach ntfy.sh: " + e.Message;
-        }
+        string outcome = await Push(topic, "RaiGolmi test alert",
+                                    "A test from RaiGolmi on " + Environment.MachineName +
+                                    ": this phone gets its alerts.");
         if (outcome != null)
         {
             Warn("The test alert to '" + topic + "' did not go: " + outcome);
@@ -1046,10 +1049,17 @@ class Window : Form
             if (status != lastStatus)
                 Note("status " + status);
             lastStatus = status;
+            unanswered = 0;
         }
         catch (Exception e)
         {
             Note("could not ask QEMU how the guest is: " + e.Message);
+            // QEMU answers its monitor from its main loop, so a monitor that stays silent is a
+            // QEMU that has stopped running the guest: a Venus allocation the host GPU refused
+            // has hung it with the process alive (docs/findings.md). Only a restart brings it back.
+            if (++unanswered == HungAfter && lastStatus != null && !shutdownSent)
+                BeginInvoke(new Action(() => Recover("QEMU stopped answering for " +
+                                                     HungAfter * 10 + " seconds")));
         }
         try
         {
@@ -1235,6 +1245,7 @@ class Window : Form
         if (answer == DialogResult.Yes)
         {
             Note("powered off by the user");
+            poweredOff = true;
             qemu.Kill();
         }
     }
@@ -1248,6 +1259,14 @@ class Window : Form
             bridge.Stop();
         keyboard.Dispose();
         qemu.WaitForExit();      // drains the redirected streams
+        // A QEMU that ends on its own after the guest was running is restarted rather than
+        // reported to a screen nobody may be at; one that never ran the guest is a start that
+        // fails the same way again, and is reported.
+        string why = recovering;
+        if (why == null && qemu.ExitCode != 0 && !poweredOff && !shutdownSent && lastStatus != null)
+            why = "QEMU exited with code " + qemu.ExitCode;
+        if (why != null && RestartAfter(why))
+            return;
         if (qemu.ExitCode != 0)
         {
             string log;
@@ -1264,6 +1283,85 @@ class Window : Form
             }
         }
         Close();
+    }
+
+    // Checks of QEMU's monitor in a row that go unanswered before QEMU is taken to be hung; at
+    // one every ten seconds, long past anything a running QEMU holds its main loop for.
+    const int HungAfter = 12;
+    // Restarts in a row before the launcher stops and says so: each run shorter than StableRun
+    // counts toward it, and one that lasted longer starts the count again.
+    const int MostRecoveries = 5;
+    static readonly TimeSpan StableRun = TimeSpan.FromMinutes(30);
+
+    // On the UI thread: QEMU is killed, and OnQemuExited restarts the machine.
+    void Recover(string why)
+    {
+        if (recovering != null || exited || shutdownSent)
+            return;
+        recovering = why;
+        Note("recovering: " + why);
+        qemu.Kill();
+    }
+
+    // Starts a fresh launcher for the same machine and closes this one, once the alert has gone;
+    // false when the restarts in a row are used up, which is then reported as a failure.
+    bool RestartAfter(string why)
+    {
+        int next = DateTime.UtcNow - started >= StableRun ? 1 : recoveries + 1;
+        if (next > MostRecoveries)
+        {
+            Note("not restarting: " + MostRecoveries + " restarts in a row each ended within " +
+                 StableRun.TotalMinutes + " minutes");
+            _ = Alert("RaiGolmi stopped", why + ", after " + MostRecoveries + " restarts in a row. " +
+                  "It is not restarting again; its log is " + machine.Log + ".");
+            return false;
+        }
+        Restart(why, next);
+        return true;
+    }
+
+    async void Restart(string why, int next)
+    {
+        await Alert("RaiGolmi restarted", why + "; the machine is starting again (restart " + next +
+                    " in a row).");
+        Note("restarting the machine (" + next + " in a row)");
+        Process.Start(Environment.ProcessPath, Launcher.RecoverFlag + " " + next);
+        Close();
+    }
+
+    // A push to the ntfy topic when one is set, its outcome in the log; never raised, because
+    // what it reports goes ahead either way.
+    async System.Threading.Tasks.Task Alert(string title, string message)
+    {
+        string topic = machine.Settings.NtfyTopic;
+        if (topic.Length == 0)
+            return;
+        Note("alert: " + title + ": " + await Push(topic, title, message + " (" + Environment.MachineName + ")"));
+    }
+
+    // What came of one POST to ntfy.sh/<topic>, or null when it was taken.
+    static async System.Threading.Tasks.Task<string> Push(string topic, string title, string message)
+    {
+        try
+        {
+            using (var request = new System.Net.Http.HttpRequestMessage(
+                       System.Net.Http.HttpMethod.Post, "https://ntfy.sh/" + topic))
+            {
+                request.Content = new System.Net.Http.StringContent(message, Encoding.UTF8);
+                request.Headers.Add("Title", title);
+                using (var answer = await Ntfy.SendAsync(request))
+                {
+                    string body = await answer.Content.ReadAsStringAsync();
+                    return answer.IsSuccessStatusCode ? null :
+                        "ntfy.sh answered " + (int)answer.StatusCode + " " + answer.ReasonPhrase + ": " + body.Trim();
+                }
+            }
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException ||
+                                  e is System.Threading.Tasks.TaskCanceledException)
+        {
+            return "it could not reach ntfy.sh: " + e.Message;
+        }
     }
 
     // What QEMU prints when WHvMapGpaRange refuses the guest's RAM; the HRESULT is not printed

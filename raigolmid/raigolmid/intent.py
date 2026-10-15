@@ -243,11 +243,17 @@ class BrokenState(RuntimeError):
 def save_json(path: Path, data: Any) -> None:
     """Atomic because a half-written state file after a power cut loses state that cannot be
     re-derived: a temp file in the same directory, fsynced, renamed over the target."""
+    save_text(path, json.dumps(data, indent=2, sort_keys=True))
+
+
+def save_text(path: Path, text: str) -> None:
+    """`save_json`'s write, for text. The file is 0600 from the moment it exists (`mkstemp`),
+    so a secret is never readable by anyone else, even briefly."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=path.suffix)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, sort_keys=True)
+            fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)

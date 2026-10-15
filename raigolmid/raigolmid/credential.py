@@ -9,12 +9,12 @@ Reading and writing live together so the two cannot disagree about what a creden
 """
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import claude_login
+from .intent import save_text
 
 if TYPE_CHECKING:
     from .paths import Paths
@@ -66,19 +66,14 @@ def write(path: Path, key: str, value: str,
           keys: tuple[str, ...] = CREDENTIAL_KEYS) -> None:
     """Replace the credential with `key=value`.
 
-    ⚠ Created 0600 by `os.open`, never by writing and then chmod: between the two the token is
-    a world-readable file on a machine whose whole job is running other people's code."""
+    ⚠ Created 0600 (`save_text`), never by writing and then chmod: between the two the token
+    is a world-readable file on a machine whose whole job is running other people's code."""
     if key not in keys:
         raise CredentialError(f"{key} is not one of {', '.join(keys)}")
     value = value.strip()
     if not value or "\n" in value:
         raise CredentialError("a credential is one line and cannot be empty")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        handle.write(f"{key}={value}\n")
-    # An existing file keeps its old mode through O_CREAT, so it is set either way.
-    os.chmod(path, 0o600)
+    save_text(path, f"{key}={value}\n")
 
 
 def is_set(path: Path, keys: tuple[str, ...] = CREDENTIAL_KEYS) -> bool:

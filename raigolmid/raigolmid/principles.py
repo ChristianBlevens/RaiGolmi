@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import git
-from .events import Event, EventLog
+from .events import Event, EventLog, append_lines, read_lines
 from .intent import load_json, save_json
 
 if TYPE_CHECKING:
@@ -71,15 +71,13 @@ class Principles:
     def _append(self, body: str, rows: list[dict[str, Any]]) -> None:
         path = self.paths.principles_ledger(body)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
-            for row in rows:
-                f.write(json.dumps({"at": time.time(), **row}) + "\n")
+        append_lines(path, [json.dumps({"at": time.time(), **row}) for row in rows])
 
     def _rows(self, body: str) -> list[dict[str, Any]]:
         path = self.paths.principles_ledger(body)
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return list(read_lines(path))
 
     def _doc(self, body: str) -> Path | None:
         definition = self.session.catalogue.bodies.get(body)

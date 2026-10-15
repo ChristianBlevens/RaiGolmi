@@ -1287,10 +1287,11 @@ def cmd_agent_activity(args) -> int:
         return 0
 
     from raigolmid.agent_stop import Memory, decide
+    from raigolmid.intent import load_json, save_json
     # The tab's home is the agent's own and goes with the tab, as this memory must.
     store = Path.home() / ".raigolmi" / "stop-memory.json"
-    memory = (Memory.from_json(json.loads(store.read_text())) if store.exists()
-              else Memory())
+    saved = load_json(store, "Stop hook memory")
+    memory = Memory() if saved is None else Memory.from_json(saved)
     hook = json.load(sys.stdin)
     from raigolmid.transcript import main_rows, undeclared_documents
     # Its own thought doc is the conversation's record, never declared; a doc it cannot write
@@ -1310,8 +1311,7 @@ def cmd_agent_activity(args) -> int:
                       main_rows(Path(hook["transcript_path"])), Path.home()).items()
                   if doc != thoughts and os.access(doc, os.W_OK) and not doc.startswith(others)}
     decision = decide(hook, memory, undeclared, owed)
-    store.parent.mkdir(exist_ok=True)
-    store.write_text(json.dumps(decision.memory.to_json()))
+    save_json(store, decision.memory.to_json())
     if decision.refusal is not None:
         # Context rather than `decision: block`, which continues the turn the same way and
         # shows the user a "blocking error" with the hook's command line (Claude Code 2.1.295).

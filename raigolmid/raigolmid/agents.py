@@ -27,10 +27,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import (claude_login, credential, credproxy, documents, git, hostimages, labels, localtime,
-               naming, settings)
+from . import (claude_login, credential, credproxy, docwrite, documents, git, hostimages, labels,
+               localtime, naming, settings)
 from .events import EventLog
-from .intent import JANITOR, TabIntent
+from .intent import JANITOR, TabIntent, load_json, save_json
 from .paths import Paths
 from .runtime import ContainerRuntime, ContainerSpec, Mount
 
@@ -633,19 +633,16 @@ class Agents:
     def _sign_in(home: Path, login: tuple[dict[str, Any], dict[str, Any]] | None) -> None:
         credentials = home / ".claude" / ".credentials.json"
         config = home / ".claude.json"
-        saved = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+        saved = load_json(config, "Claude Code config") or {}
         if login is not None:
             files, account = login
-            credentials.parent.mkdir(exist_ok=True)
-            fd = os.open(credentials, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as out:
-                json.dump(files, out)
+            save_json(credentials, files)
             saved["oauthAccount"] = account
         else:
             credentials.unlink(missing_ok=True)
             saved.pop("oauthAccount", None)
         if saved or config.is_file():
-            config.write_text(json.dumps(saved), encoding="utf-8")
+            docwrite.replace(config, json.dumps(saved))
 
     def signed_in(self, tab_id: str) -> bool:
         """Whether the tab's container was started on the claude.ai sign-in, and so on Remote
@@ -712,7 +709,9 @@ class Agents:
         self._unlink_archived(tab.tab_id)
         projects = self.home(tab.tab_id) / ".claude" / "projects"
         for record in sorted(self.paths.agent_archive.glob("*.json")):
-            kept = json.loads(record.read_text(encoding="utf-8"))
+            kept = load_json(record, "archive record")
+            if kept is None:
+                continue  # an archive whose record never reached the disk names no kind
             if (kept.get("body") != tab.body
                     or (kept.get("tab") == JANITOR) != tab.janitor):
                 continue
@@ -748,7 +747,7 @@ class Agents:
         except OSError as exc:
             raise AgentError(f"{source} could not be archived to {archive / name}: {exc}") \
                 from exc
-        (archive / f"{name}.json").write_text(json.dumps(record), encoding="utf-8")
+        save_json(archive / f"{name}.json", record)
         return name
 
     def restart(self, spec: AgentSpec, resume: bool = True) -> tuple[str, bool]:

@@ -36,7 +36,7 @@ from . import git, naming
 from .agent_stop import Memory
 from .transcript import latest_transcript, main_rows
 from .events import Event, EventLog
-from .intent import JANITOR
+from .intent import JANITOR, BrokenState, load_json
 from .runtime.base import RuntimeError_
 from .session import SessionError
 
@@ -111,10 +111,8 @@ def last_calls(home: Path, n: int = LAST_CALLS) -> list[dict[str, str]]:
 
 def waited_on(home: Path) -> list[str]:
     """The background tasks the tab last named as waited on (`agent_stop.py`)."""
-    store = home / ".raigolmi" / "stop-memory.json"
-    if not store.is_file():
-        return []
-    return sorted(Memory.from_json(json.loads(store.read_text())).waiting)
+    saved = load_json(home / ".raigolmi" / "stop-memory.json", "Stop hook memory")
+    return [] if saved is None else sorted(Memory.from_json(saved).waiting)
 
 
 def stalled_message(tab_id: str, minutes: int) -> str:
@@ -235,7 +233,12 @@ class Stalls:
             except RuntimeError_ as exc:
                 # The refusal is the answer: a toolbelt that is down runs nothing.
                 processes[container] = f"(not listed: {exc})"
-        return {"since": since, "sandbox": sandbox, "waiting_on": waited_on(home),
+        try:
+            waiting: list[str] | str = waited_on(home)
+        except BrokenState as exc:
+            # Said rather than raised: this thread ending would end the daemon.
+            waiting = f"(not read: {exc})"
+        return {"since": since, "sandbox": sandbox, "waiting_on": waiting,
                 "last_calls": last_calls(home), "processes": processes,
                 "jobs": self.session.jobs.recorded(tab_id)}
 

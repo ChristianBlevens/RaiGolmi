@@ -3,6 +3,8 @@ Description=RaiGolmi control plane
 # A *user* unit, and that is load-bearing: each session view's uid is the launcher socket
 # directory's owner, which is this process's.
 PartOf=sway-session.target
+# Restarted for as long as it fails: nothing else brings the machine back while nobody is at it.
+StartLimitIntervalSec=0
 
 [Service]
 # Ready once reconciled (sd_notify), which is what raigolmi-drop-rollback waits on. A first

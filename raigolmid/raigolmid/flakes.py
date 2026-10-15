@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import labels, naming
 from .definitions import Toolbelt
+from .intent import load_json, save_json
 from .runtime.base import ContainerRuntime, ContainerSpec, Mount
 
 UNSTABLE = "github:NixOS/nixpkgs/nixpkgs-unstable"
@@ -107,10 +108,9 @@ class Built:
 
 def record_of(directory: Path, toolbelt: Toolbelt) -> Built | None:
     """The build made for this package list, if there is one."""
-    path = directory / toolbelt.id / "built.json"
-    if not path.is_file():
+    raw = load_json(directory / toolbelt.id / "built.json", "flake build record")
+    if raw is None:
         return None
-    raw = json.loads(path.read_text())
     built = Built(image=raw["image"], nixpkgs=raw["nixpkgs"],
                   package_digest=raw["package_digest"])
     return built if built.package_digest == toolbelt.package_digest else None
@@ -150,7 +150,7 @@ def build(runtime: ContainerRuntime, directory: Path, toolbelt: Toolbelt,
         if image not in loaded:
             raise FlakeError(f"the flake built {', '.join(loaded) or 'nothing'}, not {image}")
         built = Built(image=image, nixpkgs=nixpkgs, package_digest=toolbelt.package_digest)
-        (work / "built.json").write_text(json.dumps(built.to_dict()))
+        save_json(work / "built.json", built.to_dict())
     return built
 
 

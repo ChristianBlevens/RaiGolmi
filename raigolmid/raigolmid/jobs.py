@@ -44,7 +44,7 @@ import time
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from .events import Event, EventLog
+from .events import Event, EventLog, append_lines, read_lines
 from .intent import load_json, save_json
 from .launcher.client import LauncherError
 
@@ -125,8 +125,7 @@ class Jobs:
         if not path.exists():
             return []
         key = command_key(cmd)
-        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-        return [r for r in rows if command_key(r["cmd"]) == key][-SIMILAR_ROWS:]
+        return [r for r in read_lines(path) if command_key(r["cmd"]) == key][-SIMILAR_ROWS:]
 
     def _ledger(self, tab_id: str, name: str, job: dict[str, Any], ended: str,
                 exit_code: int | None = None) -> None:
@@ -146,8 +145,7 @@ class Jobs:
                "at": round(time.time())}
         path = self.session.paths.job_ledger(body)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
-            f.write(json.dumps(row) + "\n")
+        append_lines(path, [json.dumps(row)])
         if row["under"]:
             self.events.emit("job.under", tab=tab_id, name=name, expect=job["expect"],
                              seconds=seconds)

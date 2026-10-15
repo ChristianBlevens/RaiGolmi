@@ -201,7 +201,7 @@ class Authority:
         _write_private(self._key_path, key.private_bytes(
             serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption()))
-        self.cert.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        _write_whole(self.cert, cert.public_bytes(serialization.Encoding.PEM), 0o644)
 
     def context_for(self, host: str) -> ssl.SSLContext:
         """A server context presenting a certificate for `host` under this authority."""
@@ -260,9 +260,19 @@ def _identified(cert: Path) -> bool:
 
 
 def _write_private(path: Path, content: bytes) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    _write_whole(path, content, 0o600)
+
+
+def _write_whole(path: Path, content: bytes, mode: int) -> None:
+    """Fsynced and renamed into place: the authority is made once and read at every start, so
+    one cut short by a power cut would fail every start after it."""
+    tmp = path.with_name(f".{path.name}.new")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     with os.fdopen(fd, "wb") as out:
         out.write(content)
+        out.flush()
+        os.fsync(out.fileno())
+    os.replace(tmp, path)
 
 
 class Broker:

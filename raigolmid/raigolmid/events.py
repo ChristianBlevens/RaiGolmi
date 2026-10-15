@@ -8,10 +8,11 @@ file from the AI terminal and find the cause.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,8 +40,7 @@ class Event:
         return json.dumps(d, default=str)
 
     @classmethod
-    def from_json(cls, line: str) -> "Event":
-        d = json.loads(line)
+    def from_dict(cls, d: dict[str, Any]) -> "Event":
         return cls(
             type=d.pop("type"),
             ts=d.pop("ts", 0.0),
@@ -49,6 +49,33 @@ class Event:
             tab=d.pop("tab", None),
             data=d,
         )
+
+
+def read_lines(path: Path) -> Iterator[Any]:
+    """Each row of an append-only JSON-lines file. A line that does not parse is a write torn
+    by a power cut or a killed process, and is not a reason to hide the rest."""
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            yield row
+
+
+def append_lines(path: Path, lines: Iterable[str]) -> None:
+    """`lines` appended to a JSON-lines file, after ending a torn last line, so that the
+    torn line costs only itself and not the first row written after it."""
+    with path.open("a+b") as fh:
+        end = fh.seek(0, os.SEEK_END)
+        if end:
+            fh.seek(end - 1)
+        torn = end > 0 and fh.read(1) != b"\n"
+        text = "".join(f"{line}\n" for line in lines)
+        fh.write((("\n" if torn else "") + text).encode("utf-8"))
 
 
 class Subscriber:
@@ -106,8 +133,7 @@ class EventLog:
         line = event.to_json()
         with self._lock:
             self._rotate_if_needed(len(line) + 1)
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+            append_lines(self.path, [line])
             subscribers = list(self._subscribers)
         for sub in subscribers:
             sub.offer(event)
@@ -134,17 +160,12 @@ class EventLog:
 
     def read(self) -> Iterator[Event]:
         for f in self._files_for_history():
-            with f.open(encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        yield Event.from_json(line)
-                    except (json.JSONDecodeError, KeyError):
-                        # A torn final line from a killed daemon is not a reason to hide
-                        # the rest of the history.
-                        continue
+            for row in read_lines(f):
+                try:
+                    event = Event.from_dict(row)
+                except KeyError:
+                    continue  # a row with no type is not an event
+                yield event
 
     def history(self, instance_id: str, n: int = 50,
                 working_copy: str | None = None) -> list[Event]:
