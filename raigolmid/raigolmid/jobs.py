@@ -45,6 +45,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from .events import Event, EventLog
+from .intent import load_json, save_json
 from .launcher.client import LauncherError
 
 if TYPE_CHECKING:
@@ -98,10 +99,7 @@ class Jobs:
         self.events = events
         self.path = session.paths.jobs
         self._lock = threading.RLock()
-        try:
-            self._jobs: dict[str, dict[str, dict[str, Any]]] = json.loads(self.path.read_text())
-        except FileNotFoundError:
-            self._jobs = {}
+        self._jobs: dict[str, dict[str, dict[str, Any]]] = load_json(self.path, "jobs") or {}
         # A job started with no prediction cannot be timed; its tab is told it is forgotten.
         for tab, named in self._jobs.items():
             for name in [n for n, job in named.items() if "expect" not in job]:
@@ -112,9 +110,7 @@ class Jobs:
                     "meta": {"from": "daemon"}})
 
     def _save(self) -> None:
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._jobs))
-        tmp.replace(self.path)
+        save_json(self.path, self._jobs)
 
     # --- the ledger --------------------------------------------------------------------
 

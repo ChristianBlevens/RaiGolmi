@@ -21,7 +21,6 @@ directory, whose files are only what its build reads.
 """
 from __future__ import annotations
 
-import json
 import shutil
 import threading
 import time
@@ -30,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from . import credential, flakes, hostimages, layerfiles, naming, registry
 from .definitions import Body, Face, Toolbelt
+from .intent import load_json, save_json
 from .runtime.base import ImageInUse
 from .toolbelts import nixery_reference
 
@@ -73,15 +73,10 @@ class Catalog:
             raise CatalogError(str(exc)) from exc
 
     def _provenance(self) -> dict[str, dict[str, Any]]:
-        path = self.paths.registry_state
-        return json.loads(path.read_text()) if path.is_file() else {}
+        return load_json(self.paths.registry_state, "registry provenance") or {}
 
     def _save_provenance(self, data: dict[str, dict[str, Any]]) -> None:
-        path = self.paths.registry_state
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=1))
-        tmp.replace(path)
+        save_json(self.paths.registry_state, data)
 
     def _server_index(self) -> list[registry.RegistryEntry]:
         with self._lock:
