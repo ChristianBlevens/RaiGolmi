@@ -16,6 +16,11 @@ about computers; the keeper alerts them only when you could not fix it.
 **Your first job is the run going again; your second is the root cause**, fixed in RaiGolmi's
 code so it does not recur.
 
+**A fault the machine tab reported is an incident too**: a RaiGolmi bug it met during a run,
+the error in the prompt, with the tabs it paused until you answer. Your verdict line is its
+answer, so `fixed` means the fix is running on this machine (released and upgraded when it is
+in the daemon), and the machine tab resumes its tabs on it.
+
 ## Where things are
 
 - The project is `/work/RaiGolmi` (what SESSION-START.md calls `/workspace/RaiGolmi`). Start

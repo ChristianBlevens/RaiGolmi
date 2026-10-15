@@ -104,7 +104,7 @@ def test_a_managed_tabs_turn_ending_wakes_the_machine_tab_with_its_context_use(h
     _usage(h.session.agents.home(BODY), 105_000)
     m.tab(BODY)["agent_activity"](busy=False)
     [woken] = m.queued(MACHINE)
-    assert woken["meta"] == {"tab": BODY, "why": "idle"}
+    assert woken["meta"] == {"tab": BODY, "why": "idle", "standing": f"{BODY} turn end"}
     assert "105k of the 100k budget" in woken["content"], "the user's settings' budget"
     assert "restart_fresh" in woken["content"], "at the budget it is told what to do"
     [row] = m.tab(MACHINE)["managed"]()
@@ -635,6 +635,67 @@ def test_a_direction_on_its_way_to_a_tab_that_ends_its_conversation_goes_to_its_
     assert directed["meta"]["carried_from"] == BODY
     [told] = [q for q in m.queued(MACHINE) if "ended its own conversation" in q["content"]]
     assert '"add the lexer tests"' in told["content"]
+
+
+def test_a_tabs_turn_ends_reach_the_machine_tab_and_its_successor_as_the_newest_only(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(MACHINE)["agent_activity"](busy=True)
+    for _ in range(3):
+        m.tab(BODY)["agent_activity"](busy=True)
+        m.tab(BODY)["agent_activity"](busy=False)
+    [ended] = m.queued(MACHINE)
+    assert ended["meta"]["standing"] == f"{BODY} turn end"
+    m.tab(MACHINE)["end_conversation"](report="tab-2 ported the lexer")
+    m.tab(MACHINE)["agent_activity"](busy=False)
+    m.pump()
+
+    [successor] = [t for t in h.session.intent.tabs.values() if t.continues == MACHINE]
+    opening, carried = m.queued(successor.tab_id)
+    assert "taking over from" in opening["content"]
+    assert carried["meta"]["carried_from"] == MACHINE and "is done" in carried["content"]
+
+
+def test_a_turn_end_names_what_it_waits_on_and_a_resumed_sessions_own_row_is_not_its_context(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    home = h.session.agents.home(BODY)
+    _usage(home, 105_000)
+    # Claude Code's own "No response requested." on a resumed session took no input.
+    with (home / ".claude" / "projects" / "-work" / "s1.jsonl").open("a") as rows:
+        rows.write(json.dumps({"type": "assistant", "message": {
+            "model": "<synthetic>", "content": [{"type": "text", "text": "No response requested."}],
+            "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0,
+                      "cache_read_input_tokens": 0}}}) + "\n")
+    h.events.emit("agent.idle", tab=BODY, done=False, error=None)
+    [plain] = m.queued(MACHINE)
+    assert f"{BODY} (myapi), which you manage, ended its turn. That turn ended at" \
+        in plain["content"], "nothing is on its way to it now"
+    assert "105k of the" in plain["content"]
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(MACHINE)["direct"](tab=BODY, content="add the lexer tests")
+    h.events.emit("agent.idle", tab=BODY, done=False, error=None)
+    [waits] = m.queued(MACHINE)
+    assert "ended its turn and waits on 1 × your direction." in waits["content"]
+    assert m.tab(MACHINE)["managed_tab"](tab=BODY)["on_its_way"] == ["1 × your direction"]
+
+
+def test_a_tabs_own_jobs_and_cut_turn_are_not_carried_to_its_successor(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(BODY)["agent_activity"](busy=True)
+    for cause in ("job.overrun", "limits.continued"):
+        h.events.emit(cause, tab=BODY, deliver={"content": cause, "meta": {"from": "daemon"}})
+    m.tab(MACHINE)["direct"](tab=BODY, content="add the lexer tests")
+    m.tab(BODY)["end_conversation"]()
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+
+    [successor] = [t for t in h.session.intent.tabs.values() if t.continues == BODY]
+    assert [q["cause"] for q in m.queued(successor.tab_id)] == [
+        "coordinator.continued", "coordinator.directed"], "its sandbox and turn ended with it"
+    [dropped] = h.events_of("channel.not_carried")
+    assert dropped.data["causes"] == ["job.overrun", "limits.continued"]
 
 
 def _wakes(m) -> list[str]:

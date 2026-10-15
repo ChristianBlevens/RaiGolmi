@@ -33,6 +33,7 @@ from .catalog import CatalogError
 from .history import History, HistoryError
 from .messages import MessageError
 from .docwrite import DocumentError
+from .faults import Faults
 from .library import Library
 from .questions import PERMISSIONS_ABSENT, QuestionError, Questions, parse_permissions
 from .registry import RegistryError
@@ -61,6 +62,7 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
     """Everything the host's own callers can ask for. What an agent asks, and what
     only an agent reports, is its tab's socket's (`scopes.py`)."""
     library = Library(session.paths, session, parse_permissions, PERMISSIONS_ABSENT)
+    faults = Faults(session.paths, events)
     return {
         "list_items": lambda kind=None: session.list_items(kind),
         "select": lambda kind, id, by_tab=None: session.select(kind, id, by_tab),
@@ -108,6 +110,11 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "overturn": questions.overturn,
         "crash_logs": lambda name=None: _crash_logs(session, name),
         "machine_state": lambda: _machine_state(session),
+        # The keeper's, over ssh through `rai keeper` (`faults.py`): it looked, and the faults
+        # the machine tab filed for it; one taken for a session; one answered.
+        "keeper_seen": lambda busy_seconds=0: faults.seen(busy_seconds),
+        "keeper_take": lambda id, busy_seconds=0: faults.take(id, busy_seconds),
+        "keeper_answer": lambda id, verdict, words="": faults.answer(id, verdict, words),
         "version": lambda: {"protocol": PROTOCOL_VERSION, "epoch": session.epoch},
         "terminal_viewing": viewing.report,
         # The catalog window's whole vocabulary.

@@ -519,6 +519,8 @@ class Agents:
                 f"{home} is left from an earlier {spec.tab.tab_id} whose close could not "
                 f"archive it; it holds {git.remaining(home)}. Move it, then open the tab.")
         home.mkdir(parents=True, exist_ok=not fresh_home)
+        if fresh_home and spec.tab.continues is not None:
+            self._carry_memory(spec.tab)
         self._link_archived(spec.tab)
         self._sign_in(home, login)
         context = self.write_context(spec, home)
@@ -736,6 +738,20 @@ class Agents:
                 into.mkdir(parents=True, exist_ok=True)
                 for name in files:
                     os.link(Path(root) / name, into / name)
+
+    def _carry_memory(self, tab: TabIntent) -> None:
+        """Claude Code's memory of `/work` (`-work/memory`) is the project's, not one
+        conversation's, so a tab that continues another starts with its predecessor's, taken
+        from the archive its close just made. A copy: the archive stays that conversation's
+        record. Nothing to carry when the predecessor left no home or wrote no memory."""
+        records = [r for r in sorted(self.paths.agent_archive.glob("*.json"))
+                   if (kept := load_json(r, "archive record")) is not None
+                   and kept.get("tab") == tab.continues and not kept.get("fresh_restart")]
+        if not records:
+            return
+        memory = records[-1].with_suffix("") / ".claude" / "projects" / "-work" / "memory"
+        if memory.is_dir():
+            shutil.copytree(memory, self._conversation(tab.tab_id) / "memory")
 
     def _unlink_archived(self, tab_id: str) -> None:
         for linked in (self.home(tab_id) / ".claude" / "projects").glob(f"{ARCHIVED}*"):

@@ -234,4 +234,5 @@ class Limits:
             return
         self._cut.pop(tab_id, None)
         self.events.emit("limits.continued", tab=tab_id, error=error, deliver={
-            "content": continue_message(error), "meta": {"from": "daemon"}})
+            "content": continue_message(error),
+            "meta": {"from": "daemon", "standing": "continue"}})

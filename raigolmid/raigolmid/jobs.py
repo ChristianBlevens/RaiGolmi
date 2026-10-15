@@ -307,7 +307,8 @@ class Jobs:
             message += "It is paused, its work kept: " + self._overrun_said(job)["to_do"] + "."
         self.events.emit("job.overrun", tab=tab_id, name=name, count=job["overruns"],
                          seconds=seconds, predicted=predicted, reading=reading, struck=struck,
-                         deliver={"content": message, "meta": {"from": "daemon"}})
+                         deliver={"content": message,
+                                  "meta": {"from": "daemon", "standing": f"job {name}"}})
 
     def tick(self) -> None:
         with self._lock:

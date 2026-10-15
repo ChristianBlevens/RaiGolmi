@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
+SYNTHETIC = "<synthetic>"
+
+
 def latest_transcript(home: Path) -> Path | None:
     transcripts = list((home / ".claude" / "projects" / "-work").glob("*.jsonl"))
     return max(transcripts, key=lambda p: p.stat().st_mtime) if transcripts else None
@@ -45,13 +48,16 @@ _PORTION_CHARS = 120
 
 
 def context_tokens(home: Path) -> int | None:
-    """The input the latest main-conversation answer took; None before the first answer."""
+    """The input the latest main-conversation answer took; None before the first answer. A row
+    Claude Code writes itself (model `<synthetic>`, as "No response requested." on a resumed
+    session) took no input, and its zero usage is not the context."""
     transcript = latest_transcript(home)
     if transcript is None:
         return None
     for row in reversed(main_rows(transcript)):
-        usage = (row.get("message") or {}).get("usage")
-        if row["type"] == "assistant" and usage:
+        message = row.get("message") or {}
+        usage = message.get("usage")
+        if row["type"] == "assistant" and usage and message.get("model") != SYNTHETIC:
             return (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
                     + usage.get("cache_read_input_tokens", 0))
     return None

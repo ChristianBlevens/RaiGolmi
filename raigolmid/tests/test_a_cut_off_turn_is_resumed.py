@@ -144,13 +144,15 @@ def test_a_transient_failure_that_repeats_waits_twice_as_long_each_time_up_to_a_
     m.cut(BODY, "server_error")
     now = time.time()
     m.limits.tick(now + RETRY_SECONDS + 1)
-    assert len(m.contents(BODY)) == 1
+    # Counted as said: an unheard continue is replaced by the next (`standing`).
+    continued = lambda: len(m.h.events_of("limits.continued"))  # noqa: E731
+    assert continued() == 1
     m.cut(BODY, "server_error")         # the network is still down
     now = time.time()
     m.limits.tick(now + RETRY_SECONDS + 1)
-    assert len(m.contents(BODY)) == 1
+    assert continued() == 1
     m.limits.tick(now + 2 * RETRY_SECONDS + 1)
-    assert len(m.contents(BODY)) == 2
+    assert continued() == 2
     for _ in range(10):
         m.cut(BODY, "server_error")
     assert m.limits.retry_after(BODY) == RETRY_CAP_SECONDS

@@ -125,6 +125,17 @@ class Paths:
         return self.state / "principles.json"
 
     @property
+    def faults(self) -> Path:
+        """One file per fault in RaiGolmi the machine tab handed the keeper (`faults.py`)."""
+        return self.state / "faults"
+
+    @property
+    def keeper(self) -> Path:
+        """When the keeper outside the VM last looked, and how long it said it would be away
+        (`faults.py`)."""
+        return self.state / "keeper.json"
+
+    @property
     def budget_asks(self) -> Path:
         """The bodies whose tabs were asked to set a budget (`budgets.py`)."""
         return self.state / "budget-asks.json"

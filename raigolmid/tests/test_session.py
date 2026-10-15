@@ -437,6 +437,28 @@ def test_a_closed_tabs_home_is_archived_and_the_fresh_tab_starts_fresh(h):
                     .glob("-archived-*")), "an archive holds its own conversation only"
 
 
+def test_a_tab_that_continues_another_starts_with_its_claude_code_memory(h):
+    """Memory is the project's, not the conversation's: a successor has its predecessor's,
+    as its own copy, while a tab the user's close opens afresh has none."""
+    h.session.select("body", "myapi")
+    tab = h.tab("myapi")
+    home = h.session.agents.home(tab)
+    converse(home)
+    memory = home / ".claude" / "projects" / "-work" / "memory"
+    memory.mkdir()
+    (memory / "MEMORY.md").write_text("- [owner](owner.md)\n", encoding="utf-8")
+    successor = h.session.succeed_tab(tab, by="self").tab_id
+    carried = h.session.agents.home(successor) / ".claude" / "projects" / "-work" / "memory"
+    assert (carried / "MEMORY.md").read_text(encoding="utf-8") == "- [owner](owner.md)\n"
+    (closed,) = h.events_of("tab.closed")
+    kept = h.paths.agent_archive / closed.data["archive"] / ".claude" / "projects" / "-work"
+    assert not os.path.samefile(carried / "MEMORY.md", kept / "memory" / "MEMORY.md")
+    assert not h.session.agents.has_conversation(successor)
+    h.session.close_tab(successor)
+    fresh = h.session.agents.home(h.tab("myapi"))
+    assert not (fresh / ".claude" / "projects" / "-work" / "memory").exists()
+
+
 def test_a_new_tab_refuses_a_home_an_earlier_tab_left(h):
     """Ids are never reused, so a home under the next one is not this daemon's: left by an
     intent that was lost, and never resumed as if it were the new tab's."""

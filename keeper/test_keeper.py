@@ -11,7 +11,10 @@ import keeper as k  # noqa: E402
 
 T0 = 1_800_000_000.0
 HEALTHY = {"reachable": True, "daemon": "active", "held": False, "hold": None,
-           "run_active": True, "last_event": {"type": "agent.busy", "age_s": 30}}
+           "run_active": True, "last_event": {"type": "agent.busy", "age_s": 30},
+           "faults": [], "faults_error": None}
+FAULT = {"id": "fault-1", "title": "jobs of an earlier tab no tab can stop",
+         "body": "job_stop: no such job", "affects": ["tab-2"], "status": "open"}
 
 
 class World:
@@ -26,12 +29,28 @@ class World:
         self.verdict = "KEEPER: not fixed: still down"
         self.signed_in = True
         self.pushes: list[tuple[str, str, str]] = []
+        self.told: list[list[str]] = []
+        self.vm_answers = True
         self.keeper = self.make()
 
     def make(self) -> k.Keeper:
         return k.Keeper(self.paths, lambda: self.now, lambda: self.vm, self.run,
                         lambda: (self.signed_in, "" if self.signed_in else "Claude Code is not signed in"),
-                        lambda topic, title, message: self.pushes.append((topic, title, message)))
+                        lambda topic, title, message: self.pushes.append((topic, title, message)),
+                        self.tell)
+
+    def tell(self, args: list[str]) -> dict:
+        """raigolmid's faults.py as `rai keeper` reaches it: a taken fault is still listed, an
+        answered one is not."""
+        self.told.append(args)
+        if not self.vm_answers:
+            return {"ok": False, "error": "TimeoutError: timed out"}
+        if args[0] == "take":
+            self.vm["faults"] = [{**f, "status": "taken"} if f["id"] == args[1] else f
+                                 for f in self.vm["faults"]]
+        if args[0] == "answer":
+            self.vm["faults"] = [f for f in self.vm["faults"] if f["id"] != args[1]]
+        return {"ok": True, "result": {}}
 
     def run(self, prompt: str, session_id: str, log: Path) -> dict:
         self.sessions.append(prompt)
@@ -185,3 +204,64 @@ def test_key_is_appended_once(world: World, tmp_path: Path) -> None:
     lines = world.paths.authorized_keys.read_text().splitlines()
     assert lines[0] == "ssh-ed25519 AAAAother dev" and len(lines) == 2
     assert lines[1].endswith("raigolmi-keeper")
+
+
+def test_a_fault_from_the_machine_tab_is_taken_worked_and_answered_fixed(world: World) -> None:
+    world.launcher("running")
+    world.vm = {**HEALTHY, "faults": [FAULT]}
+    world.verdict = k.FIXED
+    report = world.check()
+    assert len(world.sessions) == 1, "a fault is acted on at once"
+    assert "job_stop: no such job" in world.sessions[0] and "tab-2" in world.sessions[0]
+    assert world.told[0][:2] == ["take", "fault-1"], "taken before the session"
+    assert world.told[-1] == ["answer", "fault-1", "fixed"]
+    assert report["incident"] is None and report["last_incident"]["ended_as"] == "answered fixed"
+    assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy"
+    assert world.pushes == []
+
+
+def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_alerted_once(world: World) -> None:
+    world.launcher("running")
+    world.vm = {**HEALTHY, "faults": [FAULT]}
+    world.check()
+    assert len(world.sessions) == 1 and not any(t[0] == "answer" for t in world.told), \
+        "a session is left: the fault stays the keeper's"
+    world.check(after=k.CHECK_SECONDS)
+    assert len(world.sessions) == 1
+    world.check(after=k.FAILING_SECONDS)
+    assert len(world.sessions) == k.SESSIONS_PER_INCIDENT
+    assert "Earlier keeper sessions" in world.sessions[1]
+    assert world.told[-1] == ["answer", "fault-1", "not_fixed", "still down"]
+    assert [p[1] for p in world.pushes] == [k.ALERT_NOT_FIXED[0]]
+    for _ in range(3):
+        assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy"
+    assert len(world.pushes) == 1, "an answered fault is the machine tab's: no recovery alert"
+
+
+def test_an_answer_the_vm_did_not_take_is_sent_again_and_its_fault_not_reworked(world: World) -> None:
+    world.launcher("running")
+    world.vm = {**HEALTHY, "faults": [FAULT]}
+    world.verdict = k.FIXED
+    world.check()
+    world.vm_answers = False
+    world.told.clear()
+    world.keeper.unanswered = {"fault-1": {"verdict": "fixed", "words": ""}}
+    world.vm["faults"] = [FAULT]
+    assert world.check(after=k.CHECK_SECONDS)["unanswered"] == {
+        "fault-1": {"verdict": "fixed", "words": ""}}
+    assert len(world.sessions) == 1, "a fault answered is not worked again"
+    world.vm_answers = True
+    world.keeper = world.make()
+    report = world.check(after=k.CHECK_SECONDS)
+    assert report["unanswered"] == {} and world.told[-1] == ["answer", "fault-1", "fixed"]
+    assert len(world.sessions) == 1
+
+
+def test_a_fault_while_claude_code_cannot_run_is_answered_not_fixed(world: World) -> None:
+    world.signed_in = False
+    world.launcher("running")
+    world.vm = {**HEALTHY, "faults": [FAULT]}
+    world.check()
+    assert world.sessions == []
+    assert world.told[-1][:3] == ["answer", "fault-1", "not_fixed"]
+    assert "not signed in" in world.told[-1][3] and len(world.pushes) == 1

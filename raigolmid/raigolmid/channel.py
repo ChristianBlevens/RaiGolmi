@@ -38,10 +38,16 @@ listening for the hook that says so, and the agent is the one that can tell a re
 
 **What is on its way to a tab handed on goes to the tab that takes its work over**
 (`tab.closed` with `continued_by`, `Session.succeed_tab`): its queue and its push not heard,
-in order, marked `carried_from`, behind only the successor's opening message (`OPENING`). The
+in order, marked `carried_from`, behind only the successor's opening message (`OPENING`);
+not what spoke of the closed tab's own turn or jobs, which ended with it (`OWN_TURN`). The
 directions a tab took in its current turn are kept (`Tab.this_turn`), since a turn that ends in
 a handover may not have acted on them; `handed_on` gives both to the coordinator, which tells
 the machine tab.
+
+**A message saying where something stands replaces the one before it** (`standing` in its
+meta: a managed tab's turn end, a budget's reading): only the newest is still true, so one
+queued, or carried at a handover, is dropped once a newer with the same `standing` is behind it,
+said as `channel.superseded`. Each wakes its tab, and each wake would end a turn of its own.
 """
 from __future__ import annotations
 
@@ -78,6 +84,16 @@ MIDTURN = frozenset({DIRECTED, "janitor.told", "message.sent", "message.answered
 # from `SESSION-START.md`, so it goes ahead of what was carried over from the closed tab.
 OPENING = frozenset({"coordinator.continued", "coordinator.restarted",
                      "coordinator.machine_restarted"})
+# What speaks of the closed tab's own conversation or sandbox, both ended by its handover: its
+# jobs, which stopped with its sandbox (`Session._stop_released`), and a nudge to continue a
+# turn of its own. Never carried to its successor, which starts fresh on a sandbox of its own.
+OWN_TURN = frozenset({"limits.continued", "remote_control.continued", "tab.unstuck"})
+
+
+def _died_with(message: "Message") -> bool:
+    return message.cause in OWN_TURN or message.cause.startswith("job.")
+
+
 # Claude Code's limit on what a hook adds to the conversation.
 MIDTURN_CHARS = 10_000
 
@@ -244,6 +260,7 @@ class Channels:
                 return False
             message = Message(content=deliver["content"], meta=dict(deliver["meta"]),
                               cause=event.type)
+            self._supersede(event.tab, tab, message.meta.get("standing"))
             if event.type in OPENING:
                 tab.queue.appendleft(message)
             else:
@@ -307,14 +324,35 @@ class Channels:
 
     def _carry(self, closed_id: str, closed: Tab, successor: str) -> None:
         """Under `_lock`: what was on its way to the closed tab, its push not heard first, goes
-        to the front of its successor's queue, and the handover is kept for `handed_on`."""
+        to the front of its successor's queue — each `standing` only its newest, nothing of the
+        closed tab's own (`OWN_TURN`, jobs) — and the handover is kept for `handed_on`."""
         waiting = list(closed.queue)
         if closed.pushed is not None and not closed.pushed.heard:
             waiting.insert(0, closed.pushed.message)
+        if dead := [m.cause for m in waiting if _died_with(m)]:
+            self.events.emit("channel.not_carried", tab=successor, closed=closed_id, causes=dead)
         carried = [Message(content=m.content, meta={**m.meta, "carried_from": closed_id},
-                           cause=m.cause) for m in waiting]
-        self._tab(successor).queue.extendleft(reversed(carried))
+                           cause=m.cause) for m in waiting if not _died_with(m)]
+        tab = self._tab(successor)
+        tab.queue.extendleft(reversed(carried))
+        for standing in {m.meta.get("standing") for m in tab.queue} - {None}:
+            self._supersede(successor, tab, standing, keep_last=True)
         self._handed_on[successor] = HandedOn(carried=carried, last_turn=list(closed.this_turn))
+
+    def _supersede(self, tab_id: str, tab: Tab, standing: str | None,
+                   keep_last: bool = False) -> None:
+        """Under `_lock`: the queued messages with this `standing` dropped as a newer one is
+        queued; with `keep_last`, all but the newest of them, last in the queue."""
+        if standing is None:
+            return
+        same = [m for m in tab.queue if m.meta.get("standing") == standing]
+        if keep_last:
+            same = same[:-1]
+        if not same:
+            return
+        tab.queue = deque(m for m in tab.queue if not any(m is s for s in same))
+        self.events.emit("channel.superseded", tab=tab_id, standing=standing,
+                         dropped=len(same), causes=[m.cause for m in same])
 
     def handed_on(self, successor: str) -> HandedOn:
         """The handover that `successor` took over in, asked for once by whoever tells of it."""

@@ -1404,6 +1404,20 @@ def cmd_diagnose(args) -> int:
     return 0
 
 
+def cmd_keeper(args) -> int:
+    """The keeper's verbs, run by it over ssh from outside the VM (`raigolmid/faults.py`):
+    its JSON answer on stdout."""
+    client = _client()
+    if args.verb == "seen":
+        result = client.call("keeper_seen", busy_seconds=args.busy)
+    elif args.verb == "take":
+        result = client.call("keeper_take", id=args.id, busy_seconds=args.busy)
+    else:
+        result = client.call("keeper_answer", id=args.id, verdict=args.verdict, words=args.words)
+    print(json.dumps(result, default=str))
+    return 0
+
+
 # --- wiring -------------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1536,6 +1550,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scope", choices=["tab", "machine"],
                    help="default: $RAIGOLMI_SCOPE, which the daemon gives every agent container")
     p.set_defaults(fn=cmd_mcp)
+
+    p = sub.add_parser("keeper", help="the keeper outside the VM: it looked, takes a fault, "
+                       "answers one")
+    verbs = p.add_subparsers(dest="verb", required=True)
+    v = verbs.add_parser("seen", help="the faults open or taken")
+    v.add_argument("--busy", type=float, default=0,
+                   help="seconds it may not look again for: a session")
+    v = verbs.add_parser("take")
+    v.add_argument("id")
+    v.add_argument("--busy", type=float, default=0)
+    v = verbs.add_parser("answer")
+    v.add_argument("id")
+    v.add_argument("verdict", choices=["fixed", "not_fixed"])
+    v.add_argument("words", nargs="?", default="")
+    p.set_defaults(fn=cmd_keeper)
 
     p = sub.add_parser("diagnose")
     p.add_argument("-o", "--output")

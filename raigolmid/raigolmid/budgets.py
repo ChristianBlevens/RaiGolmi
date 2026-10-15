@@ -112,4 +112,5 @@ class Budgets:
                              "content": exceeded_message(
                                  kind, budget, held,
                                  self._toml(self.session.catalogue.bodies[body])),
-                             "meta": {"from": "daemon"}})
+                             # The newest reading replaces one still queued (`channel.py`).
+                             "meta": {"from": "daemon", "standing": f"budget {kind}"}})

@@ -23,6 +23,14 @@ system prompt) with the evidence it gathered. The rules:
 - a launcher stuck in one of its transitional states for `TRANSITION_SECONDS` is failing;
 - the VM unreachable by ssh, raigolmid not active, or a run in progress whose event log has been
   silent for `EVENTS_SILENT_SECONDS`, while the launcher says `running`, is failing;
+- each probe also says the keeper looked (`rai keeper seen`, raigolmid's faults.py), which is how
+  the machine tab knows a keeper is there, and is answered with the faults in RaiGolmi the machine
+  tab filed for it, having paused the tabs each affects. An open fault is failing at once and is
+  its own incident: the keeper takes it (`rai keeper take`), hands the session its text, and
+  answers it (`rai keeper answer`) with the verdict, so the machine tab resumes its tabs:
+  `fixed`; or `not_fixed` with the verdict's words once the incident's sessions are spent (with
+  the alert below) or Claude Code cannot run. The answer ends the incident; one the VM did not
+  take is sent again at each check until it is;
 - any other failure is acted on once it has lasted `FAILING_SECONDS`, and again that long after
   each session, so what a session started (an upgrade, a restart) has time to take;
 - an incident is the stretch from the first failing check to the next healthy, closed or held
@@ -45,6 +53,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -281,8 +290,11 @@ if logs:
         hold = row
 intent = state / "intent.json"
 run = json.loads(intent.read_text()).get("run") if intent.exists() else None
+seen = subprocess.run(["rai", "keeper", "seen"], capture_output=True, text=True)
 print(json.dumps({
     "daemon": daemon,
+    "faults": json.loads(seen.stdout)["faults"] if seen.returncode == 0 else None,
+    "faults_error": None if seen.returncode == 0 else (seen.stdout + seen.stderr).strip()[-2000:],
     "last_event": None if last is None else {"type": last["type"], "age_s": round(time.time() - last["ts"])},
     "held": hold is not None and hold["type"] == "account.limited",
     "hold": hold,
@@ -308,6 +320,23 @@ def probe_vm(paths: Paths) -> dict[str, Any]:
     if status != 0:
         return {"reachable": True, "probe_failed": f"exit {status}: {err.strip()[-2000:]}"}
     return {"reachable": True, **json.loads(out)}
+
+
+def rai_keeper(paths: Paths, args: list[str]) -> dict[str, Any]:
+    """`rai keeper <args>` on the guest: {"ok": True, "result"}, or {"ok": False, "error"} when
+    ssh or raigolmid did not answer or raigolmid refused, which the caller says and outlives."""
+    import paramiko
+    try:
+        client = connect(paths)
+        try:
+            status, out, err = vm_run(client, shlex.join(["rai", "keeper", *args]), SSH_SECONDS)
+        finally:
+            client.close()
+    except (OSError, ValueError, paramiko.SSHException) as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if status != 0:
+        return {"ok": False, "error": f"exit {status}: {(out + err).strip()[-2000:]}"}
+    return {"ok": True, "result": json.loads(out)}
 
 
 # --- Claude Code ----------------------------------------------------------------------------
@@ -398,27 +427,31 @@ ALERT_RECOVERED = ("RaiGolmi is working again", "RaiGolmi is working again. Noth
 class Keeper:
     """The decision loop. Everything that reaches outside it is handed in, so a test runs it
     against doubles: `clock` (epoch seconds), `probe` (the VM), `runner` (one Claude Code
-    session: prompt, id, log -> {verdict, api_error}), `ready` (Claude Code signed in), and
-    `push` (one ntfy alert)."""
+    session: prompt, id, log -> {verdict, api_error}), `ready` (Claude Code signed in), `push`
+    (one ntfy alert), and `tell` (`rai keeper <args>` on the VM -> {ok, result or error})."""
 
     def __init__(self, paths: Paths, clock: Callable[[], float],
                  probe: Callable[[], dict[str, Any]],
                  runner: Callable[[str, str, Path], dict[str, Any]],
                  ready: Callable[[], tuple[bool, str]],
-                 push: Callable[[str, str, str], None]) -> None:
+                 push: Callable[[str, str, str], None],
+                 tell: Callable[[list[str]], dict[str, Any]]) -> None:
         self.paths, self.clock, self.probe = paths, clock, probe
-        self.runner, self.ready, self.push = runner, ready, push
+        self.runner, self.ready, self.push, self.tell = runner, ready, push, tell
         self.state, self.why = "starting", None
         self.incident: dict[str, Any] | None = None
         self.last_incident: dict[str, Any] | None = None
         self.last_alert: dict[str, Any] | None = None
         # The launcher's transitional state and when the keeper first saw it.
         self.transition: tuple[str, float] | None = None
+        # Answers to faults the VM has not yet taken: fault id -> {verdict, words}.
+        self.unanswered: dict[str, dict[str, str]] = {}
         if paths.keeper_json.exists():
             kept = json.loads(paths.keeper_json.read_text(encoding="utf-8"))
             self.incident = kept["incident"]
             self.last_incident = kept["last_incident"]
             self.last_alert = kept["last_alert"]
+            self.unanswered = kept["unanswered"]
 
     # --- seeing ---------------------------------------------------------------------------
     def observe(self, now: float) -> Seen:
@@ -455,6 +488,9 @@ class Keeper:
             return Seen("failing", f"the probe on the VM failed ({vm['probe_failed']})", evidence)
         if vm["daemon"] != "active":
             return Seen("failing", f"raigolmid is {vm['daemon'] or 'unknown'} on the VM", evidence)
+        if vm["faults_error"] is not None:
+            return Seen("failing", f"raigolmid did not answer `rai keeper seen` ({vm['faults_error']})",
+                        evidence)
         if vm["held"]:
             return Seen("held", "the account is on its usage limit")
         last = vm["last_event"]
@@ -462,11 +498,18 @@ class Keeper:
             return Seen("failing", f"a run is in progress and raigolmid has written no event for "
                                    f"{round(last['age_s'] / 60)} minutes (the last: {last['type']})",
                         evidence)
+        faults = [f for f in vm["faults"] if f["id"] not in self.unanswered]
+        if faults:
+            fault = faults[0]
+            return Seen("failing", f"the machine tab reported a fault in RaiGolmi: {fault['title']}",
+                        {**evidence, "fault": fault}, act_now=True)
         return Seen("healthy")
 
     # --- acting ---------------------------------------------------------------------------
     def check(self) -> None:
         now = self.clock()
+        if self.unanswered:
+            self._send_answers()
         seen = self.observe(now)
         self.why = seen.why
         if seen.kind in ("healthy", "closed", "held"):
@@ -489,11 +532,17 @@ class Keeper:
         self.incident = None
 
     def _fail(self, seen: Seen, now: float) -> None:
+        fault = (seen.evidence or {}).get("fault")
+        same = (self.incident["fault"] or {}).get("id") if self.incident is not None else None
+        if self.incident is not None and same != (fault or {}).get("id"):
+            # A fault is its own incident, with its own sessions and its own answer.
+            self.last_incident = {**self.incident, "ended": iso(now), "ended_as": "superseded"}
+            self.incident = None
         if self.incident is None:
             logger.warning("failing: %s", seen.why)
             self.incident = {"since": now, "reason": seen.why, "evidence": seen.evidence,
                              "act_at": now + FAILING_SECONDS, "start_requested_at": None,
-                             "sessions": [], "alerted_at": None}
+                             "sessions": [], "alerted_at": None, "fault": fault}
         incident = self.incident
         incident["reason"], incident["evidence"] = seen.why, seen.evidence
         if seen.kind == "gone" and incident["start_requested_at"] is None:
@@ -513,6 +562,9 @@ class Keeper:
         if not ready:
             title, message = ALERT_CANNOT_RUN
             self._alert(title, message.format(why=why), now)
+            if fault is not None:
+                self._answer(fault["id"], "not_fixed", f"the keeper's Claude Code cannot run: {why}",
+                             now)
             return
         self._session(incident, now)
 
@@ -521,6 +573,16 @@ class Keeper:
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
         log = self.paths.sessions / f"{stamp}.log"
         notes = self.paths.sessions / f"{stamp}.md"
+        fault = incident["fault"]
+        # Said to the daemon, so the machine tab knows a keeper is there while its loop does
+        # not look; a fault is taken, and a fault the daemon will not let be taken gets no session.
+        told = self.tell([*(["take", fault["id"]] if fault else ["seen"]),
+                          "--busy", str(SESSION_SECONDS)])
+        if not told["ok"]:
+            logger.warning("the VM did not take the keeper's word before a session: %s",
+                           told["error"])
+            if fault is not None:
+                return
         self.state = "repairing"
         self.report(now)
         logger.info("session %s on: %s (log %s)", session_id, incident["reason"], log)
@@ -535,6 +597,35 @@ class Keeper:
         if outcome["api_error"] is not None:
             title, message = ALERT_CANNOT_RUN
             self._alert(title, message.format(why="its account was refused"), ended)
+        if fault is None:
+            return
+        fixed = outcome["verdict"] == FIXED
+        spent = len(incident["sessions"]) >= SESSIONS_PER_INCIDENT
+        if fixed or spent or outcome["api_error"] is not None:
+            if not fixed and outcome["api_error"] is None:
+                self._alert(*ALERT_NOT_FIXED, ended)
+            words = (outcome["verdict"].removeprefix(VERDICT).strip()
+                     .removeprefix("not fixed:").strip() or outcome["verdict"])
+            self._answer(fault["id"], "fixed" if fixed else "not_fixed", "" if fixed else words,
+                         ended)
+
+    def _answer(self, fault_id: str, verdict: str, words: str, now: float) -> None:
+        """The fault's answer to the machine tab, which ends its incident."""
+        self.unanswered[fault_id] = {"verdict": verdict, "words": words}
+        self.last_incident = {**self.incident, "ended": iso(now), "ended_as": f"answered {verdict}"}
+        self.incident = None
+        self._send_answers()
+
+    def _send_answers(self) -> None:
+        for fault_id, answer in list(self.unanswered.items()):
+            told = self.tell(["answer", fault_id, answer["verdict"],
+                              *([answer["words"]] if answer["words"] else [])])
+            if told["ok"]:
+                logger.info("answered fault %s: %s", fault_id, answer["verdict"])
+                del self.unanswered[fault_id]
+            else:
+                logger.warning("fault %s's answer did not reach the VM; sent again next check: %s",
+                               fault_id, told["error"])
 
     def prompt(self, incident: dict[str, Any], session_id: str, notes: Path) -> str:
         qemu_tail = ""
@@ -550,6 +641,10 @@ class Keeper:
             f"The last lines of windows/qemu.log:\n{qemu_tail}\n\n"
             + (f"Earlier keeper sessions on this incident did not fix it:{earlier}\n"
                "Read their logs and notes before acting.\n\n" if earlier else "")
+            + (f"The machine tab paused the tabs this fault affects "
+               f"({', '.join(incident['fault']['affects']) or 'none named'}) until it is "
+               "answered: your verdict line is its answer, and `fixed` resumes them.\n\n"
+               if incident["fault"] else "")
             + f"You are session {session_id}. Write what you find and do into {notes}. "
             f"Get the machine running again, then find the root cause. End with the verdict line.")
 
@@ -579,7 +674,8 @@ class Keeper:
     def report(self, now: float) -> None:
         write_json(self.paths.keeper_json, {
             "at": iso(now), "state": self.state, "why": self.why, "incident": self.incident,
-            "last_incident": self.last_incident, "last_alert": self.last_alert})
+            "last_incident": self.last_incident, "last_alert": self.last_alert,
+            "unanswered": self.unanswered})
 
 
 def loop(paths: Paths) -> int:
@@ -587,7 +683,7 @@ def loop(paths: Paths) -> int:
     paths.inbox.mkdir(parents=True, exist_ok=True)
     keeper = Keeper(paths, time.time, lambda: probe_vm(paths),
                     lambda prompt, sid, log: run_claude(paths, prompt, sid, log),
-                    claude_ready, push_ntfy)
+                    claude_ready, push_ntfy, lambda args: rai_keeper(paths, args))
     logger.info("keeping %s, every %d s", paths.work, CHECK_SECONDS)
     while True:
         keeper.check()

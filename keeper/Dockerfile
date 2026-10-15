@@ -4,9 +4,6 @@
 # The machine's own suite runs on CPython 3.14, so the keeper's targeted tests do too.
 FROM python:3.14-slim-trixie
 
-ARG TZ
-ENV TZ="$TZ"
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl gnupg2 wget git gh jq openssh-client procps less \
   && apt-get clean && rm -rf /var/lib/apt/lists/*

@@ -525,6 +525,15 @@ def build_server(client: ApiClient):
     def report_run(report: str) -> dict[str, Any]:
         return call("report_run", report=report)
 
+    @tool(server, description="Machine tab only: a bug in RaiGolmi itself, for the keeper — "
+                             "the Claude Code agent outside the VM that fixes RaiGolmi. "
+                             "`pause` the tabs it affects first and name them in `affects`; "
+                             "`title` is one line, `body` the error as seen and what it stops. "
+                             "You are told the keeper's answer, and `resume` them when it says "
+                             "the fix is in. The answer says when no keeper is reachable.")
+    def report_fault(title: str, body: str, affects: list[str] | None = None) -> dict[str, Any]:
+        return call("report_fault", title=title, body=body, affects=affects)
+
     @tool(server, description="Declare your commits against your project's principles doc "
                              "(`[principles] doc` in its body.toml), as the end of your turn "
                              "asks once HEAD has moved. `commits` is a list of {commit, for, "

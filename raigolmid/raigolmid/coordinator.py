@@ -7,7 +7,9 @@ carries `deliver`, which its channel holds until its turn ends (`channel.py`):
 - a managed tab's turn ending, with its context use against the budget;
 - a question the judge referred from a managed tab (`question.referred`), which the machine
   tab answers with `answer_question`; the same for a tab handed over while asking, and, when a
-  machine tab opens, everything it has not heard because it was not there to hear it.
+  machine tab opens, everything it has not heard because it was not there to hear it;
+- the keeper's answer to a fault in RaiGolmi the machine tab filed with `report_fault`
+  (`faults.py`), so it resumes the tabs it paused for it.
 
 The machine tab's own verbs (`methods`) are refused to every other tab: the views of a
 managed tab, a directive sent to one, and a fresh conversation for it.
@@ -69,6 +71,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from . import api, documents, history, limits
 from .channel import DIRECTED, Channels, HandedOn
 from .events import Event, EventLog
+from .faults import Faults, answer_message
 from .intent import Run, TabIntent
 from .library import Library, run_id, save_from_tab
 from .questions import PERMISSIONS_ABSENT, Questions, parse_permissions
@@ -88,6 +91,10 @@ DIRECTION_EXCERPT = 300
 # It sets how soon a stalled run is recovered, never whether it is.
 IDLE_SECONDS = 20 * 60
 DIRECTION = "From the machine tab, which manages this tab for the user:\n\n"
+# What a turn-end notice calls the messages on their way to a tab; any other is named by its
+# event, which `managed_tab`'s `on_its_way` lists the same way.
+ON_ITS_WAY = {DIRECTED: "your direction", "message.sent": "a message from another tab",
+              "message.answered": "the answer to its message", "face.asked": "the user's words"}
 
 
 def _said(row: dict[str, Any]) -> str:
@@ -210,6 +217,23 @@ TIME_UP = "coordinator.time_up"
 RESTART_ASKED = "coordinator.restart_asked"
 REPORT_ASKED = "coordinator.report_asked"
 IDLE_WOKEN = "coordinator.idle_woken"
+
+
+def on_its_way(channels: Channels, questions: Questions, tab_id: str) -> list[str]:
+    """What a tab whose turn ended is not done for, read now: what is on its way to it,
+    the question or permission it put, the reply its own message waits on."""
+    channel = channels.state(tab_id)
+    causes = [m["cause"] for m in channel["queued"]]
+    if channel["pushed"] is not None and not channel["pushed"]["heard"]:
+        causes.insert(0, channel["pushed"]["cause"])
+    said = [f"{causes.count(c)} × {ON_ITS_WAY.get(c, 'the notice ' + c)}"
+            for c in dict.fromkeys(causes)]
+    if (asked := questions.tab_state(tab_id)) is not None:
+        said.append(f"its question or permission ({asked})")
+    said += [f"a reply to its message {m['id']} to {m['to']}"
+             for m in channels.messages.items()
+             if m["state"] == "open" and m["sender"] == tab_id]
+    return said
 
 
 def _documents_ready() -> str:
@@ -364,6 +388,7 @@ class Coordinator:
         self._ended: dict[str, tuple[bool, str | None]] = {}
         self._woken = self._wake_turn = False
         self._limited = False
+        self.faults = Faults(session.paths, events)
 
     def run(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -388,6 +413,9 @@ class Coordinator:
             self._turn(event)
         if event.type == "run.ended":
             self._ask_report()
+            return
+        if event.type == "fault.answered":
+            self._fault_answered(self.faults.get(event.data["id"]))
             return
         if event.type == "channel.heard" and event.data["cause"] == REPORT_ASKED:
             self.session.report_asked()
@@ -437,8 +465,10 @@ class Coordinator:
             if error is None and tab.handover == "ready" and self._time_up(tab, time.time()):
                 self._give_back(tab)
                 return
+            # Only the newest turn end of a tab is where it stands (`channel.py`, `standing`).
             self._to_machine(event.tab, "coordinator.idle", self._idle_message(
-                event.tab, tab.body, event.data["done"], error), why="idle")
+                event.tab, tab.body, event.data["done"], error, event.ts), why="idle",
+                standing=f"{event.tab} turn end")
         elif event.type == "question.referred" and event.data["kind"] == "question":
             self._question(event.data["id"])
         elif event.type == "tab.managed":
@@ -454,6 +484,8 @@ class Coordinator:
         run = self.session.intent.run
         if run is not None and run.ended is not None:
             self._ask_report()
+        for fault in self.faults.untold():
+            self._fault_answered(fault)
 
     def _turn(self, event: Event) -> None:
         """A turn of the machine tab's or a managed tab's starting or ending, for the idle
@@ -721,13 +753,22 @@ class Coordinator:
                          question_message(item, tab), why="question", question=id)
 
     def _idle_message(self, tab_id: str, body: str | None, done: bool | None,
-                      error: str | None = None) -> str:
+                      error: str | None = None, at: float | None = None) -> str:
         """`done` None: how its last turn ended is not known, having ended before the daemon
-        started."""
-        ended = ("is idle; its last turn ended before the daemon started" if done is None
-                 else "is done" if done else "ended its turn and waits on something on its way"
-                 if error is None else f"had its turn cut off by an API error ({error}) that "
-                 "continuing will not fix; the user is told")
+        started. A turn not done names what it waits on as it stands now; with nothing left
+        that it waits on, it only ended."""
+        if done is None:
+            ended = "is idle; its last turn ended before the daemon started"
+        elif error is not None:
+            ended = (f"had its turn cut off by an API error ({error}) that continuing will not "
+                     "fix; the user is told")
+        elif done:
+            ended = "is done"
+        else:
+            waits = on_its_way(self.channels, self.questions, tab_id)
+            ended = "ended its turn" + (f" and waits on {'; '.join(waits)}" if waits else "")
+        if at is not None:
+            ended += f". That turn ended at {clock(at)}"
         if self.session.intent.tabs[tab_id].handover == "ready":
             start = self.session.session_start(tab_id)
             size = (f"It is {len(start.encode())} bytes; hold it to any cap the project sets."
@@ -751,6 +792,14 @@ class Coordinator:
             return
         self.events.emit(event, tab=machine.tab_id, about=about, deliver={
             "content": content, "meta": {"tab": about, **meta}})
+
+    def _fault_answered(self, fault: dict[str, Any]) -> None:
+        """The keeper's answer to a fault the machine tab reported (`faults.py`)."""
+        machine = self.session.intent.machine_tab()
+        self._to_machine(fault["id"], "coordinator.fault_answered", answer_message(fault),
+                         why="fault", verdict=fault["status"])
+        if machine is not None:
+            self.faults.told(fault["id"], machine.tab_id)
 
 
 def methods(session: "Session", questions: Questions, channels: Channels,
@@ -800,6 +849,22 @@ def methods(session: "Session", questions: Questions, channels: Channels,
     def report_run(report: str) -> dict[str, Any]:
         return session.report_run(caller, report, record())
 
+    def report_fault(title: str, body: str, affects: list[str] | None = None) -> dict[str, Any]:
+        """A bug in RaiGolmi itself, filed for the keeper outside the VM (`faults.py`)."""
+        for tab in affects or ():
+            verbs._managed(tab)
+        store = Faults(session.paths, session.events)
+        fault = store.report(caller, title, body, affects or [])
+        reachable, when = store.keeper_reachable(time.time())
+        if reachable:
+            return {"fault": fault["id"], "keeper": "reachable", "next": (
+                f"Filed; {when}, and takes it at its next look. You are told its answer: "
+                "`resume` the tabs you paused for it when it says the fix is in.")}
+        return {"fault": fault["id"], "keeper": "unreachable", "next": (
+            f"Filed, but no keeper is reachable ({when}): write it up for the user in "
+            "/transfer/out as before. A keeper that comes back takes it, and you are told "
+            "its answer.")}
+
     def document_save(id: str, text: str, version: str | None = None) -> dict[str, Any]:
         """Every tab reads the catalog (`library.served_to_tabs`); the machine's documents are
         the machine tab's to change, through the same checks as the user's own save."""
@@ -815,6 +880,7 @@ def methods(session: "Session", questions: Questions, channels: Channels,
                                            "answer_question", "restart_fresh", "hold",
                                            "pause", "resume")),
         ("report_run", report_run),
+        ("report_fault", report_fault),
         # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
         ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)),
         # What the tabs it manages declared against their principles (`principles.py`).
@@ -906,7 +972,8 @@ class Verbs:
         """One managed tab closer: its `SESSION-START.md`, which its next conversation starts
         from — its size always, its text unless `session_start` is false — and the tails of
         this conversation's thought doc and transcript; and the directions from the machine tab
-        still on their way to it, so a machine tab that took over never sends one twice."""
+        still on their way to it, so a machine tab that took over never sends one twice, beside
+        everything its turn's end waits on (`on_its_way`)."""
         row = next((t for t in self.managed() if t["tab"] == tab), None)
         if row is None:
             raise SessionError(f"{tab} is not a tab you manage")
@@ -915,6 +982,7 @@ class Verbs:
         channel = self.channels.state(tab)
         return {**row, "directions_queued": [m["content"] for m in channel["queued"]
                                              if m["cause"] == DIRECTED],
+                "on_its_way": on_its_way(self.channels, self.questions, tab),
                 "session_start": start if session_start else None,
                 "session_start_bytes": len(start.encode()) if start is not None else None,
                 "thoughts_tail": thoughts_tail(home, lines),
