@@ -17,7 +17,9 @@ opens next when none is open; one handed over is carried to its successor by the
 
 A keeper is reachable while it looked within `SEEN_SECONDS`, or is in a session it said may last
 longer (`busy_seconds`), since its loop does not look while a session runs. `report_fault` says
-when none is, so the machine tab falls back to its report in /transfer/out.
+when none is, so the machine tab falls back to its report in /transfer/out; and a fault still
+waiting when its keeper stops being reachable is said to the machine tab once the same way
+(`stranded`), since the tabs it paused for it would otherwise wait on an answer nobody gives.
 """
 from __future__ import annotations
 
@@ -78,7 +80,7 @@ class Faults:
                        f"{uuid.uuid4().hex[:6]}",
                  "title": title.strip(), "body": body.strip(), "affects": list(affects),
                  "reported_by": tab, "reported_at": now, "status": "open", "taken_at": None,
-                 "answered_at": None, "answer": None, "told": None}
+                 "answered_at": None, "answer": None, "told": None, "stranded": None}
         with _lock:
             self._save(fault)
         self.events.emit("fault.reported", tab=tab, id=fault["id"], title=fault["title"],
@@ -145,6 +147,25 @@ class Faults:
         """Answered while no machine tab was open to hear it."""
         return [f for f in self.all() if f["status"] in VERDICTS and f["told"] is None]
 
+    def stranded(self, now: float) -> tuple[list[dict[str, Any]], str]:
+        """The faults still waiting while no keeper is reachable that the machine tab has not
+        been told of, and when the keeper last looked."""
+        reachable, when = self.keeper_reachable(now)
+        if reachable:
+            return [], when
+        return [f for f in self.all() if f["status"] in WAITING and f["stranded"] is None], when
+
+    def told_stranded(self, id: str, machine_tab: str) -> None:
+        with _lock:
+            fault = self.get(id)
+            fault["stranded"] = machine_tab
+            self._save(fault)
+
+
+def _not_fixed(tabs: str) -> str:
+    return (f"Write it up for the user in /transfer/out as before. Whether the tabs you paused "
+            f"for it ({tabs}) can go on around it is yours to decide; `resume` each that can.")
+
 
 def answer_message(fault: dict[str, Any]) -> str:
     """The keeper's answer as the machine tab is told it."""
@@ -153,6 +174,12 @@ def answer_message(fault: dict[str, Any]) -> str:
         return (f"The keeper fixed fault {fault['id']} ({fault['title']}): the fix is in. "
                 f"`resume` the tabs you paused for it ({tabs}).")
     return (f"The keeper could not fix fault {fault['id']} ({fault['title']}): "
-            f"{fault['answer']}\n\nWrite it up for the user in /transfer/out as before. "
-            f"Whether the tabs you paused for it ({tabs}) can go on around it is yours to "
-            "decide; `resume` each that can.")
+            f"{fault['answer']}\n\n" + _not_fixed(tabs))
+
+
+def stranded_message(fault: dict[str, Any], when: str) -> str:
+    """A fault still waiting with no keeper reachable, as the machine tab is told it."""
+    tabs = ", ".join(fault["affects"]) or "none named"
+    return (f"From the daemon: no keeper is reachable for fault {fault['id']} "
+            f"({fault['title']}) — {when} — so it is not being fixed. " + _not_fixed(tabs)
+            + " A keeper that comes back takes it, and you are told its answer.")

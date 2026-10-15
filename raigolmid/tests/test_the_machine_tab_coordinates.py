@@ -168,14 +168,16 @@ def test_a_tab_handed_over_while_asking_puts_its_question_to_the_machine_tab(h):
     assert asked["meta"]["question"] == id
 
 
-def test_a_new_machine_tab_is_told_what_is_still_pending(h):
+def test_a_new_machine_tab_is_told_the_run_and_what_is_still_pending(h):
     m = Machine(h)
     m.tab(MACHINE)["manage"](tab=BODY)
     m.referred(BODY)
     h.session.close_tab(MACHINE)
     new = h.session.intent.machine_tab().tab_id
     assert new != MACHINE
-    [asked] = m.queued(new)
+    [opening, asked] = m.queued(new)
+    assert "opened afresh while a run you manage" in opening["content"]
+    assert "call `managed`" in opening["content"] and "/work/run.md" in opening["content"]
     assert asked["meta"]["tab"] == BODY
 
 
@@ -334,6 +336,39 @@ def test_the_machine_tab_at_its_budget_while_managing_confirms_then_hands_on_to_
     assert not (new_home / "thoughts.md").exists()
     told = m.queued(machine.tab_id)[-1]["content"]
     assert "/work/SESSION-START.md" in told and "parser" not in told
+
+
+def test_a_tab_without_a_stop_is_never_held(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    with pytest.raises(SessionError, match="released only by the user, who is away"):
+        m.tab(MACHINE)["hold"](tab=BODY, situation="which CLI library?")
+    assert h.session.intent.tabs[BODY].held is None
+
+
+def test_a_successor_that_does_not_start_is_the_janitors_and_the_run_goes_on(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    upcoming = f"tab-{h.session.intent.next_tab}"
+    (h.session.agents.home(upcoming) / ".claude").mkdir(parents=True)  # its start refuses it
+    started = m.tab(MACHINE)["restart_fresh"](tab=BODY, documents_ready=True)
+    assert started["tab"] == upcoming and "did not start" in started["next"]
+    successor = h.session.intent.tabs[upcoming]
+    assert (successor.status, successor.managed) == ("crashed", True)
+    assert h.session.intent.run.ended is None, "the run is not ended by it"
+    [unfixable] = [e for e in h.events_of("container.unfixable") if e.tab == upcoming]
+    assert "container.unfixable" in TAKEN and "did not start" in unfixable.data["message"]
+    assert [q["cause"] for q in m.queued(upcoming)] == ["coordinator.restarted"], \
+        "its opening waits for it"
+
+
+def test_a_direction_follows_every_handover_to_the_open_tab(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    first = m.tab(MACHINE)["restart_fresh"](tab=BODY, documents_ready=True)["tab"]
+    second = m.tab(MACHINE)["restart_fresh"](tab=first, documents_ready=True)["tab"]
+    directed = m.tab(MACHINE)["direct"](tab=BODY, content="run the tests")
+    assert (directed["tab"], directed["ended"]) == (second, BODY)
 
 
 def test_a_tab_stops_where_the_user_said_and_is_held_until_they_answer(h):
@@ -723,6 +758,23 @@ def test_a_run_gone_idle_wakes_the_machine_tab_once_with_where_each_tab_stands(h
     m.pump()
     m.coordinator.tick(time.time() + 2 * IDLE_SECONDS)
     assert len(_wakes(m)) == 1, "a run whose every tab is held waits on the user"
+
+
+def test_a_wake_that_leaves_the_run_idle_wakes_it_again_after_twice_the_wait(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.pump()
+    m.coordinator.tick(time.time() + IDLE_SECONDS + 1)
+    assert len(_wakes(m)) == 1
+    m.channels._tabs[MACHINE].queue.clear()
+    m.tab(MACHINE)["agent_activity"](busy=True)     # the wake's own turn: nothing to do
+    m.tab(MACHINE)["agent_activity"](busy=False)
+    m.pump()
+    ended = time.time()
+    m.coordinator.tick(ended + IDLE_SECONDS + 1)
+    assert _wakes(m) == [], "the next wake waits twice as long"
+    m.coordinator.tick(ended + 2 * IDLE_SECONDS + 1)
+    assert len(_wakes(m)) == 1, "a run left idle is never left for good"
 
 
 def test_the_machine_tab_idle_with_a_question_waiting_on_it_is_woken(h):

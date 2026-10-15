@@ -80,6 +80,23 @@ def test_a_timed_limit_ends_early_when_the_plan_answers_allowed(m):
     assert m.h.session.status()["plan"]["windows"]["7d"]["used"] == 0.0
 
 
+def test_the_probe_alone_is_pushed_through_a_timed_hold(m):
+    """The probe's turn is what finds an early lift, so it cannot wait out the reset."""
+    m.cut(BODY, "rate_limit")
+    now = time.time()
+    resets = now + 40 * 3600
+    m.h.events.emit("credproxy.limited", owner=BODY, path="/v1/messages",
+                    resets_at=resets, said=str(resets))
+    m.h.events.emit("coordinator.directed", tab=BODY, deliver={"content": "go on",
+                                                                "meta": {"from": "machine"}})
+    m.pump()
+    assert m.channels.take(BODY) is None
+    m.limits.tick(now + PROBE_SECONDS + 1)
+    pushed = m.channels.take(BODY)
+    assert pushed is not None and "usage limit" in pushed["content"]
+    assert m.contents(BODY) == ["go on"], "every other push still waits"
+
+
 def test_the_plan_view_says_where_each_window_is_headed():
     now = 1_000_000.0
     view = plan_view({"status": "allowed", "read_at": now, "windows": {
@@ -184,3 +201,14 @@ def test_a_reboot_tells_the_machine_tab_and_continues_the_managed_tab_cut_mid_tu
     assert f"Tab {BODY} (myapi) was mid-turn" in told and "Your own turn" in told
     assert [e.tab for e in h.events_of("limits.continued")] == [BODY], \
         "the machine tab's own continuing is in what it is told"
+
+
+def test_the_machine_tab_restarted_mid_turn_while_it_manages_is_told_to_carry_it_on(m):
+    activity.record(m.h.session.agents.home(MACHINE), busy=True)
+    list(m.h.runtime.events())
+    m.h.runtime.kill(naming.agent(MACHINE), exit_code=1)
+    m.h.deliver_runtime_events()
+    m.pump()
+    [told] = m.contents(MACHINE)
+    assert "Your own turn was cut off by it: carry it on" in told
+    assert [e.tab for e in m.h.events_of("limits.continued")] == [], "told once, by the run"

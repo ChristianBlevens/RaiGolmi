@@ -16,7 +16,8 @@ only on positive evidence: the turn it starts, whose prompt hook reports the pus
 push. One not heard within `REPUSH_SECONDS` is pushed again, same seq; after
 `PUSHES_BEFORE_DEAF` unheard pushes it is said as `channel.unheard`, and nothing more goes
 into that channel until the tab's session comes up again, which puts it back at the front.
-Nothing new is pushed while the account's usage limit holds (`account.limited`, `limits.py`).
+Nothing new is pushed while the account's usage limit holds (`account.limited`, `limits.py`)
+but the usage-limit probe (`PROBE` in its meta), whose turn is what asks whether it still holds.
 
 Its callers read it synchronously — a turn ending asks whether a message is on its way before
 the tab is closed as done — so every read first catches up on the events already emitted, and
@@ -87,6 +88,8 @@ OPENING = frozenset({"coordinator.continued", "coordinator.restarted",
 # What speaks of the closed tab's own conversation or sandbox, both ended by its handover: its
 # jobs, which stopped with its sandbox (`Session._stop_released`), and a nudge to continue a
 # turn of its own. Never carried to its successor, which starts fresh on a sandbox of its own.
+# The meta key marking the usage-limit probe's continue (`limits.py`), pushed through the hold.
+PROBE = "probe"
 OWN_TURN = frozenset({"limits.continued", "remote_control.continued", "tab.unstuck"})
 
 
@@ -428,17 +431,25 @@ class Channels:
                 self.events.emit("channel.repushed", tab=tab_id, seq=pushed.seq,
                                  cause=pushed.message.cause, pushes=pushed.pushes)
                 return self._item(pushed)
-            if not idle or not tab.session_up or not tab.queue or time.time() < self._hold_until:
+            if not idle or not tab.session_up or not tab.queue:
                 return None
-            if tab.queue[0].cause == FAILURE and tab.took_failure and not tab.open_questions:
+            if time.time() < self._hold_until:
+                probe = next((m for m in tab.queue if m.meta.get(PROBE)), None)
+                if probe is None:
+                    return None
+                tab.queue.remove(probe)
+                message = probe
+            elif tab.queue[0].cause == FAILURE and tab.took_failure and not tab.open_questions:
                 if not tab.fresh_asked:
                     tab.fresh_asked = True
                     self._save()
                     self.events.emit("janitor.fresh_conversation", tab=tab_id,
                                      failure=tab.queue[0].meta.get("failure"))
                 return None
+            else:
+                message = tab.queue.popleft()
             self._seq += 1
-            tab.pushed = Pushed(seq=self._seq, message=tab.queue.popleft(), at=time.time())
+            tab.pushed = Pushed(seq=self._seq, message=message, at=time.time())
             self._save()
             self.events.emit("channel.pushed", tab=tab_id, seq=self._seq,
                              cause=tab.pushed.message.cause)

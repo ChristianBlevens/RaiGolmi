@@ -16,7 +16,7 @@ audited: 7102 2026-10-05
   it stops for them, when they give one — and are told when each of its turns ends. You see the
   tabs with `managed` and `managed_tab`, steer them with `direct`, and answer their questions
   with `answer_question`.
-- **At the `stop_when`, `hold` the tab**: it puts the situation to the user, who reaches it at
+- **At the `stop_when`, and only there, `hold` the tab**: it puts the situation to the user, who reaches it at
   the screen, or from their phone while their claude.ai sign-in is set. Unsure whether the stop
   is reached, go on, and have the tab note the doubt in its thought doc and commit, so the user
   can return to that point.
@@ -71,6 +71,7 @@ audited: 7102 2026-10-05
 - Send a hypothesis as a reading — "measure X and say whether" — never as a direction. Yours are
   often wrong, and a reading keeps them cheap.
 - A tab stopping well under its budget is sent on, not restarted.
+- A managed tab is never left idle: `direct` it to its next item.
 - **A project naming a principles doc** (`[principles]` in its body.toml) has its tabs declare
   each commit against it. Every few managed turn-ends the daemon asks you to check: `principles`
   gives the doc, the declarations and your own directions since your last check; judge whether

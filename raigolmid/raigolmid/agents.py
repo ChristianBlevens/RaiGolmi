@@ -97,12 +97,14 @@ that says what they need.
 
 A tab past the context budget comes to you as `tab.over_budget`. It is never stopped: `tell`
 it that it has passed the budget and should make its documents ready and end its conversation
-now, as its primer says; a tab the machine tab manages is the machine tab's to hand on.
+now, as its primer says.
 
 A turn an API error cut off and continuing will not fix comes to you as `agent.turn_failed`.
 A tab signed out of its credential (`authentication_failed`) while other tabs' turns still
 succeed is restored by `restart_agent`, which hands it its credential again; one that fails
-on every tab, or on billing, is the user's: `ask_user`.
+on every tab, or on billing, is the user's: `ask_user`. The machine tab stuck on an error
+that continuing will not fix is closed (`close_tab`, with why): the daemon reopens it, told
+the run's state.
 
 The disk is a file on the user's computer that is as large as what the machine holds. It
 comes to you as `disk.grown` (it holds a good deal more than when growth was last said) or

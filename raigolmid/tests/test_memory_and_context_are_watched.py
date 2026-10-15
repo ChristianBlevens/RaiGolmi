@@ -74,17 +74,30 @@ def test_a_kill_for_want_of_memory_and_a_short_machine_are_said(h, monkeypatch):
     assert len(h.events_of("memory.short")) == 1
 
 
-def test_a_conversation_past_the_context_budget_is_said_once(h):
-    tab = h.tab("myapi")
+def _past_budget(h, tab: str) -> None:
     home = h.session.agents.home(tab)
     converse(home)
     with (home / ".claude" / "projects" / "-work" / "s1.jsonl").open("a") as out:
         out.write(json.dumps({"type": "assistant", "message": {"content": [], "usage": {
             "input_tokens": 10, "cache_read_input_tokens": 500_000}},
             "entrypoint": "cli", "sessionId": "s1", "cwd": "/work"}) + "\n")
+
+
+def test_a_conversation_past_the_context_budget_is_said_once(h):
+    tab = h.tab("myapi")
+    _past_budget(h, tab)
     watch = ContextWatch(h.session, h.events)
     watch.tick()
     watch.tick()
     [over] = h.events_of("tab.over_budget")
     assert over.tab == tab and over.data["tokens"] == 500_010
     assert h.session.intent.tabs[tab].status == "running", "never stopped"
+
+
+def test_a_hands_off_tab_past_its_budget_is_left_to_the_coordinator(h):
+    """The janitor's word would end a managed tab before the machine tab reviewed its docs."""
+    tab = h.tab("myapi")
+    h.session.manage(tab, True)
+    _past_budget(h, tab)
+    ContextWatch(h.session, h.events).tick()
+    assert h.events_of("tab.over_budget") == []

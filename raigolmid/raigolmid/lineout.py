@@ -14,12 +14,20 @@ The causes, each where the daemon already knows it:
   it, or there never was one) — no tab can work at all;
 - **the disk is full**: little free (`disk.short`), the collection run for it
   (`garbage.collected`, which `garbage.py` runs on `disk.short`), and still little free;
-- **the API refuses every tab for a day**: a turn ended on an API error continuing will not fix
-  (`agent.turn_failed`), and no turn of any tab has ended without one since, for `REFUSED_FOR`.
+- **the API refuses every tab for a day**: turns end on an API error continuing will not fix
+  (`agent.turn_failed`), the last within `REFUSED_RECENTLY`, and no turn of any tab has ended
+  without one, for `REFUSED_FOR` of time this daemon saw while the account was not held at its
+  usage limit (`account.limited` to `account.resumed`): a held account is waiting, not refused,
+  and time the daemon was down, or the VM suspended, is time nothing was tried;
+- **the claude.ai sign-in is ending**: its refresh token does not slide with renewals, so it
+  ends on the date it was issued with (`refreshTokenExpiresAt`), and only the owner signing in
+  again on the machine brings a new one (`claude_login.py`). Within `LOGIN_LEAD` of that end it
+  is said once per end; the run goes on past it on the agent credential (`remotecontrol.py`),
+  but Remote Control and answering from the phone stop.
 
 Windows being down, or this VM, cannot be said from inside it. When each cause last went out,
-and since when the API has refused, are kept in `Paths.line_out`, so a restart neither resends
-nor forgets.
+how long the API has refused and when it last did, and which sign-in end was said, are kept in
+`Paths.line_out`, so a restart neither resends nor forgets.
 """
 from __future__ import annotations
 
@@ -50,12 +58,24 @@ TOPIC = re.compile(r"[A-Za-z0-9_-]{1,64}")
 DAY = 24 * 3600.0
 # How long every turn has been refused before it is the line out's; a day, the owner's word.
 REFUSED_FOR = DAY
+# A refusal older than this is not the API refusing now: a stalled run's machine tab is woken at
+# least every four hours (`coordinator.IDLE_CEILING_SECONDS`), so a refusing API is met more
+# often than this while anything is being tried.
+REFUSED_RECENTLY = 6 * 3600.0
+# A gap between ticks longer than this is time the daemon did not see (stopped, or the VM
+# suspended); a tick is a second apart, a push that hangs at most `SEND_TIMEOUT`.
+SEEN_GAP = 120.0
+# How much refused time a restart may forget: the record is written this often while it grows.
+SAVE_SECONDS = 600.0
+# How long before the sign-in ends the owner is told: room for a weekend away and a day to get
+# to the machine, which is the only place a new sign-in can be given.
+LOGIN_LEAD = 3 * DAY
 # A push that did not go is tried again this often while its cause holds; it sets how soon,
 # never whether.
 RETRY_SECONDS = 600.0
 SEND_TIMEOUT = 30.0
 
-NOTHING_TO_DO = "Nothing to do; the owner will fix it when back."
+NOTHING_TO_DO = "Nothing to do for you; the owner will fix it."
 # cause -> (title, message). Titles stay ASCII: they travel as an HTTP header.
 MESSAGES = {
     "no_credential": (
@@ -70,6 +90,11 @@ MESSAGES = {
         "RaiGolmi has stopped: Claude refuses it",
         "Claude's service has refused the home computer's AI for a whole day, so no work is "
         "getting done. " + NOTHING_TO_DO),
+    "login_ending": (
+        "RaiGolmi needs the owner to sign in to Claude again",
+        "The home computer's AI will lose its sign-in to Claude on {ends}. Before then the owner "
+        "must sign in to Claude again on the home computer itself. If not, its work goes on, but "
+        "it can no longer be watched or answered from the phone. " + NOTHING_TO_DO),
 }
 
 
@@ -107,7 +132,14 @@ class LineOut:
         self._sub = events.subscribe()
         kept = load_json(paths.line_out, "the line out's record") or {}
         self._sent: dict[str, float] = dict(kept.get("sent", {}))
-        self._refused_since: float | None = kept.get("refused_since")
+        # Seconds of seen, unheld time every turn has been refused, and when one last was.
+        self._refused_for: float | None = kept.get("refused_for")
+        self._refused_at: float = kept.get("refused_at", 0.0)
+        self._saved_for = self._refused_for or 0.0
+        # The sign-in end (`refreshTokenExpiresAt`, seconds) already said.
+        self._login_said: float | None = kept.get("login_said")
+        self._limited = False
+        self._ticked: float | None = None
         self._short = False
         # Causes whose push did not go: cause -> when it is tried again.
         self._pending: dict[str, float] = {}
@@ -120,16 +152,21 @@ class LineOut:
 
     def on_event(self, event: Event) -> None:
         if event.type == "agent.idle" and event.data.get("error") is None:
-            if self._refused_since is not None:
-                self._refused_since = None
+            if self._refused_for is not None:
+                self._refused_for = None
                 self._save()
         elif event.type == "agent.turn_failed":
-            if self._refused_since is None:
-                self._refused_since = event.ts
-                self._save()
+            self._refused_at = max(self._refused_at, event.ts)
+            if self._refused_for is None:
+                self._refused_for = 0.0
+            self._save()
             if (event.data.get("error") == claude_login.TURN_REFUSED
                     and not claude_login.is_set(self.paths.claude_login)):
                 self.raise_cause("no_credential", event.ts)
+        elif event.type == "account.limited":
+            self._limited = True
+        elif event.type == "account.resumed":
+            self._limited = False
         elif event.type == "disk.short":
             self._short = True
         elif event.type == "garbage.collected" and self._short:
@@ -138,8 +175,16 @@ class LineOut:
                 self.raise_cause("disk_full", event.ts)
 
     def tick(self, now: float) -> None:
-        if "api_refused" not in self._pending and self._holds("api_refused", now):
-            self.raise_cause("api_refused", now)
+        seen = None if self._ticked is None else now - self._ticked
+        self._ticked = now
+        if (self._refused_for is not None and seen is not None and 0 < seen <= SEEN_GAP
+                and not self._limited and now - self._refused_at <= REFUSED_RECENTLY):
+            self._refused_for += seen
+            if self._refused_for >= self._saved_for + SAVE_SECONDS:
+                self._save()
+        for cause in ("api_refused", "login_ending"):
+            if cause not in self._pending and self._holds(cause, now):
+                self.raise_cause(cause, now)
         for cause, at in list(self._pending.items()):
             if not self._holds(cause, now):
                 del self._pending[cause]
@@ -152,8 +197,23 @@ class LineOut:
         if cause == "disk_full":
             fs = os.statvfs(self.paths.data)
             return fs.f_bavail < SHORT_FRACTION * fs.f_blocks
-        return (self._refused_since is not None
-                and now - self._refused_since >= REFUSED_FOR)
+        if cause == "login_ending":
+            ends = self._login_ends()
+            return (ends is not None and ends != self._login_said
+                    and ends - LOGIN_LEAD <= now < ends)
+        return (self._refused_for is not None and self._refused_for >= REFUSED_FOR
+                and not self._limited and now - self._refused_at <= REFUSED_RECENTLY)
+
+    def _login_ends(self) -> float | None:
+        """When the sign-in's refresh token ends, in seconds; None with no sign-in, or one
+        whose token endpoint named no end. Read each time: a new sign-in given while one is
+        set is said by no event (`daemon.py` says only one given where there was none)."""
+        try:
+            ends = claude_login.read(self.paths.claude_login)["claudeAiOauth"].get(
+                "refreshTokenExpiresAt")
+        except claude_login.LoginError:
+            return None
+        return None if ends is None else ends / 1000
 
     def raise_cause(self, cause: str, now: float) -> None:
         """Sent unless it went in the last day or no topic is set. A push that does not go is
@@ -163,6 +223,13 @@ class LineOut:
             self._pending.pop(cause, None)
             return
         title, message = MESSAGES[cause]
+        ends = None
+        if cause == "login_ending":
+            ends = self._login_ends()
+            if ends is None:            # signed out since it was found
+                self._pending.pop(cause, None)
+                return
+            message = message.format(ends=time.strftime("%A %d %B", time.localtime(ends)))
         try:
             name = topic()
             if name is None:
@@ -176,9 +243,13 @@ class LineOut:
             return
         self._pending.pop(cause, None)
         self._sent[cause] = now
+        if ends is not None:
+            self._login_said = ends
         self._save()
         self.events.emit("lineout.sent", cause=cause, title=title)
 
     def _save(self) -> None:
-        save_json(self.paths.line_out, {"sent": self._sent,
-                                        "refused_since": self._refused_since})
+        self._saved_for = self._refused_for or 0.0
+        save_json(self.paths.line_out, {"sent": self._sent, "refused_for": self._refused_for,
+                                        "refused_at": self._refused_at,
+                                        "login_said": self._login_said})

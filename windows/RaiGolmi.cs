@@ -65,7 +65,7 @@ static class Launcher
                 }
                 catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is LauncherError)
                 {
-                    DoorFailed(e.Message, false);
+                    DoorFailed(e.Message, false, recoveries);
                     return 1;
                 }
                 if (reason == null)
@@ -76,12 +76,14 @@ static class Launcher
             Machine machine;
             try
             {
-                machine = Machine.Prepare(recoveries, door);
+                machine = Machine.Prepare(recoveries, door || recoveries > 0);
             }
             catch (LauncherError e)
             {
-                if (door)
-                    DoorFailed(e.Message, tookStart);
+                // A box would hold the mutex the door needs until somebody came: a successor and
+                // a launch with the keeper on (the sign-in one among them) may have nobody there.
+                if (door || recoveries > 0 || KeeperSetting())
+                    DoorFailed(e.Message, tookStart, recoveries);
                 else
                     Fail(e.Message);
                 return 1;
@@ -102,22 +104,57 @@ static class Launcher
     // The keeper's door, the scheduled task that starts a launcher when none runs and one should.
     public const string DoorFlag = "--keeper-door";
 
-    // The door's launch could not start: nobody is at the screen to read a box, so it goes to
-    // the log and to launcher.json, as a launcher that has given up, for the keeper to repair.
-    static void DoorFailed(string why, bool tookStart)
+    // Whether the keeper setting is on; false for settings that cannot be read, which no launch
+    // can run with.
+    static bool KeeperSetting()
     {
-        Log("door: the launcher could not start: " + why);
         try
         {
-            var keeper = new Keeper(0);
-            if (tookStart)
-                keeper.Record("start", "the launcher could not start: " + why);
-            keeper.Final("gave_up", "the launcher could not start: " + why);
+            return Settings.Load(Machine.Home).Keeper;
         }
         catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is LauncherError)
         {
-            Log("door: launcher.json could not be written: " + e.Message);
+            return false;
         }
+    }
+
+    // An unattended launch could not start: nobody may be at the screen to read a box, so it
+    // goes to the log and, with the keeper on, to launcher.json as a launcher that has given up,
+    // for the keeper to repair. With no keeper there to hear it, the phone is told. Settings that
+    // cannot be read say neither whether the keeper is on nor the topic: launcher.json is written
+    // only if one is there (Retire removes it with the setting), and no alert can be sent.
+    static void DoorFailed(string why, bool tookStart, int recoveries)
+    {
+        Log("door: the launcher could not start: " + why);
+        Settings settings = null;
+        try
+        {
+            settings = Settings.Load(Machine.Home);
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is LauncherError)
+        {
+            Log("door: the settings could not be read, so no alert can be sent: " + e.Message);
+        }
+        if (settings != null ? settings.Keeper : Keeper.Wrote())
+        {
+            try
+            {
+                var keeper = new Keeper(recoveries);
+                if (tookStart)
+                    keeper.Record("start", "the launcher could not start: " + why);
+                keeper.Final("gave_up", "the launcher could not start: " + why);
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is LauncherError)
+            {
+                Log("door: launcher.json could not be written: " + e.Message);
+            }
+        }
+        if (settings == null || settings.NtfyTopic.Length == 0 || (settings.Keeper && Keeper.Present()))
+            return;
+        string failed = System.Threading.Tasks.Task.Run(() => Window.Push(
+            settings.NtfyTopic, "RaiGolmi needs you", Window.RestartThePc + " RaiGolmi stopped and could " +
+            "not start again: " + why + " (" + Environment.MachineName + ")")).GetAwaiter().GetResult();
+        Log("door: alert: " + (failed ?? "sent"));
     }
 
     // A line in the launcher log before any window has it, as the window's own lines read.
@@ -632,7 +669,7 @@ class Window : Form
     ToolStripMenuItem startAtLogin, keepAwake, venus, keeperItem, keeperTerminal;
     // Docker is being asked whether it can run the keeper.
     bool keeperChecking;
-    ToolStripTextBox ntfyTopic;
+    ToolStripTextBox ntfyTopic, heartbeatUrl;
     readonly List<ToolStripMenuItem> memory = new List<ToolStripMenuItem>();
 
     void AddSettingsMenu()
@@ -689,9 +726,20 @@ class Window : Form
         };
         ntfyTopic.LostFocus += delegate { CommitTopic(); };
         var testAlert = new ToolStripMenuItem("Send a test alert", null, delegate { SendTestAlert(); });
+        var heartbeatLabel = new ToolStripLabel("Heartbeat: healthchecks.io ping URL, empty for none");
+        heartbeatUrl = new ToolStripTextBox { AutoSize = false, Width = 320 };
+        heartbeatUrl.KeyDown += (sender, e) =>
+        {
+            if (e.KeyCode != Keys.Enter)
+                return;
+            e.SuppressKeyPress = true;
+            CommitHeartbeat();
+        };
+        heartbeatUrl.LostFocus += delegate { CommitHeartbeat(); };
         settings.Items.AddRange(new ToolStripItem[] {
             startAtLogin, keepAwake, memoryItem, venus, new ToolStripSeparator(), keeperItem, keeperTerminal,
-            new ToolStripSeparator(), ntfyLabel, ntfyTopic, testAlert });
+            new ToolStripSeparator(), ntfyLabel, ntfyTopic, testAlert,
+            new ToolStripSeparator(), heartbeatLabel, heartbeatUrl });
         settings.Closing += StayOpenOnClick;
         memoryItem.DropDown.Closing += StayOpenOnClick;
         settings.Opening += delegate { keyboard.Release(); };
@@ -744,6 +792,7 @@ class Window : Form
         for (int i = 0; i < Settings.MemoryChoices.Length; i++)
             memory[i].Checked = s.Memory == Settings.MemoryChoices[i];
         ntfyTopic.Text = s.NtfyTopic;
+        heartbeatUrl.Text = s.HeartbeatUrl;
     }
 
     // The topic box's text becomes the setting when it is one; any other is refused aloud and
@@ -761,6 +810,24 @@ class Window : Form
             return;
         }
         machine.Settings.NtfyTopic = typed;
+        ApplySetting(null);
+    }
+
+    // As the topic box; a new URL is pinged at the next Watch tick the machine is running.
+    void CommitHeartbeat()
+    {
+        string typed = heartbeatUrl.Text.Trim();
+        if (typed == machine.Settings.HeartbeatUrl)
+            return;
+        string refused = Settings.HeartbeatRefusal(typed);
+        if (refused != null)
+        {
+            heartbeatUrl.Text = machine.Settings.HeartbeatUrl;
+            Warn("The heartbeat URL '" + typed + "' is refused: " + refused + ".");
+            return;
+        }
+        machine.Settings.HeartbeatUrl = typed;
+        pingedAt = DateTime.MinValue;
         ApplySetting(null);
     }
 
@@ -809,7 +876,8 @@ class Window : Form
         Settings s = machine.Settings;
         Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
              ", memory " + s.Memory + ", venus " + s.Venus +
-             ", ntfy topic " + (s.NtfyTopic.Length > 0 ? "set" : "none") + ", keeper " + s.Keeper);
+             ", ntfy topic " + (s.NtfyTopic.Length > 0 ? "set" : "none") + ", keeper " + s.Keeper +
+             ", heartbeat " + (s.HeartbeatUrl.Length > 0 ? "set" : "none"));
         CheckSettings();
     }
 
@@ -1211,10 +1279,23 @@ class Window : Form
                 Note("status " + status);
             lastStatus = status;
             unanswered = 0;
-            // QEMU's run state for a guest its watchdog paused (-action watchdog=pause).
+            // QEMU's run states for a guest it paused and that nothing resumes: its watchdog fired
+            // (-action watchdog=pause); a disk write failed, which a full Windows disk does (the
+            // -drive default werror=enospc pauses the guest); or the accelerator failed.
             using (var answer = System.Text.Json.JsonDocument.Parse(status))
-                if (answer.RootElement.GetProperty("return").GetProperty("status").GetString() == "watchdog")
+            {
+                string paused = answer.RootElement.GetProperty("return").GetProperty("status").GetString();
+                if (paused == "running")
+                    Heartbeat();
+                else if (paused == "watchdog")
                     BeginInvoke(new Action(() => Recover("the guest's watchdog fired")));
+                else if (paused == "io-error")
+                    BeginInvoke(new Action(() => Recover("QEMU paused the guest on a disk write that failed " +
+                                                         "(io-error; a full Windows disk is one cause)")));
+                else if (paused == "internal-error")
+                    BeginInvoke(new Action(() => Recover("QEMU paused the guest on an internal error " +
+                                                         "(internal-error)")));
+            }
         }
         catch (Exception e)
         {
@@ -1242,6 +1323,58 @@ class Window : Form
         {
             Note("keeper: the inbox could not be read: " + e.Message);
         }
+        if (machine.Keeper != null)
+            BeginInvoke(new Action(MindKeeper));
+    }
+
+    // --- the heartbeat: an outside dead-man's switch ------------------------------------------
+    //
+    // While the machine runs, the heartbeat URL (healthchecks.io) is pinged every HeartbeatEvery;
+    // silence is the signal, so a PC that is off, a Windows nobody signed in to, a launcher gone,
+    // restarting or given up all reach the owner's phone through healthchecks.io's own alert,
+    // which nothing on this PC could send. A GET to a ping URL is a success signal
+    // (https://healthchecks.io/docs/http_api/), answered 200 with the body "OK".
+
+    // Well inside the check's period, so a ping lost on the way never alerts on its own; far
+    // under healthchecks.io's five a minute, past which pings are dropped.
+    static readonly TimeSpan HeartbeatEvery = TimeSpan.FromMinutes(5);
+    DateTime pingedAt = DateTime.MinValue;
+    int pinging;
+
+    static readonly System.Net.Http.HttpClient Pinger =
+        new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+    // From the Watch tick that found QEMU running the guest, off the window's thread; only a
+    // machine this launcher is not stopping is healthy.
+    void Heartbeat()
+    {
+        string url = machine.Settings.HeartbeatUrl;
+        if (url.Length == 0 || recovering != null || shutdownSent || exited ||
+            DateTime.UtcNow - pingedAt < HeartbeatEvery || Interlocked.Exchange(ref pinging, 1) == 1)
+            return;
+        pingedAt = DateTime.UtcNow;
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                using (var answer = await Pinger.GetAsync(url))
+                {
+                    string body = (await answer.Content.ReadAsStringAsync()).Trim();
+                    if (!answer.IsSuccessStatusCode || body != "OK")
+                        Note("heartbeat: healthchecks.io answered " + (int)answer.StatusCode + " " +
+                             answer.ReasonPhrase + ": " + body);
+                }
+            }
+            catch (Exception e) when (e is System.Net.Http.HttpRequestException ||
+                                      e is System.Threading.Tasks.TaskCanceledException)
+            {
+                Note("heartbeat: the ping could not reach " + new Uri(url).Host + ": " + e.Message);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref pinging, 0);
+            }
+        });
     }
 
     // A PPM, written whole and then renamed so a reader never meets half of one; removed while
@@ -1285,6 +1418,58 @@ class Window : Form
 
     static readonly string Upgrading = "setup.ps1 -Unattended is upgrading the machine; its output is in " +
                                        Keeper.SetupLog;
+
+    // Whether the keeper has been started again since it was last there.
+    bool keeperRetried;
+    bool keeperAlerting;
+    // Docker Desktop starting at sign-in takes a few minutes, and compose up starts a built
+    // container in seconds. A keeper not there this long after compose finished was not started by it.
+    static readonly TimeSpan KeeperRetry = TimeSpan.FromMinutes(10);
+
+    // On the window's thread, each Watch tick while the keeper setting is on: a keeper that is not
+    // there (Docker Desktop not running, its container failing) is started again; one still not
+    // there after that is the person's to fix, and they are told once, until it has been back.
+    async void MindKeeper()
+    {
+        if (machine.Keeper == null || exited || keeperAlerting)
+            return;
+        string absence = Keeper.Absence();
+        try
+        {
+            if (absence == null)
+            {
+                keeperRetried = false;
+                if (Keeper.AbsentAlertSent)
+                {
+                    Keeper.AbsentAlertSent = false;
+                    Note("keeper: it is there again");
+                }
+                return;
+            }
+            if (Keeper.ComposedWithin(KeeperRetry))
+                return;
+            if (keeperRetried && !Keeper.AbsentAlertSent)
+            {
+                keeperAlerting = true;
+                bool taken = await Alert("RaiGolmi needs you", RestartThePc + " The keeper, the helper " +
+                                         "outside RaiGolmi that repairs it, is not running: " + absence +
+                                         ". Docker Desktop may not have started.");
+                keeperAlerting = false;
+                if (taken)
+                    Keeper.AbsentAlertSent = true;
+            }
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+        {
+            keeperAlerting = false;
+            Note("keeper: whether its alert was sent could not be kept: " + e.Message);
+        }
+        if (machine.Keeper == null || exited)
+            return;
+        Note("keeper: not there (" + absence + "), so it is started again");
+        keeperRetried = true;
+        Keeper.Compose("up -d", Note);
+    }
 
     // Each Watch tick: the state is written, and the oldest request is acted on, on the window's
     // thread, one at a time.
@@ -1337,12 +1522,34 @@ class Window : Form
                 keeper.Record("start", "nothing to do: this launcher is running the machine");
                 break;
             case "restart":
-                Keeper.Take(request);
-                if (stopping)
+                // Asked of the machine an earlier launcher ran: this one booted it since.
+                if (request.Written < started)
                 {
-                    keeper.Record("restart", "nothing to do: the machine is already shutting down");
+                    Keeper.Take(request);
+                    keeper.Record("restart", "nothing to do: it was asked at " +
+                                  request.Written.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") +
+                                  ", before this launcher started the machine");
                     break;
                 }
+                // A shutdown that never finishes holds the launcher; setup's own, while it still
+                // waits on the window, is setup's to end.
+                if (shutdownSent && recovering == null && !upgrading)
+                {
+                    Keeper.Take(request);
+                    keeper.Record("restart", "the guest was asked to shut down and had not finished, " +
+                                  "so it is powered off, and a new launcher starts it again");
+                    Recover(asked + "; the guest had not finished shutting down", true);
+                    break;
+                }
+                if (stopping)
+                {
+                    if (upgrading)
+                        break;
+                    Keeper.Take(request);
+                    keeper.Record("restart", "nothing to do: the machine is already restarting");
+                    break;
+                }
+                Keeper.Take(request);
                 keeper.Record("restart", "the guest is shutting down, and a new launcher starts it again");
                 RestartForKeeper(asked);
                 break;
@@ -1611,7 +1818,7 @@ class Window : Form
 
     // The restarts in a row are used up: the one alert, sent before anything can end this
     // process, because a machine that cannot restart itself is what needs the owner. With the
-    // keeper on, the keeper is told instead, and alerts the owner itself if it cannot repair it.
+    // keeper there, the keeper is told instead, and alerts the owner itself if it cannot repair it.
     async void GiveUp(string why)
     {
         Note("not restarting: " + MostRecoveries + " restarts in a row each ended within " +
@@ -1621,15 +1828,20 @@ class Window : Form
         Keeper keeper = machine.Keeper;
         if (keeper != null)
             keeper.Final("gave_up", said);
-        else
-            await Alert("RaiGolmi needs you", said);
-        ReportExit();
+        if (keeper == null || !Keeper.Present())
+            await Alert("RaiGolmi needs you", RestartThePc + " RaiGolmi stopped and could not start " +
+                        "itself again. For the owner: " + said);
+        ReportExit(true);
     }
+
+    // The one physical thing a person near the machine can do, said first in every alert.
+    public const string RestartThePc = "Please restart the computer: Start, Power, Restart.";
 
     // How the machine ended, for whoever is there. With the keeper on, only a close the user made
     // is shown to them: anything else ends with nobody asked, because a box would keep this
-    // process, and the mutex the door needs, until somebody came. The keeper reads it instead.
-    void ReportExit()
+    // process, and the mutex the door needs, until somebody came. The keeper reads it instead,
+    // and with no keeper there, the phone is told. `alerted`: GiveUp has told it already.
+    async void ReportExit(bool alerted = false)
     {
         bool onPurpose = recovering == null && (shutdownSent || poweredOff || qemu.ExitCode == 0);
         string log;
@@ -1640,10 +1852,15 @@ class Window : Form
         // A session Windows ends leaves launcher.json as it was, so the door starts the machine
         // again once the user is back.
         if (keeper != null && !windowsEnding)
-            keeper.Final(upgrading ? "upgrading" : onPurpose ? "closed" : "gave_up",
-                         upgrading ? Upgrading : qemu.ExitCode == 0 ? null :
-                         (said != null ? said + " " : "") + "QEMU exited with code " + qemu.ExitCode +
-                         "; its output is in " + machine.Log + ".");
+        {
+            string ended = upgrading ? Upgrading : qemu.ExitCode == 0 ? null :
+                           (said != null ? said + " " : "") + "QEMU exited with code " + qemu.ExitCode +
+                           "; its output is in " + machine.Log + ".";
+            keeper.Final(upgrading ? "upgrading" : onPurpose ? "closed" : "gave_up", ended);
+            if (!upgrading && !onPurpose && !alerted && !Keeper.Present())
+                await Alert("RaiGolmi needs you", RestartThePc + " RaiGolmi stopped and could not start " +
+                            "itself again. For the owner: " + ended);
+        }
         if (qemu.ExitCode != 0 && (keeper == null || (onPurpose && !upgrading)))
         {
             string tail = log.Length > 3000 ? log.Substring(log.Length - 3000) : log;
@@ -1665,10 +1882,11 @@ class Window : Form
     const int MostRecoveries = 5;
     static readonly TimeSpan StableRun = TimeSpan.FromMinutes(30);
 
-    // On the UI thread: QEMU is killed, and OnQemuExited restarts the machine.
-    void Recover(string why)
+    // On the UI thread: QEMU is killed, and OnQemuExited restarts the machine. A guest already
+    // asked to shut down is left to finish, unless `overShutdown` (the keeper's restart, Act).
+    void Recover(string why, bool overShutdown = false)
     {
-        if (recovering != null || exited || shutdownSent)
+        if (recovering != null || exited || (shutdownSent && !overShutdown))
             return;
         recovering = why;
         Note("recovering: " + why);
@@ -1725,17 +1943,23 @@ class Window : Form
     }
 
     // A push to the ntfy topic when one is set, its outcome in the log; never raised, because
-    // what it reports goes ahead either way.
-    async System.Threading.Tasks.Task Alert(string title, string message)
+    // what it reports goes ahead either way. False only when a push was not taken, so a caller
+    // that tells once can try again; with no topic set there is nobody to tell.
+    async System.Threading.Tasks.Task<bool> Alert(string title, string message)
     {
         string topic = machine.Settings.NtfyTopic;
         if (topic.Length == 0)
-            return;
-        Note("alert: " + title + ": " + await Push(topic, title, message + " (" + Environment.MachineName + ")"));
+        {
+            Note("alert: " + title + ": not sent, no ntfy topic is set: " + message);
+            return true;
+        }
+        string failed = await Push(topic, title, message + " (" + Environment.MachineName + ")");
+        Note("alert: " + title + ": " + (failed ?? "sent"));
+        return failed == null;
     }
 
     // What came of one POST to ntfy.sh/<topic>, or null when it was taken.
-    static async System.Threading.Tasks.Task<string> Push(string topic, string title, string message)
+    public static async System.Threading.Tasks.Task<string> Push(string topic, string title, string message)
     {
         try
         {
@@ -1942,6 +2166,69 @@ sealed class Keeper
 
     static string Now() { return DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"); }
 
+    // launcher.json is there: it exists only while the keeper setting is on.
+    public static bool Wrote() { return File.Exists(StateFile); }
+
+    // --- whether the keeper is there -------------------------------------------------------------
+
+    // The keeper writes keeper.json (state, `at` in ISO UTC) at the end of each check, one a
+    // minute (keeper.py CHECK_SECONDS), a check itself taking up to a few minutes when ssh, the
+    // VM's answer and ntfy.sh each wait out their timeouts. Five minutes is several of its writes
+    // missed: a keeper that is gone, not one that is slow. A keeper in a session ("repairing")
+    // writes nothing until the session ends, which it bounds at four hours (SESSION_SECONDS).
+    static readonly string KeeperFile = Path.Combine(Outbox, "keeper.json");
+    static readonly TimeSpan PresentWithin = TimeSpan.FromMinutes(5);
+    static readonly TimeSpan RepairingWithin = TimeSpan.FromHours(4) + PresentWithin;
+
+    // keeper.json is the keeper's; one this launcher cannot read says no keeper is there, and why.
+    public static bool Present() { return Absence() == null; }
+
+    // Why the keeper is not there, or null when it is.
+    public static string Absence()
+    {
+        if (!File.Exists(KeeperFile))
+            return KeeperFile + " does not exist";
+        string state;
+        DateTime at;
+        try
+        {
+            using (var doc = JsonDocument.Parse(File.ReadAllText(KeeperFile)))
+            {
+                state = doc.RootElement.GetProperty("state").GetString();
+                at = DateTime.ParseExact(doc.RootElement.GetProperty("at").GetString(), "yyyy-MM-dd'T'HH:mm:ss'Z'",
+                                         System.Globalization.CultureInfo.InvariantCulture,
+                                         System.Globalization.DateTimeStyles.AdjustToUniversal |
+                                         System.Globalization.DateTimeStyles.AssumeUniversal);
+            }
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is JsonException ||
+                                  e is KeyNotFoundException || e is InvalidOperationException ||
+                                  e is FormatException || e is ArgumentNullException)
+        {
+            return KeeperFile + " could not be read: " + e.Message;
+        }
+        TimeSpan age = DateTime.UtcNow - at;
+        if (age <= (state == "repairing" ? RepairingWithin : PresentWithin))
+            return null;
+        return KeeperFile + " was last written " + (int)age.TotalMinutes + " minutes ago (" + state + ")";
+    }
+
+    // The alert that the keeper is gone was sent, and it has not been back since: kept beside the
+    // settings, so the launchers that follow this one do not send it again.
+    static readonly string AbsentAlerted = Path.Combine(Machine.Home, "keeper-gone-alerted");
+
+    public static bool AbsentAlertSent
+    {
+        get { return File.Exists(AbsentAlerted); }
+        set
+        {
+            if (value)
+                File.WriteAllText(AbsentAlerted, Now());
+            else
+                File.Delete(AbsentAlerted);
+        }
+    }
+
     sealed class Written { public string State; public int Pid; public string[] LastRequest; }
 
     // launcher.json is this program's own; one it cannot read is a defect.
@@ -1978,6 +2265,8 @@ sealed class Keeper
     public sealed class Request
     {
         public string File, Kind, Why;
+        // When the file was written (UTC).
+        public DateTime Written;
         // Why this is no request, or null when it is one.
         public string Refused;
     }
@@ -2011,7 +2300,7 @@ sealed class Keeper
     // one that is not JSON yet is refused only once it is older than a Watch tick.
     static Request Parse(FileInfo file)
     {
-        var r = new Request { File = file.FullName };
+        var r = new Request { File = file.FullName, Written = file.LastWriteTimeUtc };
         string text;
         try
         {
@@ -2136,11 +2425,22 @@ sealed class Keeper
         return info;
     }
 
+    // Compose runs now, and when the last one finished.
+    static int composing;
+    static DateTime composed;
+
+    // A compose is running, or one finished within `span`.
+    public static bool ComposedWithin(TimeSpan span)
+    {
+        return Volatile.Read(ref composing) > 0 || DateTime.UtcNow - composed < span;
+    }
+
     // docker compose on the keeper's compose.yml, on a thread of its own: the image's first build
     // takes minutes. What it prints goes to `note`, and how it ended.
     public static void Compose(string arguments, Action<string> note)
     {
         string command = "compose -f " + Ssh.Quote(ComposeFile) + " " + arguments;
+        Interlocked.Increment(ref composing);
         new Thread(() =>
         {
             note("keeper: docker " + command);
@@ -2165,6 +2465,11 @@ sealed class Keeper
             catch (System.ComponentModel.Win32Exception e)
             {
                 note("keeper: docker could not be run, so Docker Desktop may not be installed: " + e.Message);
+            }
+            finally
+            {
+                composed = DateTime.UtcNow;
+                Interlocked.Decrement(ref composing);
             }
         }) { IsBackground = true, Name = "keeper compose" }.Start();
     }

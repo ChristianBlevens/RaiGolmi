@@ -94,3 +94,20 @@ def test_an_answer_after_a_machine_tab_handover_reaches_its_successor(h):
     [told] = told_of(m, successor, id)
     assert "could not fix" in told and "the channel loses seq" in told and "/transfer/out" in told
     assert faults.Faults(h.paths, h.events).get(id)["told"] == successor
+
+
+def test_a_fault_left_waiting_by_a_keeper_gone_is_said_once_with_the_fallback(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(MACHINE)["pause"](tab=BODY)
+    faults.Faults(h.paths, h.events).seen()
+    id = m.tab(MACHINE)["report_fault"](title="jobs leak", body="job_stop: no such job",
+                                        affects=[BODY])["fault"]
+    m.coordinator.tick(time.time())
+    assert told_of(m, MACHINE, id) == [], "a reachable keeper has it"
+    gone = time.time() + faults.SEEN_SECONDS + 1
+    m.coordinator.tick(gone)
+    [told] = told_of(m, MACHINE, id)
+    assert "no keeper is reachable" in told and "/transfer/out" in told and BODY in told
+    m.coordinator.tick(gone + 60)
+    assert len(told_of(m, MACHINE, id)) == 1, "said once"

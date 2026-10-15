@@ -23,7 +23,9 @@ spent whatever its expiry says, and it is renewed at once.
 It is asked again only when it has ended: its refresh token refused by the OAuth server
 itself (400 or 401, which a retry is refused again) or past `refreshTokenExpiresAt`. The file is then
 removed, so every place that asks whether it is set asks for it again (`claude_login.lost`,
-answered in the AI terminal's base window); any other failed renewal is retried.
+answered in the AI terminal's base window); any other failed renewal is retried. The refresh
+token does not slide: every renewal keeps the end it was issued with, so the sign-in ends on a
+fixed date, which the line out tells the owner of ahead (`lineout.py`).
 """
 from __future__ import annotations
 

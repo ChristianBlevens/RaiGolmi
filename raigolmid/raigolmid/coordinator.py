@@ -43,10 +43,12 @@ that turn has ended — a held one as it stands.
 for `IDLE_SECONDS`, with nothing that waits on the user — a question to them, a tab held or
 paused for them, the account's usage limit — is a notice that never arrived, so the machine
 tab is told where each tab's last turn ended; as it is when it sits idle that long with a
-question or message from a tab waiting on it. Once per idle stretch: a managed tab's turn, or
-a machine-tab turn other than the wake's own, starting ends the stretch. **A restart is said
-to it** (`tabs.reopened`): which tabs were reopened and which of them were mid-turn, each of
-those continued by `limits.py`, and that the run goes on.
+question or message from a tab waiting on it. A wake whose own turn ends with the run still
+idle wakes it again after twice the wait, up to `IDLE_CEILING_SECONDS`; a managed tab's turn,
+or a machine-tab turn other than the wake's own, starting ends the stretch and its back-off.
+**A restart is said to it** (`tabs.reopened`, and `agent.reopened` for its own agent restarted
+mid-turn): which tabs were reopened and which of them were mid-turn — its own turn it carries
+on, the others `limits.py` continues — and that the run goes on.
 
 **A run ends with a report** (`Intent.run`): once the last tab is given back the machine tab
 is asked for the user's report (`report_message`), carrying what the daemon itself recorded of
@@ -71,7 +73,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from . import api, documents, history, limits
 from .channel import DIRECTED, Channels, HandedOn
 from .events import Event, EventLog
-from .faults import Faults, answer_message
+from .faults import Faults, answer_message, stranded_message
 from .intent import Run, TabIntent
 from .library import Library, run_id, save_from_tab
 from .questions import PERMISSIONS_ABSENT, Questions, parse_permissions
@@ -90,6 +92,10 @@ DIRECTION_EXCERPT = 300
 # A moving run starts or ends a turn every few minutes; this long with none is a notice lost.
 # It sets how soon a stalled run is recovered, never whether it is.
 IDLE_SECONDS = 20 * 60
+# A wake whose turn leaves the run idle is repeated after twice its wait, since each costs a
+# machine-tab turn; up to this, so a stall a wake could move waits at most a few hours of a run
+# that lasts months.
+IDLE_CEILING_SECONDS = 4 * 60 * 60
 DIRECTION = "From the machine tab, which manages this tab for the user:\n\n"
 # What a turn-end notice calls the messages on their way to a tab; any other is named by its
 # event, which `managed_tab`'s `on_its_way` lists the same way.
@@ -289,15 +295,26 @@ def restart_asked_message(tokens: int, budget: int) -> str:
         "turn; the new tab takes over once it ends.")
 
 
-def machine_restart_message(continues: str, report: str | None, running: bool) -> str:
+def machine_restart_message(continues: str | None, report: str | None, running: bool) -> str:
+    """`continues` None: a machine tab opened while a run is on after the one before it was
+    closed, not handed on, so the stretch and its record go on."""
     start = (f"You are the machine tab, taking over from {continues} in a fresh conversation "
-             f"opened as it ended its own. Read /work/{documents.SESSION_START}")
+             f"opened as it ended its own. Read /work/{documents.SESSION_START}"
+             if continues is not None else
+             "You are the machine tab, opened afresh while a run you manage for the user is on, "
+             f"after the machine tab before you was closed. Read /work/{documents.SESSION_START}")
     own = f" ~/{documents.THOUGHTS} is this conversation's own record."
     if not running:
         return start + " and carry on from it." + own
-    filed = (f"{continues}'s stretch is filed with its progress report, `{report}`, which "
-             "`document` reads" if report is not None
-             else f"{continues}'s stretch is filed with its progress report")
+    if continues is None:
+        filed = ("the machine tab before you kept it, and its stretch goes on with you"
+                 + (f"; the run's latest progress report is `{report}`, which `document` reads"
+                    if report is not None else ""))
+    elif report is not None:
+        filed = (f"{continues}'s stretch is filed with its progress report, `{report}`, which "
+                 "`document` reads")
+    else:
+        filed = f"{continues}'s stretch is filed with its progress report"
     return (start + ", call `managed` for where each tab you manage stands now, and carry on "
             f"managing them. Keep /work/{documents.RUN_RECORD}, the record of this stretch of "
             f"the run: {filed}." + own)
@@ -383,10 +400,14 @@ class Coordinator:
         self._handed: set[tuple[str, str]] = set()
         # The idle watch (`tick`), in memory: a daemon that starts starts its clocks. When a
         # turn of the run's tabs, and of the machine tab, last started or ended; how each
-        # managed tab's last turn ended (done, error); and whether this stretch was woken.
+        # managed tab's last turn ended (done, error); whether a wake is due to the machine
+        # tab now; its own turn, "due" until it starts and "on" until it ends; and how long the
+        # next wake waits.
         self._quiet_since = self._machine_quiet_since = time.time()
         self._ended: dict[str, tuple[bool, str | None]] = {}
-        self._woken = self._wake_turn = False
+        self._woken = False
+        self._wake_turn: str | None = None
+        self._wait = IDLE_SECONDS
         self._limited = False
         self.faults = Faults(session.paths, events)
 
@@ -407,7 +428,16 @@ class Coordinator:
             self._quiet_since = self._machine_quiet_since = event.ts
             return
         if event.type == "tabs.reopened":
-            self._reopened(event.data["tabs"], event.data["mid_turn"], event.data["rebooted"])
+            self._reopened(event.data["tabs"], event.data["mid_turn"], (
+                "The machine restarted" if event.data["rebooted"]
+                else "The daemon restarted and found agents gone"))
+            return
+        if (event.type == "agent.reopened" and event.data["mid_turn"]
+                and not event.data["at_start"]):
+            machine = self.session.intent.machine_tab()
+            if machine is not None and machine.tab_id == event.tab:
+                # `limits.py` leaves the machine tab's cut turn to this while it manages.
+                self._reopened([event.tab], [event.tab], "Your agent exited and was restarted")
             return
         if event.type in ("agent.busy", "agent.idle"):
             self._turn(event)
@@ -430,6 +460,11 @@ class Coordinator:
         elif event.type == "agent.idle" and tab.handover == ENDING:
             self._end(tab, event.data.get("error"))
         elif event.type == "tab.opened" and tab.machine:
+            if event.data.get("continues") is None and running(self.session):
+                # One handed on is told by `_end`; this one follows a machine tab closed.
+                self.events.emit("coordinator.machine_restarted", tab=tab.tab_id, deliver={
+                    "content": machine_restart_message(None, self._last_report(), True),
+                    "meta": {"from": "daemon"}})
             self.announce()
         elif event.type == "agent.idle" and tab.machine:
             self._machine_idle(tab.tab_id, tab.handover, event.data.get("error"))
@@ -454,9 +489,16 @@ class Coordinator:
                                    f"turn's end as you asked: it is {waiting} on a question "
                                    "or permission, which a restart would withdraw")
                     else:
-                        started = hand_on(self.session, self.channels, tab.tab_id)
-                        content = (f"Tab {tab.tab_id} ({tab.body}) was restarted at its turn's "
-                                   f"end as you asked: {started['next']}")
+                        try:
+                            started = hand_on(self.session, self.channels, tab.tab_id)
+                        except Exception as exc:  # noqa: BLE001 — said; this thread must not end
+                            self.events.emit("coordinator.restart_failed", tab=tab.tab_id,
+                                             error=str(exc))
+                            content = (f"Tab {tab.tab_id} ({tab.body}) was not restarted at its "
+                                       f"turn's end as you asked: {exc}")
+                        else:
+                            content = (f"Tab {tab.tab_id} ({tab.body}) was restarted at its "
+                                       f"turn's end as you asked: {started['next']}")
                     self._to_machine(event.tab, "coordinator.restarted_on_idle", content,
                                      why="restarted")
                     return
@@ -489,7 +531,8 @@ class Coordinator:
 
     def _turn(self, event: Event) -> None:
         """A turn of the machine tab's or a managed tab's starting or ending, for the idle
-        watch. The wake's own turn does not end the stretch it woke."""
+        watch. The wake's own turn does not end the stretch it woke; its end re-arms the wake,
+        which the run's quiet since then, at twice the wait, sets off."""
         tab = self.session.intent.tabs.get(event.tab) if event.tab else None
         if tab is None or not (tab.machine or tab.managed):
             return
@@ -498,10 +541,13 @@ class Coordinator:
             self._machine_quiet_since = event.ts
         if event.type == "agent.idle":
             self._ended[tab.tab_id] = (event.data["done"], event.data.get("error"))
-        elif tab.machine and self._wake_turn:
-            self._wake_turn = False
+            if tab.machine and self._wake_turn == "on":
+                self._woken, self._wake_turn = False, None
+                self._wait = min(2 * self._wait, IDLE_CEILING_SECONDS)
+        elif tab.machine and self._wake_turn == "due":
+            self._wake_turn = "on"
         else:
-            self._woken = False
+            self._woken, self._wake_turn, self._wait = False, None, IDLE_SECONDS
 
     def _wake_if_idle(self, now: float) -> None:
         intent = self.session.intent
@@ -525,7 +571,7 @@ class Coordinator:
                     and now - m["sent_at"] >= IDLE_SECONDS]
         resumed = {limits.LIMIT, *limits.TRANSIENT}
         run_idle = (
-            now - self._quiet_since >= IDLE_SECONDS
+            now - self._quiet_since >= self._wait
             and not any(t.busy for t in managed)
             # Waiting on the user — a question or permission put to them, or every tab held
             # or paused for them — or on the daemon resuming a cut turn, is not stalled.
@@ -534,9 +580,9 @@ class Coordinator:
             and any(t.status != "paused" and t.held is None for t in managed)
             and not any(self._ended.get(t, (None, None))[1] in resumed
                         for t in ids | {machine.tab_id}))
-        if not (run_idle or waiting and now - self._machine_quiet_since >= IDLE_SECONDS):
+        if not (run_idle or waiting and now - self._machine_quiet_since >= self._wait):
             return
-        self._woken = self._wake_turn = True
+        self._woken, self._wake_turn = True, "due"
         if run_idle:
             minutes = int((now - self._quiet_since) // 60)
             said = [f"From the daemon: you and every tab you manage have been idle for "
@@ -562,15 +608,14 @@ class Coordinator:
         self.events.emit(IDLE_WOKEN, tab=machine.tab_id, deliver={
             "content": "\n".join(said), "meta": {"from": "daemon"}})
 
-    def _reopened(self, tabs: list[str], mid_turn: list[str], rebooted: bool) -> None:
-        """The machine tab told, while a run is on, that its tabs' agents were reopened: a
-        reopened conversation is idle, and the run goes on only when it is told to."""
+    def _reopened(self, tabs: list[str], mid_turn: list[str], what: str) -> None:
+        """The machine tab told, while a run is on, that its tabs' agents were reopened, and
+        `what` reopened them: a reopened conversation is idle, and the run goes on only when
+        it is told to."""
         machine = self.session.intent.machine_tab()
         if machine is None or not running(self.session):
             return
         intent = self.session.intent
-        what = ("The machine restarted" if rebooted
-                else "The daemon restarted and found agents gone")
         said = [f"From the daemon: {what}; the agents of {', '.join(tabs)} were reopened on "
                 "their conversations."]
         for tab_id in mid_turn:
@@ -594,8 +639,10 @@ class Coordinator:
     def tick(self, now: float) -> None:
         """Each managed tab whose time has run out: its wrap-up pushed, unless a handover
         already has it making its documents ready; given back once they are, or at once
-        while it is held for the user, who has it as it stands. And a run gone idle woken."""
+        while it is held for the user, who has it as it stands. A run gone idle woken, and a
+        fault left waiting by a keeper gone said."""
         self._wake_if_idle(now)
+        self._tell_stranded(now)
         for tab in list(self.session.intent.tabs.values()):
             if not tab.managed or tab.status == "paused" or not self._time_up(tab, now):
                 continue
@@ -693,7 +740,8 @@ class Coordinator:
             self._to_machine(successor.tab_id, "coordinator.continued_itself", (
                 f"Tab {tab.tab_id} ({tab.body}) ended its own conversation; "
                 f"{successor.tab_id} takes over its work from its SESSION-START.md, and you "
-                "manage it now." + handed_on_line(handed, successor.tab_id) + report),
+                "manage it now." + crashed_line(successor)
+                + handed_on_line(handed, successor.tab_id) + report),
                 why="continued")
 
     def _machine_idle(self, tab_id: str, handover: str | None, error: str | None) -> None:
@@ -801,6 +849,18 @@ class Coordinator:
         if machine is not None:
             self.faults.told(fault["id"], machine.tab_id)
 
+    def _tell_stranded(self, now: float) -> None:
+        """A fault still waiting while no keeper is reachable, said once to the machine tab
+        that is open, with the fallback a `not_fixed` answer gives (`faults.stranded`)."""
+        machine = self.session.intent.machine_tab()
+        if machine is None:
+            return
+        stranded, when = self.faults.stranded(now)
+        for fault in stranded:
+            self._to_machine(fault["id"], "coordinator.fault_stranded",
+                             stranded_message(fault, when), why="fault")
+            self.faults.told_stranded(fault["id"], machine.tab_id)
+
 
 def methods(session: "Session", questions: Questions, channels: Channels,
             caller: str) -> dict[str, Callable[..., Any]]:
@@ -860,6 +920,7 @@ def methods(session: "Session", questions: Questions, channels: Channels,
             return {"fault": fault["id"], "keeper": "reachable", "next": (
                 f"Filed; {when}, and takes it at its next look. You are told its answer: "
                 "`resume` the tabs you paused for it when it says the fix is in.")}
+        store.told_stranded(fault["id"], caller)    # this answer is the telling
         return {"fault": fault["id"], "keeper": "unreachable", "next": (
             f"Filed, but no keeper is reachable ({when}): write it up for the user in "
             "/transfer/out as before. A keeper that comes back takes it, and you are told "
@@ -907,7 +968,16 @@ def hand_on(session: "Session", channels: Channels, tab: str) -> dict[str, Any]:
     return {"tab": successor.tab_id, "continues": tab, "status": "started",
             "next": f"{successor.tab_id} takes over {tab}'s work, which is closed and "
                     f"archived; you manage {successor.tab_id} now, and are told when its "
-                    "first turn ends." + handed_on_line(handed, successor.tab_id)}
+                    "first turn ends." + crashed_line(successor)
+                    + handed_on_line(handed, successor.tab_id)}
+
+
+def crashed_line(successor: TabIntent) -> str:
+    """A successor whose agent did not start (`Session.succeed_tab`), said; empty otherwise."""
+    if successor.status != "crashed":
+        return ""
+    return (f" Its agent did not start, so {successor.tab_id} is crashed and the janitor has it; "
+            "what is on its way to it waits until it is up.")
 
 
 class Verbs:
@@ -1055,8 +1125,12 @@ class Verbs:
 
     def hold(self, tab: str, situation: str) -> dict[str, Any]:
         """The tab stopped for the user where they said, and told to put `situation` to
-        them."""
+        them. Only at a `stop_when`: a hold is released only by the user's words in the tab."""
         agent = self._unheld(tab)
+        if agent.stop_when is None:
+            raise SessionError(f"{tab} has no stop_when, and a held tab is released only by the "
+                               "user, who is away: hold a tab only at the stop the user gave "
+                               "it, and decide everything else for them")
         if not situation.strip():
             raise SessionError("a hold needs the situation: where the work stands and what is "
                                "the user's to decide")
@@ -1093,13 +1167,21 @@ class Verbs:
         return agent
 
     def _successor(self, tab: str) -> str:
-        """The open tab doing *tab*'s work: itself, or the one that `continues` it."""
+        """The open tab doing *tab*'s work: itself, or the one at the end of the handovers
+        that `continues` it. A closed tab is gone from the intent, so the hops through closed
+        ones are read from the history's `tab.opened`."""
         tabs = self.session.intent.tabs
         if tab in tabs:
             return tab
-        for agent in tabs.values():
-            if agent.continues == tab:
-                return agent.tab_id
+        continued = {e.data["continues"]: e.tab for e in self.events.read()
+                     if e.type == "tab.opened" and e.data.get("continues")}
+        continued |= {t.continues: t.tab_id for t in tabs.values() if t.continues}
+        at, seen = tab, set()
+        while at is not None and at not in seen:
+            if at in tabs:
+                return at
+            seen.add(at)
+            at = continued.get(at)
         raise SessionError(f"{tab} has ended and no open tab continues its work")
 
     def _managed(self, tab: str):

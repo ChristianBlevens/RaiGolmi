@@ -407,7 +407,8 @@ of GB or runs low, or the machine runs short of memory, it works out what took i
 caches like Rust's `target/` (which only ever grow) apart from a project's other output. The
 machine's own leftovers it treats as a failure and fixes; anything a project holds it puts to
 that project's tab, which knows what it still needs. It never deletes a project's files itself.
-It also notices a tab that has run past its context budget and tells it to wrap up; nothing is
+It also notices a tab you sit in front of that has run past its context budget and tells it to
+wrap up (a tab the machine tab manages is handed on by it); nothing is
 ever cut off.
 
 It also keeps the agents' documents in shape: one that's grown past its size, names something
@@ -469,12 +470,13 @@ window to start, restart or upgrade it. A scheduled task, *RaiGolmi keeper door*
 five minutes while you are signed in and reopens RaiGolmi if it should be running and is not.
 With the keeper on, failures nobody is there to see are not shown in boxes, and the keeper, not
 the window, sends the phone alert, only when it could not fix the machine. Once, after turning
-it on, choose *Settings → Open the keeper's terminal* and sign it in: `claude` then `/login`
-(or `claude setup-token`), then `gh auth login`. Both sign-ins live on the
+it on, choose *Settings → Open the keeper's terminal* and sign it in:
+`python3 /work/RaiGolmi/keeper/keeper.py sign-in` (it runs `claude setup-token` and stores the
+year-long token it shows, which you paste), then `gh auth login`. Both sign-ins live on the
 `raigolmi-keeper-home` volume and survive a rebuild; the keeper's key is let into the machine
 from its next start. What it did is in `keeper\outbox\` (`keeper.json`, and each repair's log
-and notes in `sessions\`); a repair is reopened in its terminal with
-`cd /work/RaiGolmi && claude --resume <id>`.
+and notes in `sessions\`); a repair is reopened in its terminal with the `resume` command
+`keeper.json` records for it.
 
 ### Files and clipboard on Windows
 

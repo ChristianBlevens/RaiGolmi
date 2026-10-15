@@ -17,12 +17,18 @@ and acts on a failure by running one headless Claude Code session (KEEPER.md is 
 system prompt) with the evidence it gathered. The rules:
 
 - launcher.json `gave_up` (five restarts in a row failed) is acted on at once;
-- launcher.json not written for `LAUNCHER_STALE_SECONDS`, its state not `closed`, is the launcher
-  gone: one `start` request goes into keeper/inbox/ (the launcher's scheduled door takes it), and
-  the failure is acted on only if the launcher is still gone `START_GRACE_SECONDS` later;
+- launcher.json unchanged for `LAUNCHER_STALE_SECONDS` of the keeper's own clock, its state not
+  `closed`, is the launcher gone: one `start` request goes into keeper/inbox/ (the launcher's
+  scheduled door takes it), and the failure is acted on only if the launcher is still gone
+  `START_GRACE_SECONDS` later;
+- while a launcher that gave up or is gone gets no session (its incident's sessions are spent,
+  the day's are, or Claude Code cannot run), a `start` request is written again every
+  `START_RETRY_SECONDS`: the door ignores `gave_up`, so nothing else would start it;
 - a launcher stuck in one of its transitional states for `TRANSITION_SECONDS` is failing;
-- the VM unreachable by ssh, raigolmid not active, or a run in progress whose event log has been
-  silent for `EVENTS_SILENT_SECONDS`, while the launcher says `running`, is failing;
+- the VM unreachable by ssh, raigolmid not active or restarted by systemd `DAEMON_RESTARTS` times
+  within `DAEMON_RESTART_WINDOW` (a crash loop `is-active` does not show), or a run in progress
+  whose event log has been silent for `EVENTS_SILENT_SECONDS`, while the launcher says `running`,
+  is failing;
 - each probe also says the keeper looked (`rai keeper seen`, raigolmid's faults.py), which is how
   the machine tab knows a keeper is there, and is answered with the faults in RaiGolmi the machine
   tab filed for it, having paused the tabs each affects. An open fault is failing at once and is
@@ -35,20 +41,31 @@ system prompt) with the evidence it gathered. The rules:
   each session, so what a session started (an upgrade, a restart) has time to take;
 - an incident is the stretch from the first failing check to the next healthy, closed or held
   one. It gets at most `SESSIONS_PER_INCIDENT` sessions, each after the first handed the logs of
-  those before. When they are spent, or Claude Code cannot run (not signed in, or its API refused
-  the session), the person near the machine gets ONE ntfy alert for the incident, and another
-  only after `REALERT_SECONDS` more of it. An incident that ends after an alert says so.
+  those before, and all incidents together at most `SESSIONS_PER_DAY` in any 24 hours. A
+  session that never had an answer from Claude (an API error, the network) does not count; one
+  that the API refused for its sign-in stops sessions until the sign-in changes;
+- Claude Code signs in with the long-lived token `claude setup-token` makes (`python3 keeper.py
+  sign-in` stores it in `Paths.token`), handed to each session as `CLAUDE_CODE_OAUTH_TOKEN`;
+- the person near the machine gets an ntfy alert when sessions cannot fix it (spent, the day's
+  spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
+  alert title at most once in `REALERT_SECONDS` across incidents, and "working again" once the
+  machine is healthy after one. None is sent while raigolmid's line out has already told them
+  a cause (`line-out.json`) during the incident: theirs is the word that stands.
 
 keeper/outbox/keeper.json is written each check: the state, the open incident with its sessions
-(each resumable from the keeper's terminal by `claude --resume <id>` in /work/RaiGolmi), and the
-last alert. It is also the keeper's memory across a restart of its container.
+(each resumable from the keeper's terminal by the `resume` command it records), the sessions of
+the last day, and the alerts. It is also the keeper's memory across a restart of its container.
 
     python3 keeper.py                         the loop (the container's entrypoint)
+    python3 keeper.py sign-in                 `claude setup-token`, and the token it prints stored
     python3 keeper.py vm '<command>' [secs]   one command on the VM, with the keeper's key
     python3 keeper.py request <start|restart|upgrade> '<why>'   a request to the launcher
 """
 from __future__ import annotations
 
+import getpass
+import hashlib
+import http.client
 import json
 import logging
 import os
@@ -72,11 +89,16 @@ logger = logging.getLogger(__name__)
 # login, which the guest does not notice at this rate.
 CHECK_SECONDS = 60
 # The launcher writes launcher.json every 10 s; six writes missed is a launcher that is gone,
-# not one that is slow.
+# not one that is slow. Measured on the keeper's own clock, as the launcher's is another.
 LAUNCHER_STALE_SECONDS = 60
 # The launcher's scheduled door takes a request every 5 minutes and the machine then boots;
 # three door runs with no launcher is a start that was not taken.
 START_GRACE_SECONDS = 15 * 60
+# A start that fails is at most five restarts of up to half an hour each before the launcher
+# gives up again, and costs no plan usage; what stops a machine and then clears on its own (a
+# Windows update, a host disk freed, the network back) clears in hours. One start each such
+# stretch retries without running the launcher's restarts back to back.
+START_RETRY_SECONDS = 3 * 3600
 # The longest a launcher state between two runs lasts is an upgrade downloading the disk; past
 # this it is stuck rather than slow.
 TRANSITION_SECONDS = 2 * 3600
@@ -87,14 +109,35 @@ FAILING_SECONDS = 15 * 60
 # IDLE_SECONDS), which writes to the event log; three such stretches with nothing written is a
 # daemon no longer running the run.
 EVENTS_SILENT_SECONDS = 3 * 20 * 60
+# systemd restarting raigolmid once is its repair working; again within the half hour is that
+# repair not holding (StartLimitIntervalSec=0 restarts it forever, and `is-active` reads
+# `active` between crashes).
+DAEMON_RESTARTS = 2
+DAEMON_RESTART_WINDOW = 30 * 60
 # A second session sees the first's log; a third would repeat what two could not do, so the
 # person is told instead.
 SESSIONS_PER_INCIDENT = 2
+# Sessions spend the plan the run itself works on. Two incidents' sessions in one day is a
+# machine failing for a cause sessions are not reaching, and more would spend the run's usage
+# on it; counted over all incidents, since each fault is an incident of its own.
+SESSIONS_PER_DAY = 2 * SESSIONS_PER_INCIDENT
+DAY = 24 * 3600
+# A session that never had an answer from Claude spent nothing, and an outage or a network
+# down for less than a day passes on its own; a day of them is told (raigolmid lineout.py's
+# REFUSED_FOR, the owner's word).
+UNREACHED_SECONDS = DAY
+# raigolmid's line out sends each cause at most once a day, so a cause that holds was sent
+# within the day before an incident it caused.
+LINE_OUT_COVERS_SECONDS = DAY
+# `claude setup-token` asks for a token valid for 31536000 s, a year, and says so as it prints it.
+TOKEN_SECONDS = 365 * DAY
+# The longest `claude auth status` takes when Claude Code works at all.
+CLAUDE_STATUS_SECONDS = 60
 # A session may wait on a release build and the upgrade it is installed by; one running past
 # this is stuck, and is ended.
 SESSION_SECONDS = 4 * 3600
 # An alert is repeated only for a machine still down a day later, so the phone is not a pager.
-REALERT_SECONDS = 24 * 3600
+REALERT_SECONDS = DAY
 # The longest one ssh login and the probe it runs take on a guest that answers at all.
 SSH_SECONDS = 30
 # What a session's verdict line starts with (KEEPER.md).
@@ -113,6 +156,8 @@ class Paths:
     work: Path = Path("/work/RaiGolmi")
     launcher_home: Path = Path("/launcher")
     key: Path = Path("/root/.ssh/keeper_ed25519")
+    # Claude Code's sign-in: the token `claude setup-token` printed, on the persistent home.
+    token: Path = Path("/root/.keeper-claude-token")
 
     @property
     def keeper(self) -> Path:
@@ -162,6 +207,8 @@ class Seen:
     why: str | None = None
     evidence: dict[str, Any] | None = None
     act_now: bool = False
+    # The launcher gave up or is gone: only a `start` request runs the machine again.
+    launcher_down: bool = False
 
 
 def iso(t: float) -> str:
@@ -269,6 +316,9 @@ state = Path.home() / ".local/state/raigolmid"
 logs = [str(p) for p in (state / "events.jsonl.1", state / "events.jsonl") if p.exists()]
 daemon = subprocess.run(["systemctl", "--user", "is-active", "raigolmid"],
                         capture_output=True, text=True).stdout.strip()
+restarts = int(subprocess.run(["systemctl", "--user", "show", "-p", "NRestarts", "--value", "raigolmid"],
+                              capture_output=True, text=True, check=True).stdout)
+line_out = state / "line-out.json"
 def rows(text):
     for line in text.splitlines():
         try:
@@ -293,6 +343,8 @@ run = json.loads(intent.read_text()).get("run") if intent.exists() else None
 seen = subprocess.run(["rai", "keeper", "seen"], capture_output=True, text=True)
 print(json.dumps({
     "daemon": daemon,
+    "restarts": restarts,
+    "line_out": json.loads(line_out.read_text()) if line_out.exists() else None,
     "faults": json.loads(seen.stdout)["faults"] if seen.returncode == 0 else None,
     "faults_error": None if seen.returncode == 0 else (seen.stdout + seen.stderr).strip()[-2000:],
     "last_event": None if last is None else {"type": last["type"], "age_s": round(time.time() - last["ts"])},
@@ -319,7 +371,10 @@ def probe_vm(paths: Paths) -> dict[str, Any]:
         client.close()
     if status != 0:
         return {"reachable": True, "probe_failed": f"exit {status}: {err.strip()[-2000:]}"}
-    return {"reachable": True, **json.loads(out)}
+    try:
+        return {"reachable": True, **json.loads(out)}
+    except ValueError:
+        return {"reachable": True, "probe_failed": f"it printed no JSON: {out.strip()[-2000:]}"}
 
 
 def rai_keeper(paths: Paths, args: list[str]) -> dict[str, Any]:
@@ -336,58 +391,97 @@ def rai_keeper(paths: Paths, args: list[str]) -> dict[str, Any]:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     if status != 0:
         return {"ok": False, "error": f"exit {status}: {(out + err).strip()[-2000:]}"}
-    return {"ok": True, "result": json.loads(out)}
+    try:
+        return {"ok": True, "result": json.loads(out)}
+    except ValueError:
+        return {"ok": False, "error": f"it printed no JSON: {out.strip()[-2000:]}"}
 
 
 # --- Claude Code ----------------------------------------------------------------------------
 
-def claude_ready() -> tuple[bool, str]:
-    """Whether Claude Code is signed in (`claude auth status --json`'s `loggedIn`)."""
-    done = subprocess.run(["claude", "auth", "status", "--json"], capture_output=True, text=True,
-                          timeout=60)
+def fingerprint(token: str) -> str:
+    """Names a token in keeper.json without writing the token there."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def claude_env(paths: Paths) -> dict[str, str]:
+    """The environment Claude Code runs in: the stored token is its sign-in."""
+    return {**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": paths.token.read_text(encoding="utf-8").strip()}
+
+
+def claude_ready(paths: Paths, refused: str | None) -> tuple[str, str]:
+    """("ready", ""), ("signed_out", why) when the sign-in is missing, a year old or the token
+    the API refused (`refused`, its fingerprint), or ("cannot_run", why) when Claude Code does
+    not answer `claude auth status`. Whether the API takes a token is learnt from a session,
+    where a refusal costs no plan usage; asking it here would spend some each check."""
+    if not paths.token.exists():
+        return "signed_out", f"it has no sign-in ({paths.token} is missing)"
+    env = claude_env(paths)
+    if fingerprint(env["CLAUDE_CODE_OAUTH_TOKEN"]) == refused:
+        return "signed_out", "Claude refused its sign-in"
+    if time.time() - paths.token.stat().st_mtime > TOKEN_SECONDS:
+        return "signed_out", "its sign-in is more than a year old"
+    try:
+        done = subprocess.run(["claude", "auth", "status", "--json"], capture_output=True, text=True,
+                              env=env, timeout=CLAUDE_STATUS_SECONDS)
+    except subprocess.TimeoutExpired:
+        return "cannot_run", f"Claude Code did not answer within {CLAUDE_STATUS_SECONDS} s"
+    except OSError as exc:
+        return "cannot_run", f"Claude Code did not start: {exc}"
     try:
         status = json.loads(done.stdout)
     except ValueError:
-        return False, f"`claude auth status` answered: {(done.stdout + done.stderr).strip()[:300]}"
+        return "cannot_run", f"`claude auth status` answered: {(done.stdout + done.stderr).strip()[:300]}"
     if not status.get("loggedIn"):
-        return False, "Claude Code is not signed in"
-    return True, ""
+        return "signed_out", "Claude Code does not take its sign-in"
+    return "ready", ""
 
 
 def read_outcome(log: Path) -> dict[str, Any]:
     """A session's verdict from its stream-json log: the last line starting `KEEPER:` of the
-    final `result` message; `api_error` when the API refused the session itself."""
-    result = None
+    final `result` message. `reached`: Claude answered at least once, so the session spent
+    plan usage. `signed_out`: the API refused the sign-in (401). `unreached`: the session ended
+    on an API error, or never had an answer (the network), so it did no repair."""
+    result, reached = None, False
     if log.exists():
         for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 row = json.loads(line)
             except ValueError:
                 continue
+            if isinstance(row, dict) and row.get("type") == "assistant":
+                reached = True
             if isinstance(row, dict) and row.get("type") == "result":
                 result = row
-    if result is None:
-        return {"verdict": "KEEPER: not fixed: the session ended without a result", "api_error": None}
-    text = str(result.get("result") or "")
-    if result.get("is_error") and result.get("api_error_status") is not None:
-        return {"verdict": f"KEEPER: not fixed: Claude Code's API refused the session ({text[:300]})",
-                "api_error": f"{result.get('api_error_status')}: {text[:300]}"}
+    text = "" if result is None else str(result.get("result") or "")
+    status = None if result is None or not result.get("is_error") else result.get("api_error_status")
+    outcome = {"reached": reached, "signed_out": status == 401, "unreached": None}
+    if status == 401:
+        return {**outcome, "verdict": f"KEEPER: not fixed: Claude refused the keeper's sign-in ({text[:300]})"}
+    if status is not None:
+        outcome["unreached"] = f"the API answered {status}: {text[:300]}"
+    elif not reached:
+        outcome["unreached"] = f"Claude never answered: {text[:300] or 'the session ended without a result'}"
+    if outcome["unreached"] is not None:
+        return {**outcome, "verdict": f"KEEPER: not fixed: {outcome['unreached']}"}
     verdicts = [line.strip() for line in text.splitlines() if line.strip().startswith(VERDICT)]
-    return {"verdict": verdicts[-1] if verdicts else "KEEPER: not fixed: the session gave no verdict",
-            "api_error": None}
+    return {**outcome, "verdict": verdicts[-1] if verdicts else "KEEPER: not fixed: the session gave no verdict"}
 
 
 def run_claude(paths: Paths, prompt: str, session_id: str, log: Path) -> dict[str, Any]:
     """One headless session with every permission, as the keeper's container is the sandbox
     (IS_SANDBOX). Its stream-json transcript is the log; the conversation itself is kept by
-    Claude Code under /root, so `claude --resume <session_id>` reopens it."""
+    Claude Code under /root, so `claude --resume <session_id>` reopens it. `token` names the
+    sign-in it ran with."""
     command = ["claude", "-p", "--dangerously-skip-permissions", "--verbose",
                "--output-format", "stream-json", "--session-id", session_id,
                "--append-system-prompt", paths.system_prompt.read_text(encoding="utf-8"), prompt]
+    env = claude_env(paths)
+    token = fingerprint(env["CLAUDE_CODE_OAUTH_TOKEN"])
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w", encoding="utf-8") as fh:
         process = subprocess.Popen(command, cwd=paths.work, stdout=fh, stderr=subprocess.STDOUT,
-                                   stdin=subprocess.DEVNULL, start_new_session=True)
+                                   stdin=subprocess.DEVNULL, env=env, start_new_session=True)
         try:
             process.wait(timeout=SESSION_SECONDS)
         except subprocess.TimeoutExpired:
@@ -398,8 +492,29 @@ def run_claude(paths: Paths, prompt: str, session_id: str, log: Path) -> dict[st
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
             return {"verdict": f"KEEPER: not fixed: the session ran past {SESSION_SECONDS // 3600} hours "
-                               "and was ended", "api_error": None}
-    return read_outcome(log)
+                               "and was ended", "reached": True, "signed_out": False, "unreached": None,
+                    "token": token}
+    return {**read_outcome(log), "token": token}
+
+
+def sign_in(paths: Paths) -> int:
+    """`claude setup-token` in this terminal, then the token it printed, pasted, stored in
+    `Paths.token` (0600). setup-token shows the token on its own screen and nowhere else, so
+    the owner copies it from there."""
+    subprocess.run(["claude", "setup-token"], check=True)
+    token = "".join(getpass.getpass("Paste the token it printed (it is not shown), then Enter: ").split())
+    if not token:
+        raise SystemExit("nothing was pasted; run `python3 /work/RaiGolmi/keeper/keeper.py sign-in` again")
+    partial = paths.token.with_name(f".{paths.token.name}.partial")
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token + "\n")
+    os.replace(partial, paths.token)
+    kind, why = claude_ready(paths, None)
+    if kind != "ready":
+        raise SystemExit(f"the token is stored in {paths.token}, but Claude Code does not take it: {why}")
+    logger.info("signed in: the keeper's sessions use the token in %s", paths.token)
+    return 0
 
 
 def push_ntfy(topic: str, title: str, message: str) -> None:
@@ -411,6 +526,7 @@ def push_ntfy(topic: str, title: str, message: str) -> None:
 
 # --- the loop -------------------------------------------------------------------------------
 
+NOTHING_TO_DO = "Nothing to do; the owner will fix it when back."
 ALERT_NOT_FIXED = (
     "RaiGolmi needs you",
     "RaiGolmi on the computer has stopped and I could not fix it myself. Please restart the "
@@ -421,29 +537,59 @@ ALERT_CANNOT_RUN = (
     "RaiGolmi on the computer has stopped, and its repair helper cannot work right now ({why}). "
     "Please restart the computer: Start menu, Power, Restart. After it comes back, sign in to "
     "Windows as usual. Nothing else to do.")
+ALERT_SIGNED_OUT = (
+    "RaiGolmi helper's sign-in ran out",
+    "RaiGolmi's repair helper cannot work: the helper's sign-in ran out. " + NOTHING_TO_DO)
+ALERT_UNREACHED = (
+    "RaiGolmi helper cannot reach Claude",
+    "RaiGolmi's repair helper has not been able to reach Claude for a day, so it cannot fix "
+    "what went wrong. " + NOTHING_TO_DO)
+ALERT_FAULT = (
+    "RaiGolmi paused some of its work",
+    "RaiGolmi found a problem in its own program that its repair helper could not fix, and "
+    "paused the work it affects. " + NOTHING_TO_DO)
 ALERT_RECOVERED = ("RaiGolmi is working again", "RaiGolmi is working again. Nothing to do.")
+
+
+def counted(incident: dict[str, Any]) -> int:
+    """The incident's sessions that count toward SESSIONS_PER_INCIDENT: each one Claude answered
+    without an API error. One kept from before `counted` was recorded counts."""
+    return sum(1 for s in incident["sessions"] if s.get("counted", True))
 
 
 class Keeper:
     """The decision loop. Everything that reaches outside it is handed in, so a test runs it
-    against doubles: `clock` (epoch seconds), `probe` (the VM), `runner` (one Claude Code
-    session: prompt, id, log -> {verdict, api_error}), `ready` (Claude Code signed in), `push`
-    (one ntfy alert), and `tell` (`rai keeper <args>` on the VM -> {ok, result or error})."""
+    against doubles: `clock` (epoch seconds), `monotonic` (the keeper's own clock, for how long
+    something stayed the same), `probe` (the VM), `runner` (one Claude Code session: prompt, id,
+    log -> read_outcome's dict and `token`), `ready` (refused token -> claude_ready's answer),
+    `push` (one ntfy alert), and `tell` (`rai keeper <args>` on the VM -> {ok, result or error})."""
 
-    def __init__(self, paths: Paths, clock: Callable[[], float],
+    def __init__(self, paths: Paths, clock: Callable[[], float], monotonic: Callable[[], float],
                  probe: Callable[[], dict[str, Any]],
                  runner: Callable[[str, str, Path], dict[str, Any]],
-                 ready: Callable[[], tuple[bool, str]],
+                 ready: Callable[[str | None], tuple[str, str]],
                  push: Callable[[str, str, str], None],
                  tell: Callable[[list[str]], dict[str, Any]]) -> None:
-        self.paths, self.clock, self.probe = paths, clock, probe
+        self.paths, self.clock, self.monotonic, self.probe = paths, clock, monotonic, probe
         self.runner, self.ready, self.push, self.tell = runner, ready, push, tell
         self.state, self.why = "starting", None
         self.incident: dict[str, Any] | None = None
         self.last_incident: dict[str, Any] | None = None
         self.last_alert: dict[str, Any] | None = None
+        # Alert title -> when it last reached ntfy, over all incidents.
+        self.alerted: dict[str, float] = {}
+        # A machine-down alert went out and "working again" has not followed it.
+        self.owed_recovery = False
+        # When each session that Claude answered started, for SESSIONS_PER_DAY.
+        self.session_starts: list[float] = []
+        # The fingerprint of the token the API refused; no session runs on it again.
+        self.refused_token: str | None = None
         # The launcher's transitional state and when the keeper first saw it.
         self.transition: tuple[str, float] | None = None
+        # launcher.json's `at` and when (monotonic) the keeper first read it.
+        self.launcher_at: tuple[str, float] | None = None
+        # (monotonic, raigolmid's NRestarts) of the probes within DAEMON_RESTART_WINDOW.
+        self.daemon_restarts: list[tuple[float, int]] = []
         # Answers to faults the VM has not yet taken: fault id -> {verdict, words}.
         self.unanswered: dict[str, dict[str, str]] = {}
         if paths.keeper_json.exists():
@@ -452,11 +598,19 @@ class Keeper:
             self.last_incident = kept["last_incident"]
             self.last_alert = kept["last_alert"]
             self.unanswered = kept["unanswered"]
+            # A keeper.json from before these were kept has none of them, which is what it says.
+            self.alerted = kept.get("alerted", {})
+            self.owed_recovery = kept.get("owed_recovery", False)
+            self.session_starts = kept.get("session_starts", [])
+            self.refused_token = kept.get("refused_token")
+            if self.incident is not None:
+                self.incident.setdefault("unreached_since", None)
+                self.incident.setdefault("line_out", None)
 
     # --- seeing ---------------------------------------------------------------------------
     def observe(self, now: float) -> Seen:
         if not self.paths.launcher_json.exists():
-            return Seen("gone", "the launcher has never written launcher.json")
+            return Seen("gone", "the launcher has never written launcher.json", launcher_down=True)
         launcher = json.loads(self.paths.launcher_json.read_text(encoding="utf-8"))
         state = launcher["state"]
         if state not in LAUNCHER_STATES:
@@ -466,11 +620,15 @@ class Keeper:
             return Seen("closed", launcher.get("why"))
         if state == "gave_up":
             return Seen("failing", f"the launcher gave up after five restarts in a row: {launcher.get('why')}",
-                        evidence, act_now=True)
-        age = now - parse_iso(launcher["at"])
-        if age > LAUNCHER_STALE_SECONDS:
-            return Seen("gone", f"the launcher last wrote launcher.json {round(age)} s ago, as {state}",
-                        {**evidence, "inbox": pending_requests(self.paths)})
+                        evidence, act_now=True, launcher_down=True)
+        mono = self.monotonic()
+        if self.launcher_at is None or self.launcher_at[0] != launcher["at"]:
+            self.launcher_at = (launcher["at"], mono)
+        unchanged = mono - self.launcher_at[1]
+        if unchanged > LAUNCHER_STALE_SECONDS:
+            return Seen("gone", f"the launcher has not written launcher.json for {round(unchanged)} s "
+                                f"(last as {state}, at {launcher['at']})",
+                        {**evidence, "inbox": pending_requests(self.paths)}, launcher_down=True)
         if state in TRANSITIONAL:
             if self.transition is None or self.transition[0] != state:
                 self.transition = (state, now)
@@ -483,11 +641,16 @@ class Keeper:
         vm = self.probe()
         evidence["vm"] = vm
         if not vm["reachable"]:
+            self.daemon_restarts = []
             return Seen("failing", f"the VM does not answer ssh ({vm['error']})", evidence)
         if "probe_failed" in vm:
             return Seen("failing", f"the probe on the VM failed ({vm['probe_failed']})", evidence)
         if vm["daemon"] != "active":
             return Seen("failing", f"raigolmid is {vm['daemon'] or 'unknown'} on the VM", evidence)
+        restarts = self._daemon_restarted(mono, vm["restarts"])
+        if restarts >= DAEMON_RESTARTS:
+            return Seen("failing", f"systemd has restarted raigolmid {restarts} times in the last "
+                                   f"{DAEMON_RESTART_WINDOW // 60} minutes", evidence)
         if vm["faults_error"] is not None:
             return Seen("failing", f"raigolmid did not answer `rai keeper seen` ({vm['faults_error']})",
                         evidence)
@@ -505,6 +668,15 @@ class Keeper:
                         {**evidence, "fault": fault}, act_now=True)
         return Seen("healthy")
 
+    def _daemon_restarted(self, mono: float, restarts: int) -> int:
+        """How many times systemd restarted raigolmid within DAEMON_RESTART_WINDOW, from its
+        NRestarts at each probe; a count that fell is a guest that booted again."""
+        if self.daemon_restarts and restarts < self.daemon_restarts[-1][1]:
+            self.daemon_restarts = []
+        self.daemon_restarts = [(t, n) for t, n in self.daemon_restarts
+                                if mono - t <= DAEMON_RESTART_WINDOW] + [(mono, restarts)]
+        return restarts - self.daemon_restarts[0][1]
+
     # --- acting ---------------------------------------------------------------------------
     def check(self) -> None:
         now = self.clock()
@@ -515,6 +687,8 @@ class Keeper:
         if seen.kind in ("healthy", "closed", "held"):
             self.state = seen.kind
             self._close(now)
+            if seen.kind == "healthy" and self.owed_recovery:
+                self._alert(*ALERT_RECOVERED, now)
         elif seen.kind == "waiting":
             self.state = "waiting"
         else:
@@ -526,8 +700,6 @@ class Keeper:
         if self.incident is None:
             return
         logger.info("the incident since %s is over: %s", iso(self.incident["since"]), self.state)
-        if self.incident["alerted_at"] is not None:
-            self._alert(*ALERT_RECOVERED, now, repeat=True)
         self.last_incident = {**self.incident, "ended": iso(now), "ended_as": self.state}
         self.incident = None
 
@@ -542,33 +714,72 @@ class Keeper:
             logger.warning("failing: %s", seen.why)
             self.incident = {"since": now, "reason": seen.why, "evidence": seen.evidence,
                              "act_at": now + FAILING_SECONDS, "start_requested_at": None,
-                             "sessions": [], "alerted_at": None, "fault": fault}
+                             "sessions": [], "unreached_since": None, "line_out": None,
+                             "fault": fault}
         incident = self.incident
         incident["reason"], incident["evidence"] = seen.why, seen.evidence
+        self._read_line_out(incident, seen)
         if seen.kind == "gone" and incident["start_requested_at"] is None:
-            if not any(r["request"] == "start" for r in pending_requests(self.paths)):
-                write_request(self.paths, "start", seen.why, now)
-            incident["start_requested_at"] = now
+            self._request_start(incident, seen.why, now)
             incident["act_at"] = now + START_GRACE_SECONDS
             return
         # `act_now` is a failure the launcher has already given up on; after a session even it
         # waits for what that session started to take.
         if now < incident["act_at"] and not (seen.act_now and not incident["sessions"]):
             return
-        if len(incident["sessions"]) >= SESSIONS_PER_INCIDENT:
-            self._alert(*ALERT_NOT_FIXED, now)
+        if counted(incident) >= SESSIONS_PER_INCIDENT:
+            # A fault's answer goes with its last session, so only a machine down is here.
+            self._cannot_fix(incident, seen, ALERT_NOT_FIXED, "", now)
             return
-        ready, why = self.ready()
-        if not ready:
+        self.session_starts = [t for t in self.session_starts if now - t < DAY]
+        if len(self.session_starts) >= SESSIONS_PER_DAY:
+            logger.warning("no session: %d sessions in the last day", len(self.session_starts))
+            self._cannot_fix(incident, seen, ALERT_NOT_FIXED, f"the keeper's {SESSIONS_PER_DAY} "
+                             "sessions for the day are spent", now)
+            return
+        kind, why = self.ready(self.refused_token)
+        if kind == "signed_out":
+            self._cannot_fix(incident, seen, ALERT_SIGNED_OUT, f"the keeper's Claude Code cannot run: {why}", now)
+            return
+        if kind != "ready":
             title, message = ALERT_CANNOT_RUN
-            self._alert(title, message.format(why=why), now)
-            if fault is not None:
-                self._answer(fault["id"], "not_fixed", f"the keeper's Claude Code cannot run: {why}",
-                             now)
+            self._cannot_fix(incident, seen, (title, message.format(why=why)),
+                             f"the keeper's Claude Code cannot run: {why}", now)
             return
-        self._session(incident, now)
+        self._session(incident, seen, now)
 
-    def _session(self, incident: dict[str, Any], now: float) -> None:
+    def _cannot_fix(self, incident: dict[str, Any], seen: Seen, alert: tuple[str, str], words: str,
+                    now: float) -> None:
+        """No session can run on the incident: the person is told, a fault is answered so the
+        machine tab resumes its tabs, and a launcher that is down is asked to start."""
+        fault = incident["fault"]
+        self._alert(*(ALERT_FAULT if fault is not None and alert is not ALERT_SIGNED_OUT else alert), now)
+        if fault is not None:
+            self._answer(fault["id"], "not_fixed", words, now)
+        else:
+            self._retry_start(incident, seen, now)
+
+    def _request_start(self, incident: dict[str, Any], why: str, now: float) -> None:
+        if not any(r["request"] == "start" for r in pending_requests(self.paths)):
+            write_request(self.paths, "start", why, now)
+        incident["start_requested_at"] = now
+
+    def _retry_start(self, incident: dict[str, Any], seen: Seen, now: float) -> None:
+        last = incident["start_requested_at"]
+        if seen.launcher_down and (last is None or now - last >= START_RETRY_SECONDS):
+            self._request_start(incident, seen.why, now)
+
+    def _read_line_out(self, incident: dict[str, Any], seen: Seen) -> None:
+        """The cause raigolmid's line out sent during the incident, or within the day before it
+        (it sends each at most once a day): its words stand, and the keeper adds none."""
+        line_out = (((seen.evidence or {}).get("vm") or {}).get("line_out") or {}).get("sent") or {}
+        for cause, at in line_out.items():
+            if at >= incident["since"] - LINE_OUT_COVERS_SECONDS and incident["line_out"] is None:
+                logger.info("raigolmid's line out sent %s at %s: the keeper sends no alert for "
+                            "this incident", cause, iso(at))
+                incident["line_out"] = cause
+
+    def _session(self, incident: dict[str, Any], seen: Seen, now: float) -> None:
         session_id = str(uuid.uuid4())
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
         log = self.paths.sessions / f"{stamp}.log"
@@ -588,22 +799,35 @@ class Keeper:
         logger.info("session %s on: %s (log %s)", session_id, incident["reason"], log)
         outcome = self.runner(self.prompt(incident, session_id, notes), session_id, log)
         ended = self.clock()
+        counts = outcome["unreached"] is None and not outcome["signed_out"]
+        if outcome["reached"]:
+            self.session_starts.append(now)
         incident["sessions"].append({
             "id": session_id, "started": iso(now), "ended": iso(ended), "log": str(log),
-            "notes": str(notes), "verdict": outcome["verdict"],
-            "resume": f"cd /work/RaiGolmi && claude --resume {session_id}"})
+            "notes": str(notes), "verdict": outcome["verdict"], "counted": counts,
+            "resume": "cd /work/RaiGolmi && CLAUDE_CODE_OAUTH_TOKEN=$(cat "
+                      f"{self.paths.token}) claude --resume {session_id}"})
         incident["act_at"] = ended + FAILING_SECONDS
         logger.info("session %s ended: %s", session_id, outcome["verdict"])
-        if outcome["api_error"] is not None:
-            title, message = ALERT_CANNOT_RUN
-            self._alert(title, message.format(why="its account was refused"), ended)
+        if outcome["signed_out"]:
+            # The next check finds the sign-in refused, and says so.
+            self.refused_token = outcome["token"]
+            incident["act_at"] = ended
+            return
+        if outcome["unreached"] is not None:
+            if incident["unreached_since"] is None:
+                incident["unreached_since"] = now
+            if ended - incident["unreached_since"] >= UNREACHED_SECONDS:
+                self._cannot_fix(incident, seen, ALERT_UNREACHED,
+                                 f"Claude could not be reached for a day ({outcome['unreached']})", ended)
+            return
+        incident["unreached_since"] = None
         if fault is None:
             return
         fixed = outcome["verdict"] == FIXED
-        spent = len(incident["sessions"]) >= SESSIONS_PER_INCIDENT
-        if fixed or spent or outcome["api_error"] is not None:
-            if not fixed and outcome["api_error"] is None:
-                self._alert(*ALERT_NOT_FIXED, ended)
+        if fixed or counted(incident) >= SESSIONS_PER_INCIDENT:
+            if not fixed:
+                self._alert(*ALERT_FAULT, ended)
             words = (outcome["verdict"].removeprefix(VERDICT).strip()
                      .removeprefix("not fixed:").strip() or outcome["verdict"])
             self._answer(fault["id"], "fixed" if fixed else "not_fixed", "" if fixed else words,
@@ -648,10 +872,16 @@ class Keeper:
             + f"You are session {session_id}. Write what you find and do into {notes}. "
             f"Get the machine running again, then find the root cause. End with the verdict line.")
 
-    def _alert(self, title: str, message: str, now: float, repeat: bool = False) -> None:
-        incident = self.incident
-        if (not repeat and incident is not None and incident["alerted_at"] is not None
-                and now - incident["alerted_at"] < REALERT_SECONDS):
+    def _alert(self, title: str, message: str, now: float) -> None:
+        """Each title at most once in REALERT_SECONDS, unless "working again" went out since
+        it: then it is news. None while the line out's word stands for the incident."""
+        recovery = title == ALERT_RECOVERED[0]
+        if not recovery and self.incident is not None and self.incident["line_out"] is not None:
+            return
+        last = self.alerted.get(title)
+        recovered_since = (not recovery and last is not None
+                           and self.alerted.get(ALERT_RECOVERED[0], 0) > last)
+        if last is not None and now - last < REALERT_SECONDS and not recovered_since:
             return
         topic = ntfy_topic(self.paths)
         if not topic:
@@ -660,7 +890,7 @@ class Keeper:
             try:
                 self.push(topic, title, message)
                 outcome = "sent"
-            except (urllib.error.URLError, OSError) as exc:
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
                 # Not marked alerted: the next check tries again.
                 logger.error("the alert '%s' did not reach ntfy.sh: %s", title, exc)
                 self.last_alert = {"at": iso(now), "title": title, "message": message,
@@ -668,25 +898,40 @@ class Keeper:
                 return
         logger.warning("alert '%s': %s", title, outcome)
         self.last_alert = {"at": iso(now), "title": title, "message": message, "outcome": outcome}
-        if incident is not None:
-            incident["alerted_at"] = now
+        self.alerted[title] = now
+        if recovery:
+            self.owed_recovery = False
+        elif title != ALERT_FAULT[0]:
+            self.owed_recovery = True
 
     def report(self, now: float) -> None:
         write_json(self.paths.keeper_json, {
             "at": iso(now), "state": self.state, "why": self.why, "incident": self.incident,
             "last_incident": self.last_incident, "last_alert": self.last_alert,
+            "alerted": self.alerted, "owed_recovery": self.owed_recovery,
+            "session_starts": self.session_starts, "refused_token": self.refused_token,
             "unanswered": self.unanswered})
 
 
 def loop(paths: Paths) -> int:
-    ensure_key(paths)
-    paths.inbox.mkdir(parents=True, exist_ok=True)
-    keeper = Keeper(paths, time.time, lambda: probe_vm(paths),
-                    lambda prompt, sid, log: run_claude(paths, prompt, sid, log),
-                    claude_ready, push_ntfy, lambda args: rai_keeper(paths, args))
+    """Checks every CHECK_SECONDS for as long as the container runs. A check that raises is
+    logged with its traceback and the next one runs: under `restart: unless-stopped` a raise
+    would restart the container into the same error, a crash loop nobody near the machine sees,
+    where this keeps every check that can still be made."""
+    keeper: Keeper | None = None
     logger.info("keeping %s, every %d s", paths.work, CHECK_SECONDS)
     while True:
-        keeper.check()
+        try:
+            if keeper is None:
+                ensure_key(paths)
+                paths.inbox.mkdir(parents=True, exist_ok=True)
+                keeper = Keeper(paths, time.time, time.monotonic, lambda: probe_vm(paths),
+                                lambda prompt, sid, log: run_claude(paths, prompt, sid, log),
+                                lambda refused: claude_ready(paths, refused), push_ntfy,
+                                lambda args: rai_keeper(paths, args))
+            keeper.check()
+        except Exception:
+            logger.exception("the check failed; the next is in %d s", CHECK_SECONDS)
         time.sleep(CHECK_SECONDS)
 
 
@@ -697,6 +942,8 @@ def main(argv: list[str]) -> int:
     if not argv:
         return loop(paths)
     verb, args = argv[0], argv[1:]
+    if verb == "sign-in":
+        return sign_in(paths)
     if verb == "vm":
         client = connect(paths)
         try:
@@ -709,7 +956,7 @@ def main(argv: list[str]) -> int:
     if verb == "request":
         write_request(paths, args[0], args[1], time.time())
         return 0
-    raise SystemExit(f"unknown verb {verb!r}: none, `vm '<command>' [secs]`, or "
+    raise SystemExit(f"unknown verb {verb!r}: none, `sign-in`, `vm '<command>' [secs]`, or "
                      "`request <start|restart|upgrade> '<why>'`")
 
 

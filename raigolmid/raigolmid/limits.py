@@ -10,9 +10,9 @@ told to continue once what cut them off is over:
   (`credproxy.limited`); until then `account.limited` holds every channel's pushes, which
   would only fail (`channel.py`), and at the reset each cut tab is told to continue. The reset
   is the latest the limit can end, not the only way: an upgraded plan or a lifted limit ends it
-  early. So while it holds, one cut tab is told to continue every `PROBE_SECONDS`, and the first
-  answer the API gives as allowed — a turn that ends without an error, or `credproxy.plan`
-  reading `allowed` — is the account answering again, which resumes the rest.
+  early. So while it holds, one cut tab is told to continue every `PROBE_SECONDS`, pushed through
+  the hold, and the first answer the API gives as allowed — a turn that ends without an error,
+  or `credproxy.plan` reading `allowed` — is the account answering again, which resumes the rest.
 
 **The plan's usage** is every API answer's (`credproxy.plan`): kept in `Paths.plan` and read by
 `status` through `plan_view`, which is how a tab paces its work to what the plan has left.
@@ -41,7 +41,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from . import activity, claude_login
+from . import activity, channel, claude_login
 from .events import Event, EventLog
 from .intent import save_json
 
@@ -222,17 +222,20 @@ class Limits:
         if not tabs:
             return
         self.events.emit("account.probed", tab=tabs[0])
-        self._continue(tabs[0], LIMIT)
+        self._continue(tabs[0], LIMIT, probe=True)
 
     def _unattended(self, tab_id: str) -> bool:
         tab = self.session.intent.tabs.get(tab_id)
         return tab is not None and (tab.machine or tab.janitor or tab.managed)
 
-    def _continue(self, tab_id: str, error: str) -> None:
-        """A tab the user sits in front of is theirs to resume; it stays cut until it works."""
+    def _continue(self, tab_id: str, error: str, probe: bool = False) -> None:
+        """A tab the user sits in front of is theirs to resume; it stays cut until it works.
+        A probe's continue is pushed through the hold (`channel.PROBE`)."""
         if not self._unattended(tab_id):
             return
         self._cut.pop(tab_id, None)
+        meta = {"from": "daemon", "standing": "continue"}
+        if probe:
+            meta[channel.PROBE] = "true"
         self.events.emit("limits.continued", tab=tab_id, error=error, deliver={
-            "content": continue_message(error),
-            "meta": {"from": "daemon", "standing": "continue"}})
+            "content": continue_message(error), "meta": meta})

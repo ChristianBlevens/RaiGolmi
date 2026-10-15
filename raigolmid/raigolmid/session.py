@@ -1142,12 +1142,13 @@ class Session:
         except keep.KeepError as exc:
             self.events.emit("kept.prune_failed", reason=str(exc))
 
-    def _reopen(self, tab_id: str, continues: bool = True) -> str:
+    def _reopen(self, tab_id: str, continues: bool = True, at_start: bool = False) -> str:
         """A crashed tab reopens with its conversation. Returns its new container's id;
         a failure leaves the tab crashed, said, and raises. `--continue` reopens a
         conversation idle, so a turn its session ended under is said as `mid_turn`
         (`limits.py` continues it) — read before the new session's start overwrites it, and
-        never for the user's own quit (`continues` false)."""
+        never for the user's own quit (`continues` false). `at_start`: reopened by the
+        daemon's start, which says all its reopens at once (`tabs.reopened`)."""
         tab = self.intent.tabs[tab_id]
         mid_turn = continues and self._mid_turn(tab_id)
         tab.status = "starting"
@@ -1161,18 +1162,19 @@ class Session:
                                  instance=self._open_sandbox_of(tab),
                                  message=f"Agent in tab {tab_id} did not reopen: {exc}")
             raise
-        self.events.emit("agent.reopened", tab=tab_id, mid_turn=mid_turn)
+        self.events.emit("agent.reopened", tab=tab_id, mid_turn=mid_turn, at_start=at_start)
         return container
 
     def _mid_turn(self, tab_id: str) -> bool:
         """Whether the tab's agent last said it was between a prompt and its answer."""
         return activity.read(self.agents.home(tab_id)).busy
 
-    def _restart_or_crash(self, tab_id: str, failed: str, continues: bool = True) -> None:
+    def _restart_or_crash(self, tab_id: str, failed: str, continues: bool = True,
+                          at_start: bool = False) -> None:
         """A reopen with no exit of its own to answer for — the machine shut it down, or its
         container is gone. Its failure goes to the janitor, as a restart's would."""
         try:
-            self._reopen(tab_id, continues)
+            self._reopen(tab_id, continues, at_start)
         except Exception as exc:                       # noqa: BLE001 - said as unfixable
             self.supervisor.unfixable(Unit(labels.Role.AGENT, tab_id), naming.agent(tab_id),
                                       f"Agent in tab {tab_id} {failed}: {exc}")
@@ -1383,7 +1385,9 @@ class Session:
         the same body takes over its work, the user's handing-over carried (`managed`,
         `stop_when`, `until`). The new tab is in the intent before this one leaves it, so a
         run is never seen to end between them. `by` is who handed the work on: "machine", or
-        "self" for a tab that ended its own conversation."""
+        "self" for a tab that ended its own conversation. A successor whose agent does not
+        start is still the work's tab: crashed, and the janitor's as an unfixable restart is,
+        while what is on its way to it waits in its channel."""
         with self._lock:
             tab = self._closable(tab_id)
             if tab.held is not None:
@@ -1404,20 +1408,17 @@ class Session:
                 self.events.emit("tab.managed", tab=successor.tab_id, body=tab.body, on=True,
                                  why="continued", stop_when=successor.stop_when,
                                  until=successor.until)
-            failed, ended = None, None
             try:
                 self._start_agent(successor, resume=False)
-            except Exception as exc:
-                failed = exc
-                del self.intent.tabs[successor.tab_id]
-                ended = self._end_run_if_over()
+            except Exception as exc:                   # noqa: BLE001 - said as unfixable
+                mark_crashed(self.events, successor.tab_id, successor, None, error=str(exc))
+                self.supervisor.unfixable(
+                    Unit(labels.Role.AGENT, successor.tab_id), naming.agent(successor.tab_id),
+                    f"Agent in tab {successor.tab_id}, taking over {tab_id}'s work, did not "
+                    f"start: {exc}")
+            finally:
                 self.store.save(self.intent)
-                self.events.emit("tab.closed", tab=successor.tab_id, body=tab.body,
-                                 reason="agent did not start")
-        self._say_run_ended(ended)
         self._stop_released(released)
-        if failed is not None:
-            raise failed
         return successor
 
     def _closable(self, tab_id: str) -> TabIntent:
@@ -2093,7 +2094,8 @@ class Session:
             reopening = [*report.resumable_tabs, *report.crashed_tabs]
             mid_turn = {t for t in reopening if self._mid_turn(t)}
             for tab_id in report.resumable_tabs:
-                self._restart_or_crash(tab_id, "did not resume after the machine restarted")
+                self._restart_or_crash(tab_id, "did not resume after the machine restarted",
+                                       at_start=True)
             for tab_id in report.crashed_tabs:
                 self._reopen_crashed(tab_id)
             reopened = [t for t in reopening if self.intent.tabs[t].status != "crashed"]
@@ -2119,9 +2121,9 @@ class Session:
         exit = (self.supervisor.exited(Unit(labels.Role.AGENT, tab_id), container.name,
                                        container.id) if container is not None else None)
         if exit is None:
-            self._restart_or_crash(tab_id, "did not reopen")
+            self._restart_or_crash(tab_id, "did not reopen", at_start=True)
             return
-        self.supervisor.settle(exit, lambda: self._reopen(tab_id))
+        self.supervisor.settle(exit, lambda: self._reopen(tab_id, at_start=True))
 
     def _archive_orphaned_homes(self) -> None:
         """A tab the intent no longer names, lost with an intent removed or refused, is closed:

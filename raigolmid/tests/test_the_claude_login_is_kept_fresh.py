@@ -183,13 +183,23 @@ def test_the_agent_credential_refused_with_no_sign_in_goes_out_on_the_line(
     assert len(sent) == 1 and "sign in" in sent[0]
 
 
+def _seen(line, start: float, seconds: float, step: float = 60.0) -> float:
+    """`seconds` of the daemon ticking from `start`, as its run loop does; the time reached."""
+    now = start
+    line.tick(now)
+    while now < start + seconds:
+        now += step
+        line.tick(now)
+    return now
+
+
 def test_every_tab_refused_for_a_day_goes_out_and_an_answered_turn_ends_it(
         tmp_path, monkeypatch):
     from raigolmid import lineout
     h, line, hear, sent = _line_out(tmp_path, monkeypatch)
     h.events.emit("agent.turn_failed", tab="tab-1", error="billing_error")
     hear()
-    started = line._refused_since
+    started = line._refused_at
     h.events.emit("agent.idle", tab="tab-2", done=True, error=None)
     hear()
     line.tick(started + lineout.REFUSED_FOR + 1)
@@ -197,7 +207,84 @@ def test_every_tab_refused_for_a_day_goes_out_and_an_answered_turn_ends_it(
 
     h.events.emit("agent.turn_failed", tab="tab-1", error="billing_error")
     hear()
-    line.tick(line._refused_since + lineout.REFUSED_FOR - 60)
+    failed = h.events_of("agent.turn_failed")[-1]
+    now = failed.ts
+    line.tick(now)
+    # Refused again every hour, as a stalled run's wakes are.
+    while now < failed.ts + lineout.REFUSED_FOR - 120:
+        now += 60
+        if now - line._refused_at >= 3600:
+            line.on_event(dataclasses.replace(failed, ts=now))
+        line.tick(now)
     assert not sent
-    line.tick(line._refused_since + lineout.REFUSED_FOR + 1)
+    _seen(line, now, 180)
     assert len(sent) == 1 and "refuses" in sent[0]
+
+
+def test_the_refusal_clock_runs_only_on_seen_unheld_time_with_a_recent_refusal(
+        tmp_path, monkeypatch):
+    """A boot after a day off, a usage-limit hold, and an old refusal never push."""
+    from raigolmid import lineout
+    h, line, hear, sent = _line_out(tmp_path, monkeypatch)
+    h.events.emit("agent.turn_failed", tab="tab-1", error="invalid_request")
+    hear()
+    t = line._refused_at
+
+    # A day off: the daemon stops and starts again a day later, refused at once.
+    again = lineout.LineOut(h.paths, h.events)
+    again._refused_at = t + lineout.DAY + 7200
+    again.tick(t + lineout.DAY + 7200)
+    assert not sent and again._refused_for < lineout.REFUSED_FOR, "downtime is not counted"
+
+    # The account held at its usage limit for days: the clock stands still.
+    h.events.emit("account.limited", resets_at=None, hold_until=None)
+    hear()
+    line._refused_at = t
+    now = t
+    line.tick(now)
+    for _ in range(3 * 24):
+        now += 60
+        line._refused_at = now
+        line.tick(now)
+    assert line._refused_for == 0.0 and not sent
+
+    # One refusal, then nothing tried for a day: not the API refusing now.
+    h.events.emit("account.resumed")
+    hear()
+    _seen(line, now + 1, lineout.REFUSED_FOR + 3600)
+    assert not sent and line._refused_for <= lineout.REFUSED_RECENTLY + 120
+
+    # A gap longer than a tick is a suspended VM, not seen time.
+    before = line._refused_for
+    line._refused_at = now + 2 * lineout.DAY
+    line.tick(now + 2 * lineout.DAY)
+    assert line._refused_for == before
+
+
+def test_the_sign_in_ending_goes_out_once_ahead_of_its_end(tmp_path, monkeypatch):
+    from raigolmid import lineout
+    h, line, hear, sent = _line_out(tmp_path, monkeypatch)
+    messages: list[str] = []
+    monkeypatch.setattr(lineout, "send",
+                        lambda _topic, title, message: (sent.append(title),
+                                                        messages.append(message)))
+    login = _login(28800)
+    ends = NOW + lineout.LOGIN_LEAD + 3600
+    login["claudeAiOauth"]["refreshTokenExpiresAt"] = int(ends * 1000)
+    _written(h.paths.claude_login, login)
+
+    line.tick(ends - lineout.LOGIN_LEAD - 60)
+    assert not sent, "not yet within the lead"
+    line.tick(ends - lineout.LOGIN_LEAD + 60)
+    assert len(sent) == 1 and "sign in to Claude again" in sent[0]
+    assert "{ends}" not in messages[0] and "phone" in messages[0]
+    line.tick(ends - lineout.LOGIN_LEAD + 60 + lineout.DAY + 1)
+    again = lineout.LineOut(h.paths, h.events)
+    again.tick(ends - 60)
+    assert len(sent) == 1, "said once per end, across a restart"
+
+    # A new sign-in has a new end, which is said in its turn.
+    login["claudeAiOauth"]["refreshTokenExpiresAt"] = int((ends + lineout.DAY * 14) * 1000)
+    _written(h.paths.claude_login, login)
+    again.tick(ends + lineout.DAY * 14 - 3600)
+    assert len(sent) == 2

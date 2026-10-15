@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from raigolmid import claude_login, credential
-from raigolmid.credproxy import Broker, CredentialProxy, Placeholders
+from raigolmid.credproxy import Broker, CredentialProxy, Placeholders, plan_reading
 from raigolmid.events import EventLog
 from tests.fakeruntime import FakeRuntime
 
@@ -154,6 +154,28 @@ def test_the_plans_usage_is_read_from_an_answer_and_said_once_per_change(machine
     assert plan.data == {"status": "rejected", "windows": {
         "7d": {"used": 1.0, "resets_at": 1790000000.0},
         "5h": {"used": 0.4, "resets_at": 1789000000.0}}}
+
+
+class _Answer:
+    def __init__(self, headers: dict[str, str]) -> None:
+        self.headers = headers
+
+    def getheader(self, name: str) -> str | None:
+        return self.headers.get(name)
+
+    def getheaders(self) -> list[tuple[str, str]]:
+        return list(self.headers.items())
+
+
+def test_a_window_the_answer_names_only_half_of_is_left_out():
+    """`limits.plan_view` reads both halves of every window it is given."""
+    reading = plan_reading(_Answer({"anthropic-ratelimit-unified-status": "allowed",
+                                    "anthropic-ratelimit-unified-7d-utilization": "0.5",
+                                    "anthropic-ratelimit-unified-7d-reset": "1790000000",
+                                    "anthropic-ratelimit-unified-5h-utilization": "0.4",
+                                    "anthropic-ratelimit-unified-1h-reset": "1789000000"}))
+    assert reading == {"status": "allowed",
+                       "windows": {"7d": {"used": 0.5, "resets_at": 1790000000.0}}}
 
 
 def test_a_tab_signs_in_with_placeholders_and_the_sign_in_is_swapped_in(machine):

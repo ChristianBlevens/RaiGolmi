@@ -5,7 +5,9 @@ making its documents ready and ending its conversation before it is reached. A t
 that goes on working: stopping it would lose the work it is in the middle of. So it is
 noticed instead: each `TICK_SECONDS` every running tab's context — the input its latest answer
 took (`transcript.context_tokens`) — is read against the budget, and a conversation past it is
-`tab.over_budget`, once, which the janitor takes and tells the tab of (`janitor.py`).
+`tab.over_budget`, once, which the janitor takes and tells the tab of (`janitor.py`). Not a
+hands-off tab (`Intent.hands_off`): the coordinator hands it on at its budget, after the
+machine tab has reviewed its documents, so the janitor's word would only end it early.
 """
 from __future__ import annotations
 
@@ -36,7 +38,8 @@ class ContextWatch:
     def tick(self) -> None:
         for tab_id, tab in dict(self.session.intent.tabs).items():
             # The janitor's own conversation is one failure long and starts fresh each time.
-            if tab_id == JANITOR or tab.status != "running":
+            if (tab_id == JANITOR or tab.status != "running"
+                    or self.session.intent.hands_off(tab_id)):
                 continue
             budget = self.session.context_budget(tab_id)
             home = self.session.agents.home(tab_id)
@@ -48,6 +51,6 @@ class ContextWatch:
                 continue
             self._said.add(str(transcript))
             self.events.emit("tab.over_budget", tab=tab_id, tokens=tokens, budget=budget,
-                             managed=tab.managed, body=tab.body,
+                             body=tab.body,
                              message=(f"Tab {tab_id} is at {tokens // 1000}k tokens of context, "
                                       f"past the {budget // 1000}k budget"))

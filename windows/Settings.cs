@@ -25,6 +25,8 @@ sealed class Settings
     public bool StartAtLogin, KeepAwake, Venus, Keeper;
     public string Memory = DefaultMemory;
     public string NtfyTopic = "";
+    // The outside dead-man's switch's ping URL (healthchecks.io); empty is none.
+    public string HeartbeatUrl = "";
     readonly string path;
 
     public const string DefaultMemory = "8";
@@ -71,6 +73,12 @@ sealed class Settings
                         throw s.Bad(number, "gives ntfy-topic as " + value + ": " + refused);
                     s.NtfyTopic = value;
                     break;
+                case "heartbeat-url":
+                    string wrong = HeartbeatRefusal(value);
+                    if (wrong != null)
+                        throw s.Bad(number, "gives heartbeat-url as " + value + ": " + wrong);
+                    s.HeartbeatUrl = value;
+                    break;
                 default:
                     throw s.Bad(number, "names " + key + ", which is not a setting");
             }
@@ -99,6 +107,7 @@ sealed class Settings
             "memory=" + Memory + Environment.NewLine +
             "venus=" + OnOff(Venus) + Environment.NewLine +
             "ntfy-topic=" + NtfyTopic + Environment.NewLine +
+            "heartbeat-url=" + HeartbeatUrl + Environment.NewLine +
             "keeper=" + OnOff(Keeper) + Environment.NewLine);
     }
 
@@ -117,6 +126,21 @@ sealed class Settings
         if (Topic.IsMatch(topic))
             return null;
         return "an ntfy topic is letters, digits, _ and - only, at most 64 of them";
+    }
+
+    // --- the heartbeat -------------------------------------------------------------------
+
+    // Why `url` is no heartbeat URL, or null when it is one or is empty. It is an https URL, as
+    // healthchecks.io gives its ping URLs (https://hc-ping.com/<uuid>).
+    public static string HeartbeatRefusal(string url)
+    {
+        if (url.Length == 0)
+            return null;
+        Uri uri;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            url.IndexOfAny(new[] { ' ', '\t' }) >= 0)
+            return "a heartbeat URL is an https:// address, as healthchecks.io gives it";
+        return null;
     }
 
     // --- memory ------------------------------------------------------------------------

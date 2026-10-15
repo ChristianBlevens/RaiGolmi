@@ -335,14 +335,17 @@ _WINDOW_HEADER = re.compile(re.escape(PLAN_PREFIX) + r"(\d+[hd])-(utilization|re
 
 
 def plan_reading(answer: http.client.HTTPResponse) -> dict[str, object] | None:
-    """The plan's usage this answer reports, or None for one that reports none (`limits.py`)."""
+    """The plan's usage this answer reports, or None for one that reports none (`limits.py`).
+    A window is kept only with both its share used and its reset: one alone says nothing a
+    tab can pace by."""
     status = answer.getheader(PLAN_PREFIX + "status")
-    windows: dict[str, dict[str, float]] = {}
+    read: dict[str, dict[str, float]] = {}
     for name, value in answer.getheaders():
         match = _WINDOW_HEADER.fullmatch(name.lower())
         if match:
             key = "used" if match.group(2) == "utilization" else "resets_at"
-            windows.setdefault(match.group(1), {})[key] = float(value)
+            read.setdefault(match.group(1), {})[key] = float(value)
+    windows = {name: window for name, window in read.items() if len(window) == 2}
     if status is None and not windows:
         return None
     return {"status": status, "windows": windows}

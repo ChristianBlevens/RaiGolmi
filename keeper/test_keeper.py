@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import keeper as k  # noqa: E402
 
 T0 = 1_800_000_000.0
-HEALTHY = {"reachable": True, "daemon": "active", "held": False, "hold": None,
+HEALTHY = {"reachable": True, "daemon": "active", "restarts": 0, "line_out": None,
+           "held": False, "hold": None,
            "run_active": True, "last_event": {"type": "agent.busy", "age_s": 30},
            "faults": [], "faults_error": None}
 FAULT = {"id": "fault-1", "title": "jobs of an earlier tab no tab can stop",
@@ -20,24 +21,34 @@ FAULT = {"id": "fault-1", "title": "jobs of an earlier tab no tab can stop",
 class World:
     def __init__(self, tmp: Path) -> None:
         self.paths = k.Paths(work=tmp / "RaiGolmi", launcher_home=tmp / "launcher",
-                             key=tmp / "root" / "keeper_ed25519")
+                             key=tmp / "root" / "keeper_ed25519",
+                             token=tmp / "root" / ".keeper-claude-token")
         self.paths.launcher_home.mkdir(parents=True)
         (self.paths.launcher_home / "settings.ini").write_text("memory=8\nntfy-topic=raigolmi-test\n")
         self.now = T0
         self.vm = dict(HEALTHY)
         self.sessions: list[str] = []
         self.verdict = "KEEPER: not fixed: still down"
+        # What read_outcome says beyond the verdict.
+        self.outcome = {"reached": True, "signed_out": False, "unreached": None}
         self.signed_in = True
+        self.refused: list[str | None] = []
         self.pushes: list[tuple[str, str, str]] = []
         self.told: list[list[str]] = []
         self.vm_answers = True
         self.keeper = self.make()
 
     def make(self) -> k.Keeper:
-        return k.Keeper(self.paths, lambda: self.now, lambda: self.vm, self.run,
-                        lambda: (self.signed_in, "" if self.signed_in else "Claude Code is not signed in"),
+        return k.Keeper(self.paths, lambda: self.now, lambda: self.now, lambda: self.vm, self.run,
+                        self.ready,
                         lambda topic, title, message: self.pushes.append((topic, title, message)),
                         self.tell)
+
+    def ready(self, refused: str | None) -> tuple[str, str]:
+        self.refused.append(refused)
+        if refused == "token-1":
+            return "signed_out", "Claude refused its sign-in"
+        return ("ready", "") if self.signed_in else ("signed_out", "it has no sign-in")
 
     def tell(self, args: list[str]) -> dict:
         """raigolmid's faults.py as `rai keeper` reaches it: a taken fault is still listed, an
@@ -54,7 +65,7 @@ class World:
 
     def run(self, prompt: str, session_id: str, log: Path) -> dict:
         self.sessions.append(prompt)
-        return {"verdict": self.verdict, "api_error": None}
+        return {"verdict": self.verdict, **self.outcome, "token": "token-1"}
 
     def launcher(self, state: str, written: float | None = None) -> None:
         """The launcher in `state`, writing launcher.json at every check as a live one does,
@@ -108,6 +119,8 @@ def test_usage_hold_does_nothing(world: World) -> None:
 def test_stale_launcher_is_asked_to_start_then_a_session(world: World) -> None:
     world.launcher("running", written=T0 - 10 * k.LAUNCHER_STALE_SECONDS)
     world.check()
+    assert world.inbox() == [], "unchanged is measured from when the keeper first read it"
+    world.check(after=k.LAUNCHER_STALE_SECONDS + 1)
     assert [r["request"] for r in world.inbox()] == ["start"]
     world.check(after=k.CHECK_SECONDS)
     assert len(world.inbox()) == 1, "one start request, not one per check"
@@ -171,7 +184,8 @@ def test_not_signed_in_alerts_without_a_session(world: World) -> None:
     world.check()
     world.check(after=k.CHECK_SECONDS)
     assert world.sessions == []
-    assert len(world.pushes) == 1 and "not signed in" in world.pushes[0][2]
+    assert [p[1:] for p in world.pushes] == [k.ALERT_SIGNED_OUT]
+    assert "restart" not in world.pushes[0][2].lower()
 
 
 def test_incident_survives_a_keeper_restart(world: World) -> None:
@@ -190,10 +204,23 @@ def test_verdict_read_from_stream_json(tmp_path: Path) -> None:
         "not json",
         json.dumps({"type": "result", "is_error": False,
                     "result": "Restarted the daemon.\nKEEPER: fixed"})]))
-    assert k.read_outcome(log) == {"verdict": "KEEPER: fixed", "api_error": None}
-    log.write_text(json.dumps({"type": "result", "is_error": True, "api_error_status": 429,
-                               "result": "limit reached"}))
-    assert k.read_outcome(log)["api_error"].startswith("429")
+    assert k.read_outcome(log) == {"verdict": "KEEPER: not fixed: Claude never answered: "
+                                              "Restarted the daemon.\nKEEPER: fixed",
+                                   "reached": False, "signed_out": False,
+                                   "unreached": "Claude never answered: Restarted the daemon.\nKEEPER: fixed"}
+    log.write_text("\n".join([
+        json.dumps({"type": "assistant", "message": {"content": []}}),
+        json.dumps({"type": "result", "is_error": False,
+                    "result": "Restarted the daemon.\nKEEPER: fixed"})]))
+    assert k.read_outcome(log) == {"verdict": "KEEPER: fixed", "reached": True,
+                                   "signed_out": False, "unreached": None}
+    log.write_text(json.dumps({"type": "result", "is_error": True, "api_error_status": 529,
+                               "result": "overloaded"}))
+    assert k.read_outcome(log)["unreached"].startswith("the API answered 529")
+    log.write_text(json.dumps({"type": "result", "is_error": True, "api_error_status": 401,
+                               "result": "OAuth token has expired"}))
+    outcome = k.read_outcome(log)
+    assert outcome["signed_out"] and outcome["unreached"] is None
 
 
 def test_key_is_appended_once(world: World, tmp_path: Path) -> None:
@@ -232,7 +259,7 @@ def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_alerted_on
     assert len(world.sessions) == k.SESSIONS_PER_INCIDENT
     assert "Earlier keeper sessions" in world.sessions[1]
     assert world.told[-1] == ["answer", "fault-1", "not_fixed", "still down"]
-    assert [p[1] for p in world.pushes] == [k.ALERT_NOT_FIXED[0]]
+    assert [p[1] for p in world.pushes] == [k.ALERT_FAULT[0]]
     for _ in range(3):
         assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy"
     assert len(world.pushes) == 1, "an answered fault is the machine tab's: no recovery alert"
@@ -264,4 +291,163 @@ def test_a_fault_while_claude_code_cannot_run_is_answered_not_fixed(world: World
     world.check()
     assert world.sessions == []
     assert world.told[-1][:3] == ["answer", "fault-1", "not_fixed"]
-    assert "not signed in" in world.told[-1][3] and len(world.pushes) == 1
+    assert "no sign-in" in world.told[-1][3] and len(world.pushes) == 1
+
+
+def spend_sessions(world: World) -> None:
+    """A gave_up incident through both its sessions."""
+    world.check()
+    world.check(after=k.FAILING_SECONDS)
+    assert len(world.sessions) == k.SESSIONS_PER_INCIDENT
+
+
+def test_gave_up_with_sessions_spent_keeps_asking_to_start(world: World) -> None:
+    world.launcher("gave_up")
+    spend_sessions(world)
+    world.check(after=k.FAILING_SECONDS)
+    assert [r["request"] for r in world.inbox()] == ["start"]
+    for p in world.paths.inbox.glob("*.json"):
+        p.unlink()                      # the door took it, and the launcher gave up again
+    world.check(after=k.CHECK_SECONDS)
+    assert world.inbox() == [], "spaced, not one per check"
+    world.check(after=k.START_RETRY_SECONDS)
+    assert [r["request"] for r in world.inbox()] == ["start"]
+    assert len(world.sessions) == k.SESSIONS_PER_INCIDENT
+
+
+def test_sessions_are_bounded_per_day_across_incidents(world: World) -> None:
+    world.launcher("running")
+    for n in range(3):
+        world.vm = {**HEALTHY, "faults": [{**FAULT, "id": f"fault-{n}"}]}
+        world.check(after=k.CHECK_SECONDS)
+        world.check(after=k.FAILING_SECONDS)
+    assert len(world.sessions) == k.SESSIONS_PER_DAY
+    assert world.told[-1][:3] == ["answer", "fault-2", "not_fixed"]
+    assert "sessions for the day are spent" in world.told[-1][3]
+    world.vm = {**HEALTHY, "faults": [{**FAULT, "id": "fault-3"}]}
+    world.check(after=k.DAY)
+    assert len(world.sessions) == k.SESSIONS_PER_DAY + 1, "the window frees"
+
+
+def test_a_daemon_crash_loop_is_failing_and_one_restart_is_not(world: World) -> None:
+    world.launcher("running")
+    world.check()
+    world.vm = {**HEALTHY, "restarts": 1}
+    assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy"
+    world.vm = {**HEALTHY, "restarts": 2}
+    report = world.check(after=k.CHECK_SECONDS)
+    assert report["state"] == "failing" and "restarted raigolmid 2 times" in report["why"]
+    world.vm = {**HEALTHY, "restarts": 2}
+    assert world.check(after=k.DAEMON_RESTART_WINDOW + 1)["state"] == "healthy"
+    world.vm = {**HEALTHY, "restarts": 0}
+    assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy", "a guest booted again"
+
+
+def test_sessions_claude_never_answered_do_not_count_and_a_day_of_them_is_told(world: World) -> None:
+    world.outcome = {"reached": False, "signed_out": False, "unreached": "Claude never answered: offline"}
+    world.launcher("gave_up")
+    world.check()
+    for _ in range(4):
+        world.check(after=k.FAILING_SECONDS)
+    assert len(world.sessions) == 5 and world.pushes == []
+    for _ in range(int(k.UNREACHED_SECONDS // k.FAILING_SECONDS)):
+        world.check(after=k.FAILING_SECONDS)
+    assert [p[1:] for p in world.pushes] == [k.ALERT_UNREACHED]
+    world.outcome = {"reached": True, "signed_out": False, "unreached": None}
+    before = len(world.sessions)
+    world.check(after=k.FAILING_SECONDS)
+    world.check(after=k.FAILING_SECONDS)
+    assert len(world.sessions) == before + 2, "both of the incident's sessions are still its own"
+
+
+def test_staleness_is_by_the_keepers_clock_not_the_launchers(world: World) -> None:
+    world.launcher("running")
+    world.check()
+    for n in range(5):                  # a launcher whose clock is hours behind, still writing
+        world.written = T0 - 5 * 3600 + n
+        assert world.check(after=k.CHECK_SECONDS * 2)["state"] == "healthy"
+    report = world.check(after=k.LAUNCHER_STALE_SECONDS + 1)
+    assert report["state"] == "failing" and "has not written" in report["why"]
+
+
+def test_claude_ready_answers_rather_than_raises(world: World, monkeypatch) -> None:
+    assert k.claude_ready(world.paths, None)[0] == "signed_out", "no token file"
+    world.paths.token.parent.mkdir(parents=True, exist_ok=True)
+    world.paths.token.write_text("sk-token\n")
+    assert k.claude_ready(world.paths, k.fingerprint("sk-token")) == ("signed_out", "Claude refused its sign-in")
+
+    def hangs(*args, **kwargs):
+        raise k.subprocess.TimeoutExpired(args[0], k.CLAUDE_STATUS_SECONDS)
+    monkeypatch.setattr(k.subprocess, "run", hangs)
+    assert k.claude_ready(world.paths, None)[0] == "cannot_run"
+
+
+def test_the_loop_outlives_a_check_that_raises(world: World, monkeypatch) -> None:
+    checks = []
+
+    def check(self) -> None:
+        checks.append(1)
+        raise ValueError("launcher.json names state 'odd'")
+
+    def sleep(seconds: float) -> None:
+        if len(checks) == 3:
+            raise KeyboardInterrupt
+    monkeypatch.setattr(k.Keeper, "check", check)
+    monkeypatch.setattr(k, "ensure_key", lambda paths: None)
+    monkeypatch.setattr(k.time, "sleep", sleep)
+    with pytest.raises(KeyboardInterrupt):
+        k.loop(world.paths)
+    assert len(checks) == 3
+
+
+def test_a_refused_sign_in_stops_sessions_and_says_so_plainly(world: World) -> None:
+    world.outcome = {"reached": False, "signed_out": True, "unreached": None}
+    world.launcher("gave_up")
+    world.check()
+    world.check(after=k.CHECK_SECONDS)
+    assert len(world.sessions) == 1 and world.refused[-1] == "token-1"
+    assert [p[1:] for p in world.pushes] == [k.ALERT_SIGNED_OUT]
+    assert "Nothing to do; the owner will fix it when back." in world.pushes[0][2]
+
+
+def test_one_alert_title_a_day_across_incidents_and_recovery_follows_a_superseded_one(world: World) -> None:
+    world.launcher("gave_up")
+    spend_sessions(world)
+    world.check(after=k.FAILING_SECONDS)
+    assert [p[1] for p in world.pushes] == [k.ALERT_NOT_FIXED[0]]
+    world.launcher("running")
+    world.vm = {**HEALTHY, "daemon": "failed"}
+    world.check(after=k.CHECK_SECONDS)       # a new incident, the alerted one superseded
+    world.check(after=k.FAILING_SECONDS)
+    world.check(after=k.FAILING_SECONDS)
+    world.check(after=k.FAILING_SECONDS)
+    assert [p[1] for p in world.pushes] == [k.ALERT_NOT_FIXED[0]]
+    world.vm = dict(HEALTHY)
+    world.check(after=k.CHECK_SECONDS)
+    assert world.pushes[-1][1] == k.ALERT_RECOVERED[0]
+
+
+def test_working_again_only_when_healthy(world: World) -> None:
+    world.launcher("gave_up")
+    spend_sessions(world)
+    world.check(after=k.FAILING_SECONDS)
+    world.launcher("running")
+    world.vm = {**HEALTHY, "held": True}
+    assert world.check(after=k.CHECK_SECONDS)["state"] == "held"
+    assert [p[1] for p in world.pushes] == [k.ALERT_NOT_FIXED[0]]
+    world.vm = dict(HEALTHY)
+    world.check(after=k.CHECK_SECONDS)
+    assert world.pushes[-1][1] == k.ALERT_RECOVERED[0]
+
+
+def test_the_line_outs_word_stands(world: World) -> None:
+    world.launcher("running")
+    world.vm = {**HEALTHY, "daemon": "failed", "line_out": {"sent": {"disk_full": T0 - 3600}}}
+    world.check()
+    for _ in range(4):
+        world.check(after=k.FAILING_SECONDS)
+    assert len(world.sessions) == k.SESSIONS_PER_INCIDENT, "it may still run its sessions"
+    assert world.pushes == []
+    world.vm = dict(HEALTHY)
+    world.check(after=k.CHECK_SECONDS)
+    assert world.pushes == [], "nothing was said, so no working again"

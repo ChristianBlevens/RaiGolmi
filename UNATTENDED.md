@@ -34,8 +34,14 @@ the only thing anyone should need to do is turn the PC back on if it goes off.
    - *Venus (Vulkan)*: on if the run needs the GPU
    - *Phone alerts*: your ntfy topic, then *Send a test alert* and check the phone
    - *Keeper*: on (the first time takes a few minutes while its image builds)
+   - *Heartbeat*: at healthchecks.io (free account) create a check named *RaiGolmi PC is off:
+     please turn it on, or restart it (Start, Power, Restart)*, Period 5 minutes, Grace 1 hour
+     (the window's own restarts take under 10 minutes; a Windows-update reboot and sign-in far
+     longer). Under Integrations add ntfy with your topic. Paste the check's ping URL here.
 9. **Settings → Open the keeper's terminal**, and in it:
-   - `claude`, then `/login` (or `claude setup-token`), then `/exit`
+   - `python3 /work/RaiGolmi/keeper/keeper.py sign-in`: it runs `claude setup-token`, which
+     opens a sign-in link and then shows a token valid for a year; copy the token, paste it
+     where the helper asks, and press Enter
    - `gh auth login` (GitHub.com, HTTPS, log in with a browser)
 10. Close the RaiGolmi window and open it again, so the machine lets the keeper in.
 11. Check, a few minutes later: `keeper\outbox\keeper.json` says `healthy`, and
@@ -43,6 +49,9 @@ the only thing anyone should need to do is turn the PC back on if it goes off.
 
 ## Before leaving
 
-12. Start the run in the machine tab, and leave the window open.
-13. Tell whoever is around: **if the PC is off, turn it on. Nothing else.** The phone alert says
+12. Sign in to claude.ai again on the machine just before leaving (`rai claude-login --login` in its
+    terminal). That sign-in lasts a fixed 14 days and is not renewed: after it ends the work goes on, but
+    answering tabs from the phone stops. The phone gets a warning 3 days before.
+13. Start the run in the machine tab, and leave the window open.
+14. Tell whoever is around: **if the PC is off, turn it on. Nothing else.** The phone alert says
     what is wrong in plain words and whether there is anything to do.
