@@ -20,6 +20,7 @@ ExecStart=/usr/bin/raigolmid
 # SIGTERM to the daemon alone: its shutdown stops its own children (the clipboard's
 # watches), and one killed under it first reads as a part of the machine that died.
 KillMode=mixed
+# Also on its watchdog, which the daemon arms itself once ready (daemon.py `_keep_alive`).
 Restart=on-failure
 RestartSec=2
 

@@ -302,6 +302,10 @@ class Machine
         var a = new List<string>();
         a.Add("-name RaiGolmi");
         a.Add("-machine type=q35,accel=whpx,kernel-irqchip=on -cpu max -m " + MemoryMiB + " -smp " + Environment.ProcessorCount);
+        // A hung guest kernel stops pinging the q35 chipset's watchdog (host/systemd/
+        // runtime-watchdog.conf). QEMU pauses the guest then, and Watch restarts the machine
+        // cold, the path this launcher owns and counts, never a reset in place behind it.
+        a.Add("-action watchdog=pause");
         a.Add("-drive " + Quote("if=pflash,format=raw,readonly=on,file=" + Opt(Native.Ascii(Firmware))));
         a.Add("-drive " + Quote("if=pflash,format=raw,file=" + Opt(Native.Ascii(Vars))));
         // What the guest discards (its trim every ten minutes and at shutdown) the patched QEMU
@@ -1056,6 +1060,10 @@ class Window : Form
                 Note("status " + status);
             lastStatus = status;
             unanswered = 0;
+            // QEMU's run state for a guest its watchdog paused (-action watchdog=pause).
+            using (var answer = System.Text.Json.JsonDocument.Parse(status))
+                if (answer.RootElement.GetProperty("return").GetProperty("status").GetString() == "watchdog")
+                    BeginInvoke(new Action(() => Recover("the guest's watchdog fired")));
         }
         catch (Exception e)
         {

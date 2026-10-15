@@ -31,6 +31,7 @@ from .hostkeys import HostKeyError, HostKeys
 from .maintenance import Maintenance
 from .janitor import Janitor
 from .channel import Channels
+from .client import ApiClient, ApiError
 from .clipboard import ClipboardBridge
 from .coordinator import Coordinator
 from .limits import Limits
@@ -64,6 +65,11 @@ logger = logging.getLogger(__name__)
 # because the only toolkit on the host is a terminal — GTK lives in the images this is waiting
 # for, which is the whole reason the wait exists.
 BOOT_SCREEN_COMMAND = "foot --app-id=raigolmi-boot rai boot"
+
+# How long the API may leave `version` unanswered before systemd restarts the daemon
+# (`_keep_alive`). `version` reads one number, so an answer this late is a daemon that is not
+# answering, not a slow one: the span the launcher gives QEMU's main loop (`HungAfter`).
+WATCHDOG_SECONDS = 120
 
 
 class AlreadyRunning(Exception):
@@ -109,8 +115,8 @@ class Lock:
             self._fh = None
 
 
-def _notify_ready() -> None:
-    """systemd's readiness message (sd_notify(3)) to the unit that started this process; one
+def _notify(message: bytes) -> None:
+    """A message to systemd (sd_notify(3)) from the unit that started this process; one
     started outside a unit has no NOTIFY_SOCKET and nobody to tell."""
     path = os.environ.get("NOTIFY_SOCKET")
     if not path:
@@ -118,7 +124,7 @@ def _notify_ready() -> None:
     address = "\0" + path[1:] if path.startswith("@") else path
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
         notify.connect(address)
-        notify.sendall(b"READY=1")
+        notify.sendall(message)
 
 
 class Daemon:
@@ -218,7 +224,7 @@ class Daemon:
         self.questions.offer_to_judge()
         self.coordinator.announce()
         self._reconciled.set()
-        _notify_ready()
+        _notify(b"READY=1")
         self._bring_up_host_surfaces()
 
         for target, name in ((lambda: self.janitor.run(self._stop), "janitor"),
@@ -249,7 +255,8 @@ class Daemon:
                              (lambda: self.clipboard.run(self._stop), "clipboard"),
                              (self._watch_runtime, "runtime-events"),
                              (self._watch_files, "file-watch"),
-                             (self._watch_settings, "settings-watch")):
+                             (self._watch_settings, "settings-watch"),
+                             (self._keep_alive, "watchdog")):
             self._run_until_stopped(target, name)
 
     def _run_until_stopped(self, target, name: str) -> None:
@@ -557,6 +564,27 @@ class Daemon:
                     return
                 self.events.emit("watch.failed", error=str(exc))
                 time.sleep(2.0)
+
+    def _keep_alive(self) -> None:
+        """systemd's watchdog, armed here (`WATCHDOG_USEC=`) rather than by the unit's
+        `WatchdogSec=`, so a first start that builds for minutes is never cut. Pinged only
+        after the API has answered `version` over its own socket: an API that stops answering
+        stops the pings, and systemd restarts the daemon (`Restart=on-failure`). Every half of
+        the watchdog's time, as sd_watchdog_enabled(3) recommends."""
+        if not os.environ.get("NOTIFY_SOCKET"):
+            self._stop.wait()
+            return
+        api = ApiClient(self.paths.api_socket, timeout=WATCHDOG_SECONDS / 2)
+        _notify(b"WATCHDOG_USEC=%d" % (WATCHDOG_SECONDS * 1_000_000))
+        while True:
+            try:
+                api.call("version")
+            except ApiError as exc:
+                logger.warning("watchdog not pinged: the API did not answer version: %s", exc)
+            else:
+                _notify(b"WATCHDOG=1")
+            if self._stop.wait(WATCHDOG_SECONDS / 2):
+                return
 
     def stop(self) -> None:
         self.events.emit("raigolmid.stopping", epoch=self.epoch,
