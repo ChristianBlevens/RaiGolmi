@@ -59,6 +59,7 @@ import socket
 import socketserver
 import ssl
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -326,6 +327,27 @@ class Broker:
 LIMIT_RESET = "anthropic-ratelimit-unified-reset"
 
 
+# The plan's usage as every API answer reports it: `-status` (allowed, allowed_warning,
+# rejected) and, for each window, `-<window>-utilization` (the share of it used, 0 to 1) and
+# `-<window>-reset` (epoch seconds), the window named by its length ("5h", "7d").
+PLAN_PREFIX = "anthropic-ratelimit-unified-"
+_WINDOW_HEADER = re.compile(re.escape(PLAN_PREFIX) + r"(\d+[hd])-(utilization|reset)")
+
+
+def plan_reading(answer: http.client.HTTPResponse) -> dict[str, object] | None:
+    """The plan's usage this answer reports, or None for one that reports none (`limits.py`)."""
+    status = answer.getheader(PLAN_PREFIX + "status")
+    windows: dict[str, dict[str, float]] = {}
+    for name, value in answer.getheaders():
+        match = _WINDOW_HEADER.fullmatch(name.lower())
+        if match:
+            key = "used" if match.group(2) == "utilization" else "resets_at"
+            windows.setdefault(match.group(1), {})[key] = float(value)
+    if status is None and not windows:
+        return None
+    return {"status": status, "windows": windows}
+
+
 def _limit_reset(answer: http.client.HTTPResponse) -> dict[str, object]:
     """When a 429's limit resets, or None with what the header said instead (`limits.py`)."""
     said = answer.getheader(LIMIT_RESET)
@@ -425,6 +447,7 @@ class _Handler(BaseHTTPRequestHandler):
             if answer.status == 429:
                 proxy.events.emit("credproxy.limited", owner=owner, path=self.path,
                                   **_limit_reset(answer))
+            proxy.saw_plan(plan_reading(answer))
             try:
                 self._relay(answer)
             except OSError as exc:
@@ -595,6 +618,19 @@ class CredentialProxy:
         self.tls = {h: broker.authority.context_for(h) for h in self.upstreams}
         self._server = _Server((host, port), _Handler)
         self._server.proxy = self
+        self._plan_lock = threading.Lock()
+        self._plan: dict[str, object] | None = None
+
+    def saw_plan(self, reading: dict[str, object] | None) -> None:
+        """`credproxy.plan` when an answer reports the plan's usage differently from the last:
+        at most once a percent of a window, so the log carries every step and no repeats."""
+        if reading is None:
+            return
+        with self._plan_lock:
+            if reading == self._plan:
+                return
+            self._plan = reading
+        self.events.emit("credproxy.plan", **reading)
 
     @property
     def address(self) -> tuple[str, int]:

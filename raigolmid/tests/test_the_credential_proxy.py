@@ -140,6 +140,22 @@ def test_the_usage_limits_reset_is_read_from_its_429(machine, said, resets_at):
     assert (limited.data["owner"], limited.data["resets_at"]) == ("tab-1", resets_at)
 
 
+def test_the_plans_usage_is_read_from_an_answer_and_said_once_per_change(machine):
+    broker, proxy, events, _ = machine
+    Upstream.limited = {"anthropic-ratelimit-unified-status": "rejected",
+                        "anthropic-ratelimit-unified-7d-utilization": "1.0",
+                        "anthropic-ratelimit-unified-7d-reset": "1790000000",
+                        "anthropic-ratelimit-unified-5h-utilization": "0.4",
+                        "anthropic-ratelimit-unified-5h-reset": "1789000000"}
+    placeholder = broker.environment("tab-1")["CLAUDE_CODE_OAUTH_TOKEN"]
+    _post(proxy, {"Authorization": f"Bearer {placeholder}"})
+    _post(proxy, {"Authorization": f"Bearer {placeholder}"})
+    [plan] = [e for e in events.tail(50) if e.type == "credproxy.plan"]
+    assert plan.data == {"status": "rejected", "windows": {
+        "7d": {"used": 1.0, "resets_at": 1790000000.0},
+        "5h": {"used": 0.4, "resets_at": 1789000000.0}}}
+
+
 def test_a_tab_signs_in_with_placeholders_and_the_sign_in_is_swapped_in(machine):
     broker, proxy, _, _ = machine
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in broker.environment("tab-1", login=True), \

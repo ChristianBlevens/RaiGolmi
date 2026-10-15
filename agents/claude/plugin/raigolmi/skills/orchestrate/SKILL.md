@@ -90,6 +90,18 @@ audited: 7102 2026-10-05
 - A ruling goes into the project's documents, written by the tab, before you hand the tab on;
   a direction meant to outlast the conversation is never left only in a `direct`.
 
+## Pacing the run to the plan
+
+- The run spends the plan's allowance evenly across what is left of its windows: `status`'s
+  `plan` says each window's `on_course_for` (the primer's *How widely to work*). Read it at each
+  managed turn's end.
+- Under 1, `direct` the tab to work wider — independent items in parallel through subagents,
+  the next item started while a long job runs. Over 1, narrower — one item at a time, the
+  cheapest check that settles it, no speculative work. Say which in the direction, with the
+  number, so the tab's next conversation inherits it through its `SESSION-START.md`.
+- A usage limit holds every tab until the API answers again, and the daemon resumes them; it is
+  never a reason to close or restart a tab.
+
 ## Handing a tab on
 
 - At its budget, `restart_fresh` first has the tab make its documents ready; once told that turn

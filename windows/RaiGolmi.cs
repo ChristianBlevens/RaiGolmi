@@ -455,11 +455,17 @@ class Window : Form
         bridge.Start();
     }
 
-    // The last run's log is kept beside this one's, for the run that ended badly.
-    static void KeepPrevious(string log)
+    // The last run's log is kept beside this one's, for the run that ended badly. One that ended
+    // in a restart is also kept under when it was last written, so the restarts that follow
+    // cannot overwrite what took the machine down.
+    void KeepPrevious(string log)
     {
-        if (File.Exists(log))
-            File.Copy(log, Path.ChangeExtension(log, ".previous.log"), true);
+        if (!File.Exists(log))
+            return;
+        File.Copy(log, Path.ChangeExtension(log, ".previous.log"), true);
+        if (recoveries > 0)
+            File.Copy(log, Path.ChangeExtension(log, ".restarted-" +
+                File.GetLastWriteTime(log).ToString("yyyyMMdd-HHmmss") + ".log"), true);
     }
 
     // --- the transfer bridge's Windows side ----------------------------------------------
@@ -1260,13 +1266,36 @@ class Window : Form
         keyboard.Dispose();
         qemu.WaitForExit();      // drains the redirected streams
         // A QEMU that ends on its own after the guest was running is restarted rather than
-        // reported to a screen nobody may be at; one that never ran the guest is a start that
+        // reported to a screen nobody may be at, and so is a restart's QEMU that fails to start,
+        // which counts toward the restarts in a row. A first start that never ran the guest
         // fails the same way again, and is reported.
         string why = recovering;
-        if (why == null && qemu.ExitCode != 0 && !poweredOff && !shutdownSent && lastStatus != null)
+        if (why == null && qemu.ExitCode != 0 && !poweredOff && !shutdownSent &&
+            (lastStatus != null || recoveries > 0))
             why = "QEMU exited with code " + qemu.ExitCode;
-        if (why != null && RestartAfter(why))
+        if (why != null)
+        {
+            Note("stopped: " + why);
+            if (!RestartAfter(why))
+                GiveUp(why);
             return;
+        }
+        ReportExit();
+    }
+
+    // The restarts in a row are used up: the one alert, sent before anything can end this
+    // process, because a machine that cannot restart itself is what needs the owner.
+    async void GiveUp(string why)
+    {
+        Note("not restarting: " + MostRecoveries + " restarts in a row each ended within " +
+             StableRun.TotalMinutes + " minutes");
+        await Alert("RaiGolmi needs you", why + ", after " + MostRecoveries + " restarts in a row. " +
+                    "It is not restarting again; its log is " + machine.Log + ".");
+        ReportExit();
+    }
+
+    void ReportExit()
+    {
         if (qemu.ExitCode != 0)
         {
             string log;
@@ -1303,30 +1332,17 @@ class Window : Form
         qemu.Kill();
     }
 
-    // Starts a fresh launcher for the same machine and closes this one, once the alert has gone;
-    // false when the restarts in a row are used up, which is then reported as a failure.
+    // Starts a fresh launcher for the same machine and closes this one, with no alert: a machine
+    // that restarts itself needs nobody. False when the restarts in a row are used up.
     bool RestartAfter(string why)
     {
         int next = DateTime.UtcNow - started >= StableRun ? 1 : recoveries + 1;
         if (next > MostRecoveries)
-        {
-            Note("not restarting: " + MostRecoveries + " restarts in a row each ended within " +
-                 StableRun.TotalMinutes + " minutes");
-            _ = Alert("RaiGolmi stopped", why + ", after " + MostRecoveries + " restarts in a row. " +
-                  "It is not restarting again; its log is " + machine.Log + ".");
             return false;
-        }
-        Restart(why, next);
-        return true;
-    }
-
-    async void Restart(string why, int next)
-    {
-        await Alert("RaiGolmi restarted", why + "; the machine is starting again (restart " + next +
-                    " in a row).");
         Note("restarting the machine (" + next + " in a row)");
         Process.Start(Environment.ProcessPath, Launcher.RecoverFlag + " " + next);
         Close();
+        return true;
     }
 
     // A push to the ntfy topic when one is set, its outcome in the log; never raised, because

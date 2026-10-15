@@ -1,6 +1,6 @@
 """A turn an API error cut off is resumed without the user (`limits.py`): the account's usage
-limit at the reset the proxy read, or by a probe when nobody said it; a transient error after a
-wait; and only the tabs nobody sits in front of."""
+limit at the reset the proxy read, or earlier when a probe or any answer finds the API serving
+again; a transient error after a wait; and only the tabs nobody sits in front of."""
 from __future__ import annotations
 
 import time
@@ -9,7 +9,7 @@ import pytest
 
 from raigolmid import activity, boot, naming
 from raigolmid.limits import (GRACE_SECONDS, PROBE_SECONDS, RETRY_CAP_SECONDS, RETRY_SECONDS,
-                              Limits)
+                              Limits, plan_view)
 from raigolmid.session import Session
 from tests.test_the_machine_tab_coordinates import BODY, MACHINE, Machine, h  # noqa: F401
 
@@ -58,6 +58,37 @@ def test_the_usage_limit_holds_every_push_and_resumes_the_cut_tabs_at_its_reset(
     for tab in (MACHINE, BODY):
         assert "usage limit" in m.contents(tab)[-1]
     assert m.channels.take(BODY) is not None
+
+
+def test_a_timed_limit_ends_early_when_the_plan_answers_allowed(m):
+    """An upgraded plan lifts the limit before its reset: the hold is probed regardless, and an
+    answer reading `allowed` resumes every cut tab."""
+    m.cut(BODY, "rate_limit")
+    now = time.time()
+    resets = now + 40 * 3600
+    m.h.events.emit("credproxy.limited", owner=BODY, path="/v1/messages",
+                    resets_at=resets, said=str(resets))
+    m.pump()
+    m.limits.tick(now + PROBE_SECONDS + 1)
+    assert [e.tab for e in m.h.events_of("account.probed")] == [BODY]
+    assert "usage limit" in m.contents(BODY)[-1]
+    m.cut(BODY, "rate_limit")
+    m.h.events.emit("credproxy.plan", status="allowed",
+                    windows={"7d": {"used": 0.0, "resets_at": resets}})
+    m.pump()
+    assert len(m.h.events_of("account.resumed")) == 1
+    assert m.h.session.status()["plan"]["windows"]["7d"]["used"] == 0.0
+
+
+def test_the_plan_view_says_where_each_window_is_headed():
+    now = 1_000_000.0
+    view = plan_view({"status": "allowed", "read_at": now, "windows": {
+        "7d": {"used": 0.25, "resets_at": now + 3.5 * 24 * 3600},
+        "5h": {"used": 0.5, "resets_at": now - 1}}}, now)
+    assert view["windows"]["7d"]["passed"] == 0.5
+    assert view["windows"]["7d"]["on_course_for"] == 0.5, "a quarter used by half-way"
+    assert view["windows"]["5h"] == {"resets_at": now - 1, "reset_since_read": True}
+    assert plan_view(None, now) is None
 
 
 def test_a_limit_nobody_timed_is_probed_through_one_tab_and_its_answer_resumes_the_rest(m):

@@ -92,6 +92,12 @@ class Paths:
         return self.state / "claude-code.json"
 
     @property
+    def plan(self) -> Path:
+        """The plan's usage as the last API answer reported it (`limits.py`), so `status` has
+        it from the daemon's first moment."""
+        return self.state / "plan.json"
+
+    @property
     def line_out(self) -> Path:
         """When each cause last went out on the phone line, and since when the API has
         refused every tab (`lineout.py`), so a restart neither resends nor forgets."""

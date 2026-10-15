@@ -223,6 +223,16 @@ which lists every tab. After the terminal's shell they stand in one order: the j
 machine tab, then the bodies' tabs, the selected body's first. A body with no tab gets one when
 it is selected in the selector.
 
+## How widely to work
+
+Every tab spends one plan, and `status` says what it has left under `plan`: for each window
+(`5h`, `7d`) the share `used`, when it `resets_at`, the share of it `passed`, and
+`on_course_for` — the share it ends on if use goes on as it has. Under 1, part of the plan
+goes unused at the reset: work wider — independent pieces at once, subagents in parallel, the
+next item without waiting on a check that can run beside it. Over 1, the limit stops the work
+before the reset: work narrower — one thing at a time, the cheaper check first, finish before
+starting. The window highest over 1 decides; early in a window the projection moves a lot.
+
 ## Plugins and templates
 
 The machine's skills and MCP servers are Claude Code plugins in `/agent/plugins`, one

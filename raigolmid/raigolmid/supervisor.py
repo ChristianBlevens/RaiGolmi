@@ -8,9 +8,10 @@ again would repeat the exit. A restart that fails goes there the same way.
 **The budget is the container id.** Per unit — an agent's tab, a host surface's role, a
 sandbox's body, view or anchor, the user's face, the door — this records the id of the
 container its restart started, in `Paths.supervisor`, so a daemon restart keeps it. A dead
-container with that id is spent. Any other was started by someone else — the user's restart,
-the janitor's repairs, a rebuild, a swap, a selection, reconcile — and gets its one restart, so
-nothing resets the budget.
+container with that id is spent, unless it started in an earlier boot (`boot.before_this_boot`):
+then the machine going down ended it, not the container, and its restart was that boot's. Any
+other was started by someone else — the user's restart, the janitor's repairs, a rebuild, a
+swap, a selection, reconcile — and gets its one restart, so nothing resets the budget.
 
 **Exited on its own** is the runtime's answer, not the event's: every stop or replacement the
 daemon makes removes the container or puts a new one under its name, so a `die` whose
@@ -31,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from . import labels
+from . import boot, labels
 from .events import EventLog
 from .intent import load_json, save_json
 from .paths import Paths
@@ -134,7 +135,8 @@ class Supervisor:
         its new container's id, or None when the unit is no longer wanted; it raises when it
         cannot. Its failure is said here, since nobody waits on an exit to raise to."""
         name = exit.container.name
-        if self._started.get(exit.unit.key) == exit.container.id:
+        if (self._started.get(exit.unit.key) == exit.container.id
+                and not boot.before_this_boot(exit.container.started_at)):
             self._unfixable(exit, f"{name} exited on its own again after its restart; "
                                   "restarting it would repeat the exit")
             return "spent"

@@ -99,6 +99,8 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
         "definition_errors": full.get("definition_errors", []),
         "builds": {key: build for key, build in full["builds"].items()
                    if own_copy is not None and key == str(own_copy)},
+        # The one account every tab spends: how widely to work (`limits.plan_view`).
+        "plan": full["plan"],
     }
     if tab_id != JANITOR:
         out["toolbelts"] = session.toolbelts_for(tab_id)

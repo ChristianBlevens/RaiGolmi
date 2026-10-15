@@ -5,9 +5,11 @@ a daemon restart in `test_reconcile.py`.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
-from raigolmid import hostsurfaces, labels, naming
+from raigolmid import boot, hostsurfaces, labels, naming
 from raigolmid.hostsurfaces import SELECTOR_CONTAINER
 from raigolmid.runtime import ContainerSpec
 
@@ -38,6 +40,23 @@ def test_a_start_by_anyone_else_gives_the_restart_back(h):
     assert len(h.events_of("container.restarted")) == 2
     assert not h.events_of("container.unfixable")
     assert h.runtime.inspect(naming.agent(TAB)).running
+
+
+def test_a_restart_given_in_an_earlier_boot_is_not_spent_in_this_one(h, monkeypatch):
+    """The machine went down under the container the restart started, so its exit (Docker's
+    255 on the next boot) is the machine's: it is restarted, and that restart is this boot's."""
+    h.runtime.kill(naming.agent(TAB), exit_code=1)
+    h.deliver_runtime_events()
+    monkeypatch.setattr(boot, "started", lambda now=datetime.now(UTC): now)
+    h.runtime.kill(naming.agent(TAB), exit_code=255)
+    h.deliver_runtime_events()
+
+    assert len(h.events_of("container.restarted")) == 2
+    assert not h.events_of("container.unfixable")
+    h.runtime.kill(naming.agent(TAB), exit_code=1)
+    h.deliver_runtime_events()
+    [unfixable] = h.events_of("container.unfixable")
+    assert unfixable.data["exit_code"] == 1
 
 
 def test_a_view_that_exits_on_its_own_is_restarted(h):

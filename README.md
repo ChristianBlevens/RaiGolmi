@@ -458,8 +458,8 @@ only when nothing on it can carry on: no sign-in works, the disk is full even af
 up, or Claude has refused every tab for a day. It can't tell you when Windows itself is down.
 
 If the machine stops responding (QEMU silent for two minutes) or QEMU stops on its own after it
-was running, the window restarts the machine by itself and sends an alert to the topic saying so.
-After five restarts in a row, each within half an hour of the last, it stops and says why.
+was running, the window restarts the machine by itself, without an alert. After five restarts in a
+row, each within half an hour of the last, it stops, says why, and only then sends an alert.
 
 ### Files and clipboard on Windows
 

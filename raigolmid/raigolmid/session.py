@@ -45,7 +45,9 @@ from .instances import Instance, Instances, RebuildResult
 from .jobs import Jobs
 from .principles import Principles
 from .library import run_id
-from .intent import JANITOR, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent
+from .intent import (JANITOR, Intent, InstanceIntent, IntentStore, Run, StopRecord, TabIntent,
+                     load_json)
+from .limits import plan_view
 from .launcher import LauncherError, LauncherOutputHeld, LauncherUnreachable
 from .paths import Paths
 from .presence import Presence, PresenceError
@@ -2193,6 +2195,8 @@ class Session:
                 "instances": {i: inst.to_dict() for i, inst in instances.items()},
                 "builds": self.builds.state(),
                 "queues": self.queues.depths(),
+                # What the plan has left, which sets how widely a tab works (`limits.py`).
+                "plan": plan_view(load_json(self.paths.plan, "plan"), time.time()),
                 "agents": [
                     {"tab": t.tab_id,
                      "scope": "janitor" if t.janitor else "machine" if t.machine

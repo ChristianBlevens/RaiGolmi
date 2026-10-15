@@ -8,10 +8,14 @@ told to continue once what cut them off is over:
 - **the usage limit** (`rate_limit`) is the account's, not the tab's, since every tab spends the
   one credential. The proxy reads when it resets from the 429 that said so
   (`credproxy.limited`); until then `account.limited` holds every channel's pushes, which
-  would only fail (`channel.py`), and at the reset each cut tab is told to continue. A limit
-  whose reset nobody said — a 429 without the header, or a daemon started during one — is
-  probed: one cut tab is told to continue every `PROBE_SECONDS`, and the first turn that ends
-  without an error is the account answering again, which resumes the rest.
+  would only fail (`channel.py`), and at the reset each cut tab is told to continue. The reset
+  is the latest the limit can end, not the only way: an upgraded plan or a lifted limit ends it
+  early. So while it holds, one cut tab is told to continue every `PROBE_SECONDS`, and the first
+  answer the API gives as allowed — a turn that ends without an error, or `credproxy.plan`
+  reading `allowed` — is the account answering again, which resumes the rest.
+
+**The plan's usage** is every API answer's (`credproxy.plan`): kept in `Paths.plan` and read by
+`status` through `plan_view`, which is how a tab paces its work to what the plan has left.
 - **a transient failure** (`TRANSIENT`) is the tab's own, resumed after `RETRY_SECONDS`, and
   each that follows it with no clean turn between after twice as long, up to `RETRY_CAP_SECONDS`.
   Claude Code 2.1.295 reports a connection that fails, times out, is refused or reset, a host
@@ -35,10 +39,11 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import activity, claude_login
 from .events import Event, EventLog
+from .intent import save_json
 
 if TYPE_CHECKING:
     from .session import Session
@@ -57,6 +62,32 @@ PROBE_SECONDS = 600.0
 GRACE_SECONDS = 30.0
 # The account's longest usage window is a week.
 LONGEST_WINDOW = 8 * 24 * 3600.0
+
+
+# An answer reporting one of these is the API serving the account (`credproxy.PLAN_PREFIX`).
+ALLOWED = frozenset({"allowed", "allowed_warning"})
+_UNIT_SECONDS = {"h": 3600.0, "d": 24 * 3600.0}
+
+
+def plan_view(reading: dict[str, Any] | None, now: float) -> dict[str, Any] | None:
+    """The plan's usage as a tab reads it: for each window, the share used, when it resets,
+    the share of the window passed, and `on_course_for` — the share it ends on if it goes on
+    being used as it has been. Over 1 the limit cuts the work off before the reset; under 1
+    part of the allowance goes unused. A window past its reset is said to be, its use unknown."""
+    if reading is None:
+        return None
+    windows = {}
+    for name, window in sorted(reading["windows"].items()):
+        length = float(name[:-1]) * _UNIT_SECONDS[name[-1]]
+        resets_at = window["resets_at"]
+        if now >= resets_at:
+            windows[name] = {"resets_at": resets_at, "reset_since_read": True}
+            continue
+        passed = 1.0 - (resets_at - now) / length
+        windows[name] = {"used": window["used"], "resets_at": resets_at,
+                         "passed": round(passed, 3),
+                         "on_course_for": round(window["used"] / passed, 2) if passed > 0 else None}
+    return {"status": reading["status"], "read_at": reading["read_at"], "windows": windows}
 
 
 # What `continue_message` names for a turn whose session ended under it.
@@ -109,6 +140,10 @@ class Limits:
         now = time.time()
         if event.type == "credproxy.limited" and event.data["resets_at"] is not None:
             self._limit(event.data["resets_at"], now)
+        elif event.type == "credproxy.plan":
+            save_json(self.session.paths.plan, {**event.data, "read_at": now})
+            if self._limited and event.data["status"] in ALLOWED:
+                self._resume_limited(now)
         elif event.tab is None:
             return
         elif event.type == "agent.reopened":
@@ -126,8 +161,8 @@ class Limits:
             if error is None:
                 self._cut.pop(event.tab, None)
                 self._failures.pop(event.tab, None)
-                if self._limited and self._resets_at is None:
-                    # A turn the API answered: the limit nobody timed is over.
+                if self._limited:
+                    # A turn the API answered: the limit is over, whenever it said it would be.
                     self._resume_limited(now)
                 return
             self._cut[event.tab] = (error, now)
@@ -150,7 +185,7 @@ class Limits:
             return
         first = not self._limited
         self._limited, self._resets_at = True, resets_at
-        if resets_at is None:
+        if first:
             self._probe_at = now + PROBE_SECONDS
         if first or resets_at is not None:
             self.events.emit("account.limited", resets_at=resets_at, hold_until=(
@@ -158,9 +193,8 @@ class Limits:
 
     def tick(self, now: float) -> None:
         if self._limited:
-            if self._resets_at is not None:
-                if now >= self._resets_at + GRACE_SECONDS:
-                    self._resume_limited(now)
+            if self._resets_at is not None and now >= self._resets_at + GRACE_SECONDS:
+                self._resume_limited(now)
             elif now >= self._probe_at:
                 self._probe(now)
         for tab_id, (error, when) in list(self._cut.items()):

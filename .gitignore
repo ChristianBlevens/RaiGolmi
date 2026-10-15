@@ -47,6 +47,7 @@ result-*
 /windows/qemu-guest-errors.previous.log
 /windows/virglrenderer.log
 /windows/virglrenderer.previous.log
+/windows/*.restarted-*.log
 /windows/screen.ppm
 /windows/screen.ppm.partial
 # Machine-local: the public keys the launcher lets in beside its own
