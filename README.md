@@ -457,6 +457,10 @@ the machine. From the machine's next start it sends a plain-words message, at mo
 only when nothing on it can carry on: no sign-in works, the disk is full even after cleaning
 up, or Claude has refused every tab for a day. It can't tell you when Windows itself is down.
 
+If the machine stops responding (QEMU silent for two minutes) or QEMU stops on its own after it
+was running, the window restarts the machine by itself and sends an alert to the topic saying so.
+After five restarts in a row, each within half an hour of the last, it stops and says why.
+
 ### Files and clipboard on Windows
 
 Copy and paste works both ways between Windows and the machine. Drop a file on the window
