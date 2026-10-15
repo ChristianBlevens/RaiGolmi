@@ -3,6 +3,10 @@
 #  (disk\raigolmi.qcow2) from ghcr.io, where build.bat would build them. Run setup.bat again to
 #  update: a newer launcher replaces this one, and the machine already on the disk is upgraded
 #  in place, keeping everything on it. build.bat builds both from this checkout instead.
+#
+#  -Unattended: nothing waits on a person (common.ps1 Ask, Fail). The launcher runs setup this
+#  way for the keeper's upgrade request, with the output going to keeper\outbox\setup.log.
+param([switch]$Unattended)
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 # An error no step expected still ends setup saying what it was and what to do: every step is

@@ -461,6 +461,21 @@ If the machine stops responding (QEMU silent for two minutes) or QEMU stops on i
 was running, the window restarts the machine by itself, without an alert. After five restarts in a
 row, each within half an hour of the last, it stops, says why, and only then sends an alert.
 
+**The keeper**, for long runs with nobody there. Turn on *Settings → Keeper* (it needs Docker
+Desktop installed, running, and set to *Start when you sign in*). RaiGolmi then starts the
+keeper: a Claude Code agent in the `raigolmi-keeper` container, outside the machine, that
+notices when the machine cannot recover itself, fixes and publishes RaiGolmi, and asks the
+window to start, restart or upgrade it. A scheduled task, *RaiGolmi keeper door*, checks every
+five minutes while you are signed in and reopens RaiGolmi if it should be running and is not.
+With the keeper on, failures nobody is there to see are not shown in boxes, and the keeper, not
+the window, sends the phone alert, only when it could not fix the machine. Once, after turning
+it on, choose *Settings → Open the keeper's terminal* and sign it in: `claude` then `/login`
+(or `claude setup-token`), then `gh auth login`. Both sign-ins live on the
+`raigolmi-keeper-home` volume and survive a rebuild; the keeper's key is let into the machine
+from its next start. What it did is in `keeper\outbox\` (`keeper.json`, and each repair's log
+and notes in `sessions\`); a repair is reopened in its terminal with
+`cd /work/RaiGolmi && claude --resume <id>`.
+
 ### Files and clipboard on Windows
 
 Copy and paste works both ways between Windows and the machine. Drop a file on the window

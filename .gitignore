@@ -61,3 +61,5 @@ result-*
 /disk/
 /RaiGolmi.lnk
 /transfer/
+/keeper/inbox/
+/keeper/outbox/

@@ -15,16 +15,25 @@ $state = Join-Path $env:LOCALAPPDATA 'RaiGolmi'
 $releaseRecord = Join-Path $state 'release.txt'
 
 # Each box is shown above every window: one that opened behind the console would leave setup
-# waiting on a question nobody can see.
+# waiting on a question nobody can see. With setup.ps1's -Unattended (no other entry has it, so
+# it is false there) no box is shown: what would be is said in the output, and a question is
+# answered No. The one question is whether to install what is missing, and those installs wait
+# on a person: Windows' administrator prompt (Elevated), a restart, MSYS2's own window.
 function Ask([string]$text) {
+    if ($Unattended) {
+        Write-Host "$text`nNo: setup.ps1 -Unattended installs nothing, since that needs a person."
+        return $false
+    }
     [System.Windows.MessageBox]::Show($text, 'RaiGolmi', 'YesNo', 'Question', 'Yes',
                                       'DefaultDesktopOnly') -eq 'Yes'
 }
 
 function Fail([string]$text) {
     Write-Host $text -ForegroundColor Red
-    [System.Windows.MessageBox]::Show($text, 'RaiGolmi', 'OK', 'Error', 'OK',
-                                      'DefaultDesktopOnly') | Out-Null
+    if (-not $Unattended) {
+        [System.Windows.MessageBox]::Show($text, 'RaiGolmi', 'OK', 'Error', 'OK',
+                                          'DefaultDesktopOnly') | Out-Null
+    }
     exit 1
 }
 

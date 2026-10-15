@@ -10,6 +10,8 @@
 //   venus          = on | off     the GPU offers Vulkan (Venus), at its next start
 //   ntfy-topic     = <topic>      the phone alerts' ntfy topic, at the machine's next start;
 //                                 empty is no alerts (raigolmid/raigolmid/lineout.py)
+//   keeper         = on | off     an agent in Docker Desktop, outside the machine, repairs what
+//                                 the launcher cannot (Keeper in RaiGolmi.cs, keeper\)
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -20,7 +22,7 @@ using Microsoft.Win32;
 
 sealed class Settings
 {
-    public bool StartAtLogin, KeepAwake, Venus;
+    public bool StartAtLogin, KeepAwake, Venus, Keeper;
     public string Memory = DefaultMemory;
     public string NtfyTopic = "";
     readonly string path;
@@ -56,6 +58,7 @@ sealed class Settings
                 case "start-at-login": s.StartAtLogin = s.Switch(number, value); break;
                 case "keep-awake": s.KeepAwake = s.Switch(number, value); break;
                 case "venus": s.Venus = s.Switch(number, value); break;
+                case "keeper": s.Keeper = s.Switch(number, value); break;
                 case "memory":
                     if (Array.IndexOf(MemoryChoices, value) < 0)
                         throw s.Bad(number, "gives memory as " + value + "; it is one of " +
@@ -95,7 +98,8 @@ sealed class Settings
             "keep-awake=" + OnOff(KeepAwake) + Environment.NewLine +
             "memory=" + Memory + Environment.NewLine +
             "venus=" + OnOff(Venus) + Environment.NewLine +
-            "ntfy-topic=" + NtfyTopic + Environment.NewLine);
+            "ntfy-topic=" + NtfyTopic + Environment.NewLine +
+            "keeper=" + OnOff(Keeper) + Environment.NewLine);
     }
 
     static string OnOff(bool on) { return on ? "on" : "off"; }
@@ -185,6 +189,77 @@ sealed class Settings
                 run.DeleteValue(RunName, false);
         }
     }
+
+    // --- the keeper's door ----------------------------------------------------------------
+
+    public const string DoorTask = "RaiGolmi keeper door";
+
+    // A task that runs this exe with --keeper-door every five minutes while the user is signed
+    // in, in their session so the window appears on their desktop. It is registered again at
+    // every start while the keeper is on, as the Run value is, so it names where this exe is now,
+    // and removed when the keeper is turned off. Registered through
+    // the Task Scheduler API rather than schtasks.exe: an interactive-token logon with an empty
+    // user and password stores no password and asks for none (ITaskFolder::RegisterTask), and
+    // the XML sets what schtasks cannot. A task's defaults never start it on battery, stop it on
+    // unplugging, and run it below normal priority (7), which QEMU would inherit: the door
+    // becomes the launcher it starts, so it runs at normal priority with no time limit.
+    public void ApplyKeeperDoor()
+    {
+        try
+        {
+            dynamic service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", true));
+            service.Connect(null, null, null, null);
+            dynamic root = service.GetFolder("\\");
+            if (Keeper)
+                root.RegisterTask(DoorTask, DoorXml(), TASK_CREATE_OR_UPDATE, null, null,
+                                  TASK_LOGON_INTERACTIVE_TOKEN, "");
+            else
+            {
+                try
+                {
+                    root.DeleteTask(DoorTask, 0);
+                }
+                catch (COMException e) when (e.HResult == TaskNotFound)
+                {
+                }
+            }
+        }
+        catch (COMException e)
+        {
+            throw new LauncherError("Windows' Task Scheduler refused to " + (Keeper ? "make" : "remove") +
+                                    " the task '" + DoorTask + "' (0x" + e.HResult.ToString("x8") + "): " +
+                                    e.Message);
+        }
+    }
+
+    const int TASK_CREATE_OR_UPDATE = 6, TASK_LOGON_INTERACTIVE_TOKEN = 3;
+    // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND): no task by that name.
+    const int TaskNotFound = unchecked((int)0x80070002);
+
+    // The Task Scheduler schema (learn.microsoft.com, Task Scheduler Schema): a time trigger
+    // repeating every five minutes with no duration, which repeats indefinitely.
+    static string DoorXml()
+    {
+        string exe = Application.ExecutablePath;
+        return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n" +
+            "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n" +
+            "  <RegistrationInfo><Description>Starts RaiGolmi when the keeper asks, or when the " +
+            "machine should be running and is not.</Description></RegistrationInfo>\n" +
+            "  <Triggers><TimeTrigger><StartBoundary>" + DateTime.Now.ToString("yyyy-MM-dd'T'HH:mm:ss") +
+            "</StartBoundary><Repetition><Interval>PT5M</Interval></Repetition></TimeTrigger></Triggers>\n" +
+            "  <Principals><Principal id=\"Author\"><LogonType>InteractiveToken</LogonType>" +
+            "<RunLevel>LeastPrivilege</RunLevel></Principal></Principals>\n" +
+            "  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" +
+            "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>" +
+            "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" +
+            "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>5</Priority></Settings>\n" +
+            "  <Actions Context=\"Author\"><Exec><Command>" + Xml("\"" + exe + "\"") + "</Command>" +
+            "<Arguments>" + Launcher.DoorFlag + "</Arguments>" +
+            "<WorkingDirectory>" + Xml(Path.GetDirectoryName(exe)) + "</WorkingDirectory></Exec></Actions>\n" +
+            "</Task>\n";
+    }
+
+    static string Xml(string text) { return System.Security.SecurityElement.Escape(text); }
 
     // --- keep Windows awake ------------------------------------------------------------
 

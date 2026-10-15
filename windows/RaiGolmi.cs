@@ -25,6 +25,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
@@ -41,26 +42,54 @@ static class Launcher
     {
         Native.SetProcessDPIAware();
         int recoveries = args.Length == 2 && args[0] == RecoverFlag ? int.Parse(args[1]) : 0;
+        bool door = args.Length == 1 && args[0] == DoorFlag;
         using (var single = new Mutex(false, @"Local\RaiGolmi-launcher"))
         {
             if (!Own(single, recoveries > 0))
             {
-                RaiseRunningInstance();
+                // The door finds the launcher it would start, and leaves the user's desktop alone.
+                if (!door)
+                    RaiseRunningInstance();
                 return 0;
+            }
+            bool tookStart = false;
+            if (door)
+            {
+                string reason;
+                try
+                {
+                    // A door outliving its setting (settings.ini edited by hand) opens nothing.
+                    if (!Settings.Load(Machine.Home).Keeper)
+                        return 0;
+                    reason = Keeper.DoorReason(out tookStart);
+                }
+                catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is LauncherError)
+                {
+                    DoorFailed(e.Message, false);
+                    return 1;
+                }
+                if (reason == null)
+                    return 0;
+                Log("door: starting the machine: " + reason);
             }
             Application.EnableVisualStyles();
             Machine machine;
             try
             {
-                machine = Machine.Prepare();
+                machine = Machine.Prepare(recoveries, door);
             }
             catch (LauncherError e)
             {
-                Fail(e.Message);
+                if (door)
+                    DoorFailed(e.Message, tookStart);
+                else
+                    Fail(e.Message);
                 return 1;
             }
             if (machine == null)
                 return 0;        // the disk picker was cancelled
+            if (tookStart && machine.Keeper != null)
+                machine.Keeper.Record("start", "the door started a launcher");
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
             AppDomain.CurrentDomain.UnhandledException += (sender, e) => Crashed(machine, e.ExceptionObject);
             Application.Run(new Window(machine, recoveries));
@@ -70,6 +99,33 @@ static class Launcher
 
     // Passed to the launcher a recovering one starts, with how many recoveries in a row led to it.
     public const string RecoverFlag = "--recovered";
+    // The keeper's door, the scheduled task that starts a launcher when none runs and one should.
+    public const string DoorFlag = "--keeper-door";
+
+    // The door's launch could not start: nobody is at the screen to read a box, so it goes to
+    // the log and to launcher.json, as a launcher that has given up, for the keeper to repair.
+    static void DoorFailed(string why, bool tookStart)
+    {
+        Log("door: the launcher could not start: " + why);
+        try
+        {
+            var keeper = new Keeper(0);
+            if (tookStart)
+                keeper.Record("start", "the launcher could not start: " + why);
+            keeper.Final("gave_up", "the launcher could not start: " + why);
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is LauncherError)
+        {
+            Log("door: launcher.json could not be written: " + e.Message);
+        }
+    }
+
+    // A line in the launcher log before any window has it, as the window's own lines read.
+    public static void Log(string line)
+    {
+        File.AppendAllText(Path.Combine(Application.StartupPath, "qemu.log"),
+                           "launcher: " + line + Environment.NewLine);
+    }
 
     // A successor waits for the launcher that started it to let go; anyone else finding the
     // machine running hands its window back. A mutex its owner never released still passes.
@@ -117,6 +173,16 @@ static class Launcher
                     e.Message + Environment.NewLine;
         }
         File.AppendAllText(machine.Log, what);
+        // With the keeper on, a box would hold this process, and with it the mutex the door
+        // needs, until somebody came; launcher.json keeps the state it had, so the door starts
+        // the machine again.
+        Keeper keeper = machine.Keeper;
+        if (keeper != null)
+        {
+            var e = error as Exception;
+            keeper.Final(null, "the launcher crashed: " + (e != null ? e.GetType().Name + ": " + e.Message : error));
+            return;
+        }
         Fail("RaiGolmi's window crashed. What happened is in " + machine.Log + ":\n\n" + error);
     }
 
@@ -162,15 +228,22 @@ class Machine
     public int MemoryMiB;
     // Why the machine has no sound card this start, or null when it has one.
     public string NoSound;
+    // The keeper's side, while the keeper setting is on; null otherwise.
+    public volatile Keeper Keeper;
 
-    public static Machine Prepare()
+    public static readonly string Home = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RaiGolmi");
+
+    // `door`: started by the keeper's door, where nobody may be at the screen, so nothing is asked.
+    public static Machine Prepare(int recoveries, bool door)
     {
-        string home = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RaiGolmi");
+        string home = Home;
         Directory.CreateDirectory(home);
         var m = new Machine();
         m.Settings = Settings.Load(home);
         m.Settings.ApplyStartAtLogin();
+        if (m.Settings.Keeper)
+            m.Keeper = new Keeper(recoveries);
         m.MemoryMiB = Settings.MemoryMiB(m.Settings.Memory);
         m.NoSound = AudioEndpoints.Missing();
         m.Qemu = m.Settings.Venus ? RequireVenus(Launcher.QemuPath(VenusQemu))
@@ -199,7 +272,7 @@ class Machine
         {
             m.NoSsh = e.Message;     // the window works without the bridge, and says so
         }
-        m.Disk = ChooseDisk(Path.Combine(home, "disk.txt"));
+        m.Disk = ChooseDisk(Path.Combine(home, "disk.txt"), door);
         if (m.Disk == null)
             return null;
         m.ControlPort = FreePort();
@@ -234,16 +307,20 @@ class Machine
     }
 
     // The disk is gigabytes, so it is used where the build left it and only its path is kept.
-    static string ChooseDisk(string record)
+    static string ChooseDisk(string record, bool door)
     {
         if (File.Exists(record))
         {
             string kept = File.ReadAllText(record).Trim();
             if (File.Exists(kept))
                 return kept;
+            if (door)
+                throw new LauncherError("The RaiGolmi disk was at " + kept + " and is not there any more.");
             Launcher.Fail("The RaiGolmi disk was at " + kept + " and is not there any more. " +
                           "Choose where it is now.");
         }
+        if (door)
+            throw new LauncherError("No RaiGolmi disk is recorded in " + record + ".");
         using (var pick = new OpenFileDialog())
         {
             pick.Title = "Choose the RaiGolmi disk";
@@ -358,6 +435,13 @@ class Window : Form
     bool shutdownSent, exited, poweredOff;
     // Why this launcher is restarting the machine, once it has decided to; null until then.
     string recovering;
+    // Windows is ending the session: the machine goes down with it and should come back after.
+    bool windowsEnding;
+    // setup.ps1 -Unattended, started for the keeper, while it runs with this launcher open.
+    volatile bool upgrading;
+    Process setup;
+    // A request from the keeper's inbox waits for the window's thread.
+    volatile bool requestQueued;
     int unanswered;
     readonly int recoveries;
     readonly DateTime started = DateTime.UtcNow;
@@ -394,6 +478,8 @@ class Window : Form
         sizeSettle.Interval = 300;
         sizeSettle.Tick += delegate { sizeSettle.Stop(); OfferSize(); };
         keyboard = new Keyboard(this);
+        if (machine.Keeper != null)
+            machine.Keeper.Note = Note;
         if (machine.Ssh != null)
         {
             bridge = new Bridge(this, machine.Ssh);
@@ -448,12 +534,17 @@ class Window : Form
         new Thread(Connect) { IsBackground = true, Name = "display" }.Start();
         watcher = new System.Threading.Timer(delegate { Watch(); }, null, 5000, 10000);
         ApplySetting(machine.Settings.ApplyKeepAwake);
+        if (machine.Keeper != null)
+        {
+            ApplySetting(machine.Settings.ApplyKeeperDoor);
+            TellKeeper();
+            Keeper.Compose("up -d", Note);
+        }
         if (machine.NoSound != null)
             Warn(machine.NoSound);
         if (bridge == null)
         {
-            Note(machine.NoSsh);
-            MessageBox.Show(this, machine.NoSsh, "RaiGolmi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Warn(machine.NoSsh);
             return;
         }
         bridge.Start();
@@ -538,7 +629,9 @@ class Window : Form
 
     const uint MenuSettings = 0x1000;
     ContextMenuStrip settings;
-    ToolStripMenuItem startAtLogin, keepAwake, venus;
+    ToolStripMenuItem startAtLogin, keepAwake, venus, keeperItem, keeperTerminal;
+    // Docker is being asked whether it can run the keeper.
+    bool keeperChecking;
     ToolStripTextBox ntfyTopic;
     readonly List<ToolStripMenuItem> memory = new List<ToolStripMenuItem>();
 
@@ -581,6 +674,10 @@ class Window : Form
             machine.Settings.Venus = !machine.Settings.Venus;
             ApplySetting(null);
         });
+        keeperItem = Toggle("Keeper: an agent outside the machine repairs it (needs Docker Desktop)",
+                        delegate { ToggleKeeper(); });
+        keeperTerminal = new ToolStripMenuItem("Open the keeper's terminal", null,
+                                               delegate { Keeper.OpenTerminal(); });
         var ntfyLabel = new ToolStripLabel("Phone alerts: ntfy topic, empty for none (applies at next start)");
         ntfyTopic = new ToolStripTextBox { AutoSize = false, Width = 320, MaxLength = 64 };
         ntfyTopic.KeyDown += (sender, e) =>
@@ -593,8 +690,8 @@ class Window : Form
         ntfyTopic.LostFocus += delegate { CommitTopic(); };
         var testAlert = new ToolStripMenuItem("Send a test alert", null, delegate { SendTestAlert(); });
         settings.Items.AddRange(new ToolStripItem[] {
-            startAtLogin, keepAwake, memoryItem, venus, new ToolStripSeparator(), ntfyLabel, ntfyTopic,
-            testAlert });
+            startAtLogin, keepAwake, memoryItem, venus, new ToolStripSeparator(), keeperItem, keeperTerminal,
+            new ToolStripSeparator(), ntfyLabel, ntfyTopic, testAlert });
         settings.Closing += StayOpenOnClick;
         memoryItem.DropDown.Closing += StayOpenOnClick;
         settings.Opening += delegate { keyboard.Release(); };
@@ -641,6 +738,9 @@ class Window : Form
         startAtLogin.Checked = s.StartAtLogin;
         keepAwake.Checked = s.KeepAwake;
         venus.Checked = s.Venus;
+        keeperItem.Checked = s.Keeper;
+        keeperItem.Enabled = !keeperChecking;
+        keeperTerminal.Enabled = s.Keeper && !keeperChecking;
         for (int i = 0; i < Settings.MemoryChoices.Length; i++)
             memory[i].Checked = s.Memory == Settings.MemoryChoices[i];
         ntfyTopic.Text = s.NtfyTopic;
@@ -709,8 +809,58 @@ class Window : Form
         Settings s = machine.Settings;
         Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
              ", memory " + s.Memory + ", venus " + s.Venus +
-             ", ntfy topic " + (s.NtfyTopic.Length > 0 ? "set" : "none"));
+             ", ntfy topic " + (s.NtfyTopic.Length > 0 ? "set" : "none") + ", keeper " + s.Keeper);
         CheckSettings();
+    }
+
+    // On only once Docker answers, asked off the window's thread; off at once. The image's first
+    // build takes minutes, so compose runs on a thread of its own and says what it does in the log.
+    void ToggleKeeper()
+    {
+        Settings s = machine.Settings;
+        if (s.Keeper)
+        {
+            s.Keeper = false;
+            Keeper retired = machine.Keeper;
+            machine.Keeper = null;
+            if (retired != null)
+                retired.Retire();
+            ApplySetting(s.ApplyKeeperDoor);
+            Keeper.Compose("down", Note);
+            return;
+        }
+        keeperChecking = true;
+        CheckSettings();
+        new Thread(() =>
+        {
+            string refused = Keeper.DockerRefusal();
+            BeginInvoke(new Action(() => KeeperChecked(refused)));
+        }) { IsBackground = true, Name = "docker check" }.Start();
+    }
+
+    void KeeperChecked(string refused)
+    {
+        keeperChecking = false;
+        if (refused != null)
+        {
+            Warn(refused);
+            CheckSettings();
+            return;
+        }
+        try
+        {
+            machine.Keeper = new Keeper(recoveries) { Note = Note };
+        }
+        catch (Exception e) when (e is LauncherError || e is IOException || e is UnauthorizedAccessException)
+        {
+            Warn("The keeper could not be turned on: " + e.Message);
+            CheckSettings();
+            return;
+        }
+        machine.Settings.Keeper = true;
+        ApplySetting(machine.Settings.ApplyKeeperDoor);
+        TellKeeper();
+        Keeper.Compose("up -d --build", Note);
     }
 
     // --- Windows ending the session ------------------------------------------------------
@@ -727,6 +877,7 @@ class Window : Form
     void WindowsEnding()
     {
         Note("Windows is ending the session");
+        windowsEnding = true;
         SavePlacement();
         if (exited)
             return;
@@ -877,8 +1028,8 @@ class Window : Form
             if (qemu.HasExited)
                 return;
             Note("the screen could not be connected: " + e);
-            BeginInvoke(new Action(() => Launcher.Fail("RaiGolmi's screen could not be connected, so " +
-                "the window stays black. What went wrong is in " + machine.Log + ":\n\n" + e.Message)));
+            Tell("RaiGolmi's screen could not be connected, so the window stays black. What went " +
+                 "wrong is in " + machine.Log + ":\n\n" + e.Message, MessageBoxIcon.Error);
             return;
         }
         BeginInvoke(new Action(() =>
@@ -894,8 +1045,8 @@ class Window : Form
     {
         if (qemu.HasExited)
             return;
-        BeginInvoke(new Action(() => Launcher.Fail("RaiGolmi's screen stopped: " + which + " to QEMU ended. " +
-            "Why is in " + machine.Log + ". Close the window to shut the machine down.")));
+        Tell("RaiGolmi's screen stopped: " + which + " to QEMU ended. Why is in " + machine.Log +
+             ". Close the window to shut the machine down.", MessageBoxIcon.Error);
     }
 
     void OfferSize()
@@ -1083,6 +1234,14 @@ class Window : Form
         {
             Note("could not write " + machine.Screen + ": " + e.Message);
         }
+        try
+        {
+            TendKeeper();
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+        {
+            Note("keeper: the inbox could not be read: " + e.Message);
+        }
     }
 
     // A PPM, written whole and then renamed so a reader never meets half of one; removed while
@@ -1106,12 +1265,163 @@ class Window : Form
         File.Move(partial, machine.Screen, true);
     }
 
+    // --- the keeper: an agent outside the machine (Keeper) ---------------------------------
+
+    // What the machine is doing, in launcher.json, from this launcher's own state.
+    void TellKeeper()
+    {
+        Keeper keeper = machine.Keeper;
+        if (keeper == null)
+            return;
+        if (upgrading)
+            keeper.Set("upgrading", Upgrading);
+        else if (recovering != null)
+            keeper.Set("restarting", recovering);
+        else if (lastStatus == null)
+            keeper.Set("starting", null);
+        else
+            keeper.Set("running", null);
+    }
+
+    static readonly string Upgrading = "setup.ps1 -Unattended is upgrading the machine; its output is in " +
+                                       Keeper.SetupLog;
+
+    // Each Watch tick: the state is written, and the oldest request is acted on, on the window's
+    // thread, one at a time.
+    void TendKeeper()
+    {
+        if (machine.Keeper == null)
+            return;
+        TellKeeper();
+        if (requestQueued)
+            return;
+        Keeper.Request request = Keeper.Next();
+        if (request == null)
+            return;
+        requestQueued = true;
+        BeginInvoke(new Action(() =>
+        {
+            requestQueued = false;
+            try
+            {
+                Act(request);
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                Note("keeper: " + Path.GetFileName(request.File) + " could not be acted on: " + e.Message);
+            }
+        }));
+    }
+
+    // A request is taken from the inbox once it is acted on, and what came of it is recorded.
+    // One this launcher cannot act on because it is ending is left for the launcher after it.
+    void Act(Keeper.Request request)
+    {
+        Keeper keeper = machine.Keeper;
+        if (keeper == null || exited)
+            return;
+        if (request.Refused != null)
+        {
+            Note("keeper: refused " + Path.GetFileName(request.File) + ": " + request.Refused);
+            Keeper.Take(request);
+            keeper.Record(request.Kind ?? Path.GetFileName(request.File), "refused: " + request.Refused);
+            return;
+        }
+        string asked = "the keeper asked" + (request.Why != null ? ": " + request.Why : "");
+        Note("keeper: " + request.Kind + " (" + asked + ")");
+        bool stopping = shutdownSent || recovering != null;
+        switch (request.Kind)
+        {
+            case "start":
+                Keeper.Take(request);
+                keeper.Record("start", "nothing to do: this launcher is running the machine");
+                break;
+            case "restart":
+                Keeper.Take(request);
+                if (stopping)
+                {
+                    keeper.Record("restart", "nothing to do: the machine is already shutting down");
+                    break;
+                }
+                keeper.Record("restart", "the guest is shutting down, and a new launcher starts it again");
+                RestartForKeeper(asked);
+                break;
+            case "upgrade":
+                if (upgrading)
+                {
+                    Keeper.Take(request);
+                    keeper.Record("upgrade", "nothing to do: setup is already upgrading the machine");
+                    break;
+                }
+                if (stopping)
+                    break;
+                Keeper.Take(request);
+                StartUpgrade();
+                break;
+        }
+    }
+
+    // setup.ps1 upgrades the machine in place while it runs, then closes this window
+    // (Apply-Upgrade), which is a clean shutdown with nobody asked, and opens the new launcher.
+    void StartUpgrade()
+    {
+        Keeper keeper = machine.Keeper;
+        try
+        {
+            setup = Keeper.StartSetup();
+        }
+        catch (Exception e) when (e is LauncherError || e is System.ComponentModel.Win32Exception)
+        {
+            keeper.Record("upgrade", "refused: setup could not be started: " + e.Message);
+            return;
+        }
+        upgrading = true;
+        Note("keeper: " + Upgrading);
+        keeper.Record("upgrade", "setup.ps1 -Unattended started; its output is in " + Keeper.SetupLog);
+        TellKeeper();
+        setup.EnableRaisingEvents = true;
+        setup.Exited += delegate { BeginInvoke(new Action(SetupEnded)); };
+    }
+
+    // Setup ended with this launcher still running: the machine already ran the release, or
+    // setup stopped before it closed the window.
+    void SetupEnded()
+    {
+        if (exited)
+            return;
+        int code = setup.ExitCode;
+        upgrading = false;
+        Note("keeper: setup exited with code " + code);
+        Keeper keeper = machine.Keeper;
+        if (keeper == null)
+            return;
+        keeper.Record("upgrade", (code == 0 ? "setup finished with the machine still running" :
+                                  "setup failed with code " + code) + "; its output is in " + Keeper.SetupLog);
+        TellKeeper();
+    }
+
     // A failure the user has to know about: in the log, and in front of them.
     public void Warn(string message)
     {
         Note(message);
-        BeginInvoke(new Action(() =>
-            MessageBox.Show(this, message, "RaiGolmi", MessageBoxButtons.OK, MessageBoxIcon.Warning)));
+        Tell(message, MessageBoxIcon.Warning);
+    }
+
+    // With the keeper on, a box is shown from a thread of its own, which has no active window
+    // to own it (WinForms MessageBox takes GetActiveWindow's): it never disables this window,
+    // which setup closes to upgrade and Process.CloseMainWindow refuses when disabled, and it
+    // never keeps this process alive.
+    void Tell(string message, MessageBoxIcon icon)
+    {
+        if (machine.Keeper == null)
+        {
+            BeginInvoke(new Action(() => MessageBox.Show(this, message, "RaiGolmi", MessageBoxButtons.OK, icon)));
+            return;
+        }
+        var shown = new Thread(() => MessageBox.Show(message, "RaiGolmi", MessageBoxButtons.OK, icon))
+            { IsBackground = true, Name = "box" };
+        shown.SetApartmentState(ApartmentState.STA);
+        shown.Start();
     }
 
     public void Note(string line)
@@ -1191,7 +1501,15 @@ class Window : Form
             catch (Exception ex)
             {
                 Note("the shutdown request failed: " + ex.Message);
-                OfferPowerOff("RaiGolmi could not be asked to shut down:\n\n" + ex.Message);
+                // Setup closes this window to upgrade and waits for it, with nobody to answer.
+                if (upgrading)
+                {
+                    Note("powered off without asking: setup is upgrading the machine");
+                    poweredOff = true;
+                    qemu.Kill();
+                }
+                else
+                    OfferPowerOff("RaiGolmi could not be asked to shut down:\n\n" + ex.Message);
             }
             return;
         }
@@ -1292,32 +1610,49 @@ class Window : Form
     }
 
     // The restarts in a row are used up: the one alert, sent before anything can end this
-    // process, because a machine that cannot restart itself is what needs the owner.
+    // process, because a machine that cannot restart itself is what needs the owner. With the
+    // keeper on, the keeper is told instead, and alerts the owner itself if it cannot repair it.
     async void GiveUp(string why)
     {
         Note("not restarting: " + MostRecoveries + " restarts in a row each ended within " +
              StableRun.TotalMinutes + " minutes");
-        await Alert("RaiGolmi needs you", why + ", after " + MostRecoveries + " restarts in a row. " +
-                    "It is not restarting again; its log is " + machine.Log + ".");
+        string said = why + ", after " + MostRecoveries + " restarts in a row. It is not restarting " +
+                      "again; its log is " + machine.Log + ".";
+        Keeper keeper = machine.Keeper;
+        if (keeper != null)
+            keeper.Final("gave_up", said);
+        else
+            await Alert("RaiGolmi needs you", said);
         ReportExit();
     }
 
+    // How the machine ended, for whoever is there. With the keeper on, only a close the user made
+    // is shown to them: anything else ends with nobody asked, because a box would keep this
+    // process, and the mutex the door needs, until somebody came. The keeper reads it instead.
     void ReportExit()
     {
-        if (qemu.ExitCode != 0)
+        bool onPurpose = recovering == null && (shutdownSent || poweredOff || qemu.ExitCode == 0);
+        string log;
+        lock (stderr) log = stderr.ToString();
+        bool memoryRefused = log.Contains(MemoryMapRefused) && machine.Settings.Memory != Settings.DefaultMemory;
+        string said = memoryRefused ? MemoryRefusedSaid() : Explain(log);
+        Keeper keeper = machine.Keeper;
+        // A session Windows ends leaves launcher.json as it was, so the door starts the machine
+        // again once the user is back.
+        if (keeper != null && !windowsEnding)
+            keeper.Final(upgrading ? "upgrading" : onPurpose ? "closed" : "gave_up",
+                         upgrading ? Upgrading : qemu.ExitCode == 0 ? null :
+                         (said != null ? said + " " : "") + "QEMU exited with code " + qemu.ExitCode +
+                         "; its output is in " + machine.Log + ".");
+        if (qemu.ExitCode != 0 && (keeper == null || (onPurpose && !upgrading)))
         {
-            string log;
-            lock (stderr) log = stderr.ToString();
             string tail = log.Length > 3000 ? log.Substring(log.Length - 3000) : log;
             string exit = "QEMU exited with code " + qemu.ExitCode + ". Its output is in " +
                           machine.Log + ":\n\n" + tail;
-            if (log.Contains(MemoryMapRefused) && machine.Settings.Memory != Settings.DefaultMemory)
+            if (memoryRefused)
                 OfferDefaultMemory(exit);
             else
-            {
-                string said = Explain(log);
                 Launcher.Fail((said != null ? said + "\n\n" : "") + exit);
-            }
         }
         Close();
     }
@@ -1337,8 +1672,42 @@ class Window : Form
             return;
         recovering = why;
         Note("recovering: " + why);
+        TellKeeper();
         qemu.Kill();
     }
+
+    // A restart the keeper asked for: the guest shuts down cleanly, and OnQemuExited restarts the
+    // machine through the same counted path as a recovery, so restarts that never settle end at
+    // GiveUp whoever asks for them. A guest still up after KeeperShutdown is wedged, which is
+    // why a restart was asked for, and is powered off.
+    void RestartForKeeper(string why)
+    {
+        recovering = why;
+        Note("recovering: " + why);
+        TellKeeper();
+        try
+        {
+            AskGuestToShutDown();
+        }
+        catch (Exception e)
+        {
+            Note("the shutdown request failed, so the guest is powered off: " + e.Message);
+            qemu.Kill();
+            return;
+        }
+        var deadline = new System.Windows.Forms.Timer { Interval = (int)KeeperShutdown.TotalMilliseconds };
+        deadline.Tick += delegate
+        {
+            deadline.Dispose();
+            if (exited)
+                return;
+            Note("the guest did not shut down within " + KeeperShutdown.TotalMinutes + " minutes, so it is powered off");
+            qemu.Kill();
+        };
+        deadline.Start();
+    }
+
+    static readonly TimeSpan KeeperShutdown = TimeSpan.FromMinutes(2);
 
     // Starts a fresh launcher for the same machine and closes this one, with no alert: a machine
     // that restarts itself needs nobody. False when the restarts in a row are used up.
@@ -1348,6 +1717,8 @@ class Window : Form
         if (next > MostRecoveries)
             return false;
         Note("restarting the machine (" + next + " in a row)");
+        if (machine.Keeper != null)
+            machine.Keeper.Final("restarting", why);
         Process.Start(Environment.ProcessPath, Launcher.RecoverFlag + " " + next);
         Close();
         return true;
@@ -1392,14 +1763,18 @@ class Window : Form
     // (accel/whpx/whpx-common.c, whpx_set_phys_mem), so the setting is the one thing to name.
     const string MemoryMapRefused = "WHPX: failed to map GPA range";
 
+    string MemoryRefusedSaid()
+    {
+        return "Windows' hypervisor refused the machine's memory setting, " + machine.Settings.Memory +
+               " GB (" + machine.MemoryMiB + " MiB), so the machine could not start.";
+    }
+
     // The memory setting goes back to 8 GB only on the user's Yes.
     void OfferDefaultMemory(string exit)
     {
         Settings s = machine.Settings;
         DialogResult answer = MessageBox.Show(
-            "Windows' hypervisor refused the machine's memory setting, " + s.Memory + " GB (" +
-            machine.MemoryMiB + " MiB), so the machine could not start. Set memory back to " +
-            Settings.DefaultMemory + " GB?\n\n" + exit,
+            MemoryRefusedSaid() + " Set memory back to " + Settings.DefaultMemory + " GB?\n\n" + exit,
             "RaiGolmi", MessageBoxButtons.YesNo, MessageBoxIcon.Error);
         if (answer != DialogResult.Yes)
             return;
@@ -1441,6 +1816,386 @@ class Window : Form
             return "QEMU could not start its graphics on this PC's GPU. Updating the graphics " +
                    "driver is the first thing to try.";
         return null;
+    }
+}
+
+// The keeper's half on Windows. The keeper is a Claude Code agent in a Docker Desktop container
+// (keeper\compose.yml), outside the machine, that repairs what this launcher cannot. The launcher
+// says how the machine is in keeper\outbox\launcher.json, written whole on every Watch tick and
+// every change, and takes the keeper's requests from keeper\inbox\ (start, restart, upgrade); the
+// door, a scheduled task running --keeper-door, starts a launcher when none runs and one should.
+// Nothing here exists while the keeper setting is off.
+sealed class Keeper
+{
+    // The project folder is the parent of windows\, where this exe is.
+    public static readonly string Project = Path.GetFullPath(Path.Combine(Application.StartupPath, ".."));
+    static readonly string Folder = Path.Combine(Project, "keeper");
+    static readonly string Inbox = Path.Combine(Folder, "inbox");
+    static readonly string Outbox = Path.Combine(Folder, "outbox");
+    static readonly string StateFile = Path.Combine(Outbox, "launcher.json");
+    public static readonly string SetupLog = Path.Combine(Outbox, "setup.log");
+    static readonly string ComposeFile = Path.Combine(Folder, "compose.yml");
+    const string Container = "raigolmi-keeper";
+
+    readonly object gate = new object();
+    readonly int recoveries;
+    string state = "starting", why;
+    // The last request acted on: request, outcome, at. A new launcher carries it on, so the
+    // outcome of a restart or an upgrade is still there when the launcher after it writes.
+    string[] last;
+    // The launcher has said how it ended; nothing after it says otherwise.
+    bool final;
+    // Where a write that failed is said: the launcher log.
+    public Action<string> Note = Launcher.Log;
+
+    public Keeper(int recoveries)
+    {
+        this.recoveries = recoveries;
+        Directory.CreateDirectory(Inbox);
+        Directory.CreateDirectory(Outbox);
+        last = Read().LastRequest;
+    }
+
+    public void Set(string state, string why)
+    {
+        lock (gate)
+        {
+            if (final)
+                return;
+            this.state = state;
+            this.why = why;
+            Write();
+        }
+    }
+
+    // How this launcher ended; a null state keeps the one it had.
+    public void Final(string state, string why)
+    {
+        lock (gate)
+        {
+            if (final)
+                return;
+            this.state = state ?? this.state;
+            this.why = why;
+            Write();
+            final = true;
+        }
+    }
+
+    public void Record(string request, string outcome)
+    {
+        lock (gate)
+        {
+            last = new[] { request, outcome, Now() };
+            Write();
+        }
+    }
+
+    // The setting turned off: no keeper, no file.
+    public void Retire()
+    {
+        lock (gate)
+        {
+            final = true;
+            File.Delete(StateFile);
+        }
+    }
+
+    // Whole or not at all, so a reader never meets half of it.
+    void Write()
+    {
+        var buffer = new MemoryStream();
+        using (var json = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
+        {
+            json.WriteStartObject();
+            json.WriteString("state", state);
+            json.WriteNumber("pid", Environment.ProcessId);
+            json.WriteString("at", Now());
+            if (why == null)
+                json.WriteNull("why");
+            else
+                json.WriteString("why", why);
+            json.WriteNumber("recoveries", recoveries);
+            if (last == null)
+                json.WriteNull("last_request");
+            else
+            {
+                json.WriteStartObject("last_request");
+                json.WriteString("request", last[0]);
+                json.WriteString("outcome", last[1]);
+                json.WriteString("at", last[2]);
+                json.WriteEndObject();
+            }
+            json.WriteEndObject();
+        }
+        string partial = StateFile + ".partial";
+        try
+        {
+            File.WriteAllBytes(partial, buffer.ToArray());
+            File.Move(partial, StateFile, true);
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+        {
+            Note("keeper: " + StateFile + " could not be written: " + e.Message);
+        }
+    }
+
+    static string Now() { return DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"); }
+
+    sealed class Written { public string State; public int Pid; public string[] LastRequest; }
+
+    // launcher.json is this program's own; one it cannot read is a defect.
+    static Written Read()
+    {
+        var w = new Written();
+        if (!File.Exists(StateFile))
+            return w;
+        try
+        {
+            using (var doc = JsonDocument.Parse(File.ReadAllText(StateFile)))
+            {
+                JsonElement root = doc.RootElement;
+                w.State = root.GetProperty("state").GetString();
+                w.Pid = root.GetProperty("pid").GetInt32();
+                JsonElement request = root.GetProperty("last_request");
+                if (request.ValueKind == JsonValueKind.Object)
+                    w.LastRequest = new[] { request.GetProperty("request").GetString(),
+                                            request.GetProperty("outcome").GetString(),
+                                            request.GetProperty("at").GetString() };
+            }
+        }
+        catch (Exception e) when (e is JsonException || e is KeyNotFoundException || e is InvalidOperationException ||
+                                  e is FormatException)
+        {
+            throw new LauncherError(StateFile + " is not what the launcher writes (" + e.Message + "). " +
+                                    "Delete it, and the launcher writes it again.");
+        }
+        return w;
+    }
+
+    // --- the inbox ---------------------------------------------------------------------------
+
+    public sealed class Request
+    {
+        public string File, Kind, Why;
+        // Why this is no request, or null when it is one.
+        public string Refused;
+    }
+
+    static readonly string[] Kinds = { "start", "restart", "upgrade" };
+
+    // The oldest request, or null when there is none.
+    public static Request Next()
+    {
+        foreach (Request r in Requests())
+            return r;
+        return null;
+    }
+
+    static List<Request> Requests()
+    {
+        Directory.CreateDirectory(Inbox);
+        FileInfo[] files = new DirectoryInfo(Inbox).GetFiles("*.json");
+        Array.Sort(files, (a, b) => a.LastWriteTimeUtc.CompareTo(b.LastWriteTimeUtc));
+        var requests = new List<Request>();
+        foreach (FileInfo f in files)
+        {
+            Request r = Parse(f);
+            if (r != null)
+                requests.Add(r);
+        }
+        return requests;
+    }
+
+    // Null for a file the keeper may still be writing: one being written cannot be opened, and
+    // one that is not JSON yet is refused only once it is older than a Watch tick.
+    static Request Parse(FileInfo file)
+    {
+        var r = new Request { File = file.FullName };
+        string text;
+        try
+        {
+            text = File.ReadAllText(file.FullName);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        try
+        {
+            using (var doc = JsonDocument.Parse(text))
+            {
+                JsonElement root = doc.RootElement, kind, why;
+                if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("request", out kind) ||
+                    kind.ValueKind != JsonValueKind.String)
+                {
+                    r.Refused = "it names no request";
+                    return r;
+                }
+                r.Kind = kind.GetString();
+                if (Array.IndexOf(Kinds, r.Kind) < 0)
+                    r.Refused = r.Kind + " is not one of " + string.Join(", ", Kinds);
+                if (root.TryGetProperty("why", out why) && why.ValueKind == JsonValueKind.String)
+                    r.Why = why.GetString();
+            }
+        }
+        catch (JsonException e)
+        {
+            if (DateTime.UtcNow - file.LastWriteTimeUtc < TimeSpan.FromSeconds(10))
+                return null;
+            r.Refused = "it is not JSON: " + e.Message;
+        }
+        return r;
+    }
+
+    public static void Take(Request r)
+    {
+        File.Delete(r.File);
+    }
+
+    // --- the door ----------------------------------------------------------------------------
+
+    // Why the door starts a launcher, or null when it leaves things as they are. Asked holding
+    // the launcher's mutex, so no launcher runs: a start or an upgrade request, or a launcher.json
+    // that says the machine should be running while the launcher that wrote it is gone (it
+    // crashed, or Windows restarted under it). A start is taken here; an upgrade is left for the
+    // launcher the door starts.
+    public static string DoorReason(out bool tookStart)
+    {
+        tookStart = false;
+        string reason = null;
+        foreach (Request r in Requests())
+        {
+            if (r.Refused != null)
+                continue;
+            if (r.Kind == "start" && !tookStart)
+            {
+                Take(r);
+                tookStart = true;
+                reason = "the keeper asked" + (r.Why != null ? ": " + r.Why : "");
+            }
+            else if (r.Kind == "upgrade" && reason == null)
+                reason = "the keeper asked for an upgrade";
+        }
+        if (reason != null)
+            return reason;
+        Written w = Read();
+        if ((w.State == "running" || w.State == "restarting" || w.State == "starting") && !Alive(w.Pid))
+            return "launcher.json says " + w.State + ", and the launcher that wrote it (" + w.Pid + ") is gone";
+        return null;
+    }
+
+    static bool Alive(int pid)
+    {
+        if (pid == Environment.ProcessId)
+            return false;
+        try
+        {
+            using (Process p = Process.GetProcessById(pid))
+                return p.ProcessName == Process.GetCurrentProcess().ProcessName;
+        }
+        catch (ArgumentException)
+        {
+            return false;     // no process has that id
+        }
+    }
+
+    // --- Docker --------------------------------------------------------------------------------
+
+    // Why Docker cannot run the keeper, in plain words, or null when it can. `docker version`
+    // asks the engine as well as the command, so it fails while Docker Desktop is not running.
+    public static string DockerRefusal()
+    {
+        Ssh.Result r;
+        try
+        {
+            r = Ssh.Finish(Process.Start(Docker("version")));
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return "The keeper needs Docker Desktop, and it is not installed (Windows has no docker " +
+                   "command). Install Docker Desktop from docker.com, start it, set it to start when " +
+                   "you sign in, then turn the keeper on again.";
+        }
+        if (r.Code == 0)
+            return null;
+        return "The keeper needs Docker Desktop running, and it is not answering. Start Docker " +
+               "Desktop, set it to start when you sign in, then turn the keeper on again.\n\n" +
+               "docker version said: " + (r.Err.Length > 0 ? r.Err : r.Out.Trim());
+    }
+
+    static ProcessStartInfo Docker(string arguments)
+    {
+        var info = new ProcessStartInfo("docker", arguments);
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        info.StandardOutputEncoding = Encoding.UTF8;
+        info.StandardErrorEncoding = Encoding.UTF8;
+        return info;
+    }
+
+    // docker compose on the keeper's compose.yml, on a thread of its own: the image's first build
+    // takes minutes. What it prints goes to `note`, and how it ended.
+    public static void Compose(string arguments, Action<string> note)
+    {
+        string command = "compose -f " + Ssh.Quote(ComposeFile) + " " + arguments;
+        new Thread(() =>
+        {
+            note("keeper: docker " + command);
+            try
+            {
+                using (var p = new Process { StartInfo = Docker(command) })
+                {
+                    DataReceivedEventHandler said = (sender, e) =>
+                    {
+                        if (e.Data != null)
+                            note("keeper: " + e.Data);
+                    };
+                    p.OutputDataReceived += said;
+                    p.ErrorDataReceived += said;
+                    p.Start();
+                    p.BeginOutputReadLine();
+                    p.BeginErrorReadLine();
+                    p.WaitForExit();
+                    note("keeper: docker compose " + arguments + " exited with code " + p.ExitCode);
+                }
+            }
+            catch (System.ComponentModel.Win32Exception e)
+            {
+                note("keeper: docker could not be run, so Docker Desktop may not be installed: " + e.Message);
+            }
+        }) { IsBackground = true, Name = "keeper compose" }.Start();
+    }
+
+    // A console of its own on the keeper's container, as ClaudeCode's window.bat opens one: where
+    // the owner signs the agent in.
+    public static void OpenTerminal()
+    {
+        Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                                           "/k docker exec -it " + Container + " bash") { UseShellExecute = true });
+    }
+
+    // --- the unattended upgrade ------------------------------------------------------------------
+
+    // setup.ps1 with nothing in it waiting on a person, in Windows PowerShell as setup.bat runs
+    // it. Through cmd, whose redirection makes the log the process's own output, the native
+    // programs' included, and outlives this launcher, which setup closes on the way.
+    public static Process StartSetup()
+    {
+        string script = Path.Combine(Project, "setup.ps1");
+        if (!File.Exists(script))
+            throw new LauncherError(script + " does not exist.");
+        string powershell = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
+        // /s: cmd drops the first and the last quote and runs what is between them as it is.
+        var info = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+            "/s /c \"" + Ssh.Quote(powershell) + " -NoProfile -ExecutionPolicy Bypass -File " + Ssh.Quote(script) +
+            " -Unattended > " + Ssh.Quote(SetupLog) + " 2>&1\"");
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.WorkingDirectory = Project;
+        return Process.Start(info);
     }
 }
 
