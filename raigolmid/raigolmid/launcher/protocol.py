@@ -20,7 +20,10 @@ Requests:
   {"op": "ping"}                                     -> {"ok": true, "generation": N, ...}
   {"op": "start", "cmd": [...], "env": {}, "cwd": "/work", "pty": bool,
                   "stream": bool, "stdin": "..."}    -> {"ok": true, "proc": N}
-  {"op": "signal", "proc": N, "sig": 15}             -> {"ok": true}
+  {"op": "signal", "proc": N, "sig": 15, "tree": bool}
+                                                     -> {"ok": true}; tree: to all it started
+  {"op": "end", "proc": N}                           -> {"ok": true, "exit": N}, once nothing
+                                                        it started runs
   {"op": "resize", "proc": N, "rows": R, "cols": C}  -> {"ok": true}
   {"op": "list"}                                     -> {"ok": true, "procs": [...]}
   {"op": "attach", "proc": N}                        -> the connection becomes that pty

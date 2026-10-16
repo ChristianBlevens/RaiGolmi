@@ -220,6 +220,48 @@ def test_a_job_outlives_its_start_and_is_read_back_as_text(launcher):
     assert launcher.process("another-launcher", proc) is None
 
 
+def _escapee(pid_file: Path, within: float = 5.0) -> int:
+    deadline = time.time() + within
+    while time.time() < deadline and not pid_file.exists():
+        time.sleep(0.05)
+    return int(pid_file.read_text())
+
+
+def test_a_job_exits_with_its_own_process_while_an_escaped_child_holds_its_terminal(
+        launcher, tmp_path):
+    """A child that left the job's session keeps the terminal open after the job exits; the
+    job's exit is its own process's, and `end` still reaches the child."""
+    pid_file = tmp_path / "escapee.pid"
+    proc, issued = launcher.start_job(
+        ["/bin/sh", "-c", f"setsid sh -c 'echo $$ > {pid_file}; exec sleep 300' & "
+                          f"until [ -s {pid_file} ]; do sleep 0.05; done; echo hi"],
+        cwd="/tmp")
+    escapee = _escapee(pid_file)
+    deadline = time.time() + 5
+    while (known := launcher.process(issued, proc))["exit"] is None and time.time() < deadline:
+        time.sleep(0.05)
+    assert known["exit"] == 0 and "hi" in launcher.scrollback(proc)
+    assert _alive(escapee)
+    launcher.end(proc)
+    assert not _alive(escapee)
+
+
+def test_ending_a_job_ends_every_process_it_started_and_records_its_exit(launcher, tmp_path):
+    """Paused or not, a job and the children that left its session all end before `end`
+    answers, and the job's exit is recorded by then."""
+    pid_file = tmp_path / "escapee.pid"
+    proc, issued = launcher.start_job(
+        ["/bin/sh", "-c",
+         f"setsid sh -c 'echo $$ > {pid_file}; exec sleep 300' > /dev/null & sleep 300"],
+        cwd="/tmp")
+    escapee = _escapee(pid_file)
+    launcher.signal(proc, 19, tree=True)
+    assert Path(f"/proc/{escapee}/stat").read_text().split(") ")[1][0] == "T"
+    launcher.end(proc)
+    assert not _alive(escapee)
+    assert launcher.process(issued, proc)["exit"] == 128 + 15
+
+
 def _exit_of(launcher, marker: str, within: float = 8.0):
     """The recorded exit of the one process whose command line carries `marker`, once it
     has one; None if it is still running at the deadline."""

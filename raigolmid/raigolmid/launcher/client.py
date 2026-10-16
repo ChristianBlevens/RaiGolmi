@@ -18,6 +18,9 @@ from typing import Any
 from . import protocol
 
 DEFAULT_TIMEOUT = 5.0
+# Longer than the launcher's SIGTERM and SIGKILL graces and its wait for the exit together
+# (`server.ABANDON_GRACE`), which `end` spends before it answers.
+END_TIMEOUT = 15.0
 
 
 class LauncherUnreachable(Exception):
@@ -36,8 +39,8 @@ class LauncherTimeout(LauncherError):
 
 class LauncherOutputHeld(LauncherTimeout):
     """The command exited, but a process it left running held its output at the timeout.
-    Nothing about the view is in question; the work is: the launcher ends the command's
-    process group once its caller stops waiting (`server._abandon`)."""
+    Nothing about the view is in question; the work is: the launcher ends everything the
+    command started once its caller stops waiting (`server._abandon`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,10 +206,9 @@ class LauncherClient:
                 raise LauncherOutputHeld(
                     f"{' '.join(cmd)} exited {exited}, but a process it started in the "
                     f"background still held its output after {timeout}s, so everything it "
-                    "started has been stopped. Anything of it still running left its process "
-                    "group (`setsid`, or GNU `timeout`, which takes its own) and is cut off "
-                    "from what started it: check before waiting on it. `&` after a `&&` list "
-                    "backgrounds the whole list, whose shell keeps the output; a job that "
+                    "started has been stopped, including what left its process group "
+                    "(`setsid`, GNU `timeout`). `&` after a `&&` list backgrounds the whole "
+                    "list, whose shell keeps the output; a job that "
                     "outlives the call is started on its own output: `setsid cmd > log 2>&1 "
                     f"< /dev/null &`. It printed: stdout {''.join(out)[-2000:]!r} stderr "
                     f"{''.join(err)[-2000:]!r}") from exc
@@ -315,16 +317,33 @@ class LauncherClient:
         if not reply.get("ok"):
             raise LauncherError(reply.get("error", "resize refused"))
 
-    def signal(self, proc_id: int, sig: int = 15) -> None:
+    def signal(self, proc_id: int, sig: int = 15, tree: bool = False) -> None:
+        """To the process's group, or with `tree` to every process it started, including
+        those that left its session (`server.tree_of`)."""
         sock = self._connect()
         try:
-            sock.sendall(protocol.encode({"op": "signal", "proc": proc_id, "sig": sig}))
+            sock.sendall(protocol.encode({"op": "signal", "proc": proc_id, "sig": sig,
+                                          "tree": tree}))
             with sock.makefile("rb") as fh:
                 reply = self._readline(fh)
         finally:
             sock.close()
         if not reply.get("ok"):
             raise LauncherError(reply.get("error", "signal refused"))
+
+    def end(self, proc_id: int) -> int:
+        """End the process and everything it started (`server.end_tree`); its exit code,
+        answered only once none of it runs."""
+        sock = self._connect(END_TIMEOUT)
+        try:
+            sock.sendall(protocol.encode({"op": "end", "proc": proc_id}))
+            with sock.makefile("rb") as fh:
+                reply = self._readline(fh)
+        finally:
+            sock.close()
+        if not reply.get("ok"):
+            raise LauncherError(reply.get("error", "end refused"))
+        return int(reply["exit"])
 
     def stream(self, cmd: list[str], *, cwd: str = "/work",
                env: dict[str, str] | None = None) -> Iterator[tuple[str, str]]:

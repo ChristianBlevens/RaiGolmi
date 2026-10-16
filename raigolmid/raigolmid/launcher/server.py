@@ -49,26 +49,65 @@ ABANDON_GRACE = 2.0
 SCROLLBACK_BYTES = 256 * 1024
 
 
-def group_cpu(pid: int) -> float | None:
-    """CPU seconds used by the process group `pid` leads: each live member's own, and what
-    each has reaped from its children. None when the group is gone."""
-    total = 0
-    found = False
+# Every process a launcher child starts carries its tree's token in this variable, so the
+# children that leave its session (`setsid`, a daemon's double fork) are still found as its.
+TREE_VAR = "RAIGOLMI_TREE"
+
+
+def tree_of(proc: "Process") -> dict[int, int]:
+    """The live processes of `proc`'s tree, each with its CPU ticks: those in its session
+    while it is unreaped, and any carrying its token in its environment. Read from /proc as
+    this launcher's uid with no capability, so a process that clears its environment and
+    leaves the session, overwrites its environment (setproctitle), or makes itself
+    non-dumpable — whose environment only CAP_SYS_PTRACE may read — is not found."""
+    me = os.getpid()
+    token = f"\0{TREE_VAR}={proc.tree}\0".encode()
+    found: dict[int, int] = {}
     for entry in os.listdir("/proc"):
-        if not entry.isdigit():
+        if not entry.isdigit() or int(entry) == me:
             continue
         try:
             with open(f"/proc/{entry}/stat") as f:
                 stat = f.read()
         except OSError:
             continue                    # exited between the listing and the read
-        # After the command, which may itself hold ')': state, ppid, pgrp, ..., the 12th to
-        # 15th fields after it are utime, stime, cutime, cstime (proc(5)).
+        # After the command, which may itself hold ')': state, ppid, pgrp, session, ...; the
+        # 12th to 15th fields after it are utime, stime, cutime, cstime (proc(5)).
         fields = stat[stat.rfind(")") + 2:].split()
-        if int(fields[2]) == pid:
-            found = True
-            total += sum(int(x) for x in fields[11:15])
-    return total / os.sysconf("SC_CLK_TCK") if found else None
+        if fields[0] in ("Z", "X"):
+            continue
+        mine = proc.exit_code is None and int(fields[3]) == proc.pid
+        if not mine:
+            try:
+                with open(f"/proc/{entry}/environ", "rb") as f:
+                    mine = token in b"\0" + f.read()
+            except OSError:
+                continue                # exited, or not this uid's to read
+        if mine:
+            found[int(entry)] = sum(int(x) for x in fields[11:15])
+    return found
+
+
+def end_tree(proc: "Process") -> list[int]:
+    """Ends `proc`'s whole tree: SIGTERM, with SIGCONT so a paused process takes it, then
+    SIGKILL to what is left after `ABANDON_GRACE`. Every process in it runs as this
+    launcher's uid, so signalling needs no capability. The pids still alive after both,
+    which only a process stuck in the kernel can be."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        pids = tree_of(proc)
+        for pid in pids:
+            for each in ((sig, signal.SIGCONT) if sig == signal.SIGTERM else (sig,)):
+                try:
+                    os.kill(pid, each)
+                except ProcessLookupError:
+                    break
+        deadline = time.monotonic() + ABANDON_GRACE
+        while pids and time.monotonic() < deadline:
+            time.sleep(0.05)
+            pids = tree_of(proc)
+        if not pids:
+            return []
+    return sorted(tree_of(proc))
 
 
 @dataclass
@@ -86,6 +125,8 @@ class Process:
     pid: int
     cmd: tuple[str, ...]
     pty: bool
+    # Its value of `TREE_VAR`.
+    tree: str
     started: float = field(default_factory=time.time)
     exit_code: int | None = None
     master_fd: int | None = None
@@ -99,7 +140,13 @@ class Process:
         return {"proc": self.proc_id, "pid": self.pid, "cmd": list(self.cmd),
                 "pty": self.pty, "started": self.started, "exit": self.exit_code,
                 "attached": self.conn is not None, "printed": self.printed,
-                "cpu": None if self.exit_code is not None else group_cpu(self.pid)}
+                "cpu": None if self.exit_code is not None else self.cpu()}
+
+    def cpu(self) -> float | None:
+        """CPU seconds used by its tree: each live process's own, and what each has reaped
+        from its children. None when the tree is gone."""
+        ticks = tree_of(self)
+        return sum(ticks.values()) / os.sysconf("SC_CLK_TCK") if ticks else None
 
     def record(self, data: bytes) -> None:
         with self.lock:
@@ -147,10 +194,10 @@ class Registry:
         self._next = 1
         self._procs: dict[int, Process] = {}
 
-    def add(self, pid: int, cmd: tuple[str, ...], use_pty: bool,
+    def add(self, pid: int, cmd: tuple[str, ...], use_pty: bool, tree: str,
             master_fd: int | None = None) -> Process:
         with self._lock:
-            proc = Process(proc_id=self._next, pid=pid, cmd=cmd, pty=use_pty,
+            proc = Process(proc_id=self._next, pid=pid, cmd=cmd, pty=use_pty, tree=tree,
                            master_fd=master_fd)
             self._procs[proc.proc_id] = proc
             self._next += 1
@@ -184,9 +231,11 @@ def _executable(cmd0: str, env: dict[str, str]) -> str:
     return shutil.which(cmd0, path=env.get("PATH", os.defpath)) or cmd0
 
 
-def _spawn_pty(req: protocol.StartRequest, env: dict[str, str]) -> tuple[int, int]:
+def _spawn_pty(req: protocol.StartRequest, env: dict[str, str]) -> tuple[int, int, int]:
     """fork with a controlling terminal. `pty.fork` does the setsid + TIOCSCTTY dance,
-    which is the part that is easy to get subtly wrong by hand."""
+    which is the part that is easy to get subtly wrong by hand. Also handed back is a pidfd
+    on the child, readable once it exits: a child it left running can hold the terminal
+    open long after, so the terminal's end does not say the child's."""
     program = _executable(req.cmd[0], env)
     pid, fd = pty.fork()
     if pid == 0:                       # child
@@ -196,8 +245,15 @@ def _spawn_pty(req: protocol.StartRequest, env: dict[str, str]) -> tuple[int, in
         except BaseException as exc:    # noqa: BLE001 - the child must not return
             os.write(2, f"launcher: could not exec {req.cmd[0]}: {exc}\n".encode())
             os._exit(127)
+    try:
+        pidfd = os.pidfd_open(pid)
+    except OSError:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        os.close(fd)
+        raise
     _set_winsize(fd, req.rows, req.cols)
-    return pid, fd
+    return pid, fd, pidfd
 
 
 def _spawn_piped(req: protocol.StartRequest, env: dict[str, str]
@@ -278,6 +334,8 @@ class Handler(socketserver.BaseRequestHandler):
                         **protocol.stream_frame("stdout", proc.replay()))))
             elif op == "signal":
                 self._signal(conn, request)
+            elif op == "end":
+                self._end(conn, request)
             elif op == "attach":
                 self._attach(conn, request)
             elif op == "resize":
@@ -300,6 +358,22 @@ class Handler(socketserver.BaseRequestHandler):
             conn.sendall(protocol.encode(protocol.error("no such proc")))
             return
         sig = int(request.get("sig", signal.SIGTERM))
+        if request.get("tree"):
+            pids = tree_of(proc)
+            if not pids:
+                conn.sendall(protocol.encode(protocol.error("process is already gone")))
+                return
+            for pid in pids:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass                # ended between the reading and the signal
+            conn.sendall(protocol.encode(protocol.ok()))
+            return
+        # A reaped pid may already be another process's.
+        if proc.exit_code is not None:
+            conn.sendall(protocol.encode(protocol.error("process is already gone")))
+            return
         try:
             os.killpg(os.getpgid(proc.pid), sig)
         except ProcessLookupError:
@@ -310,6 +384,26 @@ class Handler(socketserver.BaseRequestHandler):
             return
         conn.sendall(protocol.encode(protocol.ok()))
 
+    def _end(self, conn: socket.socket, request: dict[str, Any]) -> None:
+        """Answered only once nothing of the process's tree runs and its exit is recorded."""
+        proc = self.server.registry.get(int(request.get("proc", -1)))
+        if proc is None:
+            conn.sendall(protocol.encode(protocol.error("no such proc")))
+            return
+        left = end_tree(proc)
+        if left:
+            conn.sendall(protocol.encode(protocol.error(
+                f"still running after SIGKILL: pids {left}")))
+            return
+        deadline = time.monotonic() + ABANDON_GRACE
+        while proc.exit_code is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if proc.exit_code is None:
+            conn.sendall(protocol.encode(protocol.error(
+                f"its tree has ended, but its exit was not recorded within {ABANDON_GRACE}s")))
+            return
+        conn.sendall(protocol.encode(protocol.ok(proc=proc.proc_id, exit=proc.exit_code)))
+
     def _start(self, conn: socket.socket, request: dict[str, Any]) -> None:
         try:
             req = protocol.StartRequest.from_wire(request)
@@ -319,20 +413,22 @@ class Handler(socketserver.BaseRequestHandler):
 
         env = dict(self.server.base_env)
         env.update(req.env)
+        tree = uuid.uuid4().hex
+        env[TREE_VAR] = tree
         if req.pty:
             env.setdefault("TERM", req.term)
 
         try:
             if req.pty:
-                pid, master = _spawn_pty(req, env)
-                proc = self.server.registry.add(pid, req.cmd, True, master_fd=master)
+                pid, master, pidfd = _spawn_pty(req, env)
+                proc = self.server.registry.add(pid, req.cmd, True, tree, master_fd=master)
                 conn.sendall(protocol.encode(protocol.ok(
                     proc=proc.proc_id, pid=pid, launcher=self.server.launcher_id)))
-                self.server.start_pty_pump(proc)
+                self.server.start_pty_pump(proc, pidfd)
                 self._serve_pty(conn, proc)
             else:
                 pid, out_r, err_r, in_w = _spawn_piped(req, env)
-                proc = self.server.registry.add(pid, req.cmd, False)
+                proc = self.server.registry.add(pid, req.cmd, False, tree)
                 conn.sendall(protocol.encode(protocol.ok(
                     proc=proc.proc_id, pid=pid, launcher=self.server.launcher_id)))
                 if req.stream:
@@ -518,16 +614,13 @@ class Handler(socketserver.BaseRequestHandler):
 
     @staticmethod
     def _abandon(proc: Process) -> None:
-        """End a piped child nobody is reading. It leads its own process group (`setsid` in
-        `_spawn_piped`) and runs as this launcher's uid, so signalling it needs no
-        capability. SIGTERM first, so a `git` can drop its lock."""
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(proc.pid, sig)
-            except ProcessLookupError:
-                return
-            if _exits_within(proc.pid, ABANDON_GRACE):
-                return
+        """End a piped child nobody is reading, with everything it started (`end_tree`).
+        SIGTERM first, so a `git` can drop its lock. Nobody is left to tell of a survivor
+        but the view's log."""
+        if left := end_tree(proc):
+            sys.stderr.write(f"launcher: proc {proc.proc_id} ({' '.join(proc.cmd)}) left "
+                             f"pids {left} running after SIGKILL\n")
+            sys.stderr.flush()
 
 
 def _exited(pid: int) -> int | None:
@@ -611,21 +704,32 @@ class LauncherServer(socketserver.ThreadingUnixStreamServer):
             self.registry.finish(proc.proc_id, code)
             return code
 
-    def start_pty_pump(self, proc: Process) -> None:
-        """One thread per PTY process, owning its master fd for the process's whole life.
+    def start_pty_pump(self, proc: Process, pidfd: int) -> None:
+        """One thread per PTY process, owning its master fd for as long as anything holds
+        the terminal open.
 
         This is what makes a launcher child outlive the connection that asked for it: the
         terminal stays open whether or not anyone is attached, so closing `rai attach` —
         or restarting raigolmid — does not hang up the shell."""
-        threading.Thread(target=self._pty_pump, args=(proc,), daemon=True).start()
+        threading.Thread(target=self._pty_pump, args=(proc, pidfd), daemon=True).start()
 
-    def _pty_pump(self, proc: Process) -> None:
+    def _pty_pump(self, proc: Process, pidfd: int) -> None:
+        """The process's exit is recorded when its pidfd says it exited, after what it left
+        in the terminal is read; a child it started that left its session can hold the
+        terminal open after, and what it prints is still recorded until it lets go."""
         master = proc.master_fd
         assert master is not None
+        watched = [master, pidfd]
         try:
             while True:
-                readable, _, _ = select.select([master], [], [], 1.0)
-                if not readable:
+                readable, _, _ = select.select(watched, [], [])
+                if pidfd in readable:
+                    self._drain_pending(proc, master)
+                    os.close(pidfd)
+                    watched.remove(pidfd)
+                    pidfd = -1
+                    self.reap(proc)
+                if master not in readable:
                     continue
                 try:
                     data = os.read(master, READ_SIZE)
@@ -636,6 +740,8 @@ class LauncherServer(socketserver.ThreadingUnixStreamServer):
                 proc.record(data)
                 proc.write_out(data)
         finally:
+            if pidfd != -1:
+                os.close(pidfd)
             code = self.reap(proc)
             # Recorded before the connection ends: a client told EOF asks `list` why, and
             # must find the exit already there.
@@ -653,6 +759,22 @@ class LauncherServer(socketserver.ThreadingUnixStreamServer):
                     conn.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
+
+    @staticmethod
+    def _drain_pending(proc: Process, master: int) -> None:
+        """What the terminal holds unread now — all an exited process can have left in it —
+        bounded by that count, so a child still printing to it cannot hold the exit back."""
+        pending = struct.unpack("i", fcntl.ioctl(master, termios.FIONREAD, b"\0" * 4))[0]
+        while pending > 0:
+            try:
+                data = os.read(master, min(pending, READ_SIZE))
+            except OSError:
+                return
+            if not data:
+                return
+            proc.record(data)
+            proc.write_out(data)
+            pending -= len(data)
 
     def server_close(self) -> None:
         super().server_close()

@@ -259,7 +259,7 @@ class FakeLauncherClient:
         return {"proc": proc_id, "exit": job["exit"], "printed": len(job["printed"].encode()),
                 "cpu": None if job["exit"] is not None else job["cpu"]}
 
-    def signal(self, proc_id: int, sig: int = 15) -> None:
+    def signal(self, proc_id: int, sig: int = 15, tree: bool = False) -> None:
         """As the real one: refused for a proc it never issued or one already gone."""
         from raigolmid.launcher.client import LauncherError
         self._require_reachable()
@@ -269,6 +269,19 @@ class FakeLauncherClient:
         if job["exit"] is not None:
             raise LauncherError("process is already gone")
         job["signals"].append(sig)
+
+    def end(self, proc_id: int) -> int:
+        """As the real one: answered once the job has exited, with its exit — a SIGTERM's
+        when it was running."""
+        from raigolmid.launcher.client import LauncherError
+        self._require_reachable()
+        job = self.parent.jobs[self.parent.launcher(self.instance)].get(proc_id)
+        if job is None:
+            raise LauncherError("no such proc")
+        job["signals"].append("end")
+        if job["exit"] is None:
+            job["exit"] = 128 + 15
+        return job["exit"]
 
     def scrollback(self, proc: int, timeout: float = 5.0) -> str:
         self._require_reachable()
