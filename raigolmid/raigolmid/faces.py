@@ -264,6 +264,17 @@ def _output_sizes(compositor: HostCompositor) -> list[tuple[int, int]]:
             for o in compositor.outputs() if o.get("active") and o.get("current_mode")]
 
 
+def _require_on_an_output(compositor: HostCompositor, x: int, y: int) -> None:
+    """A pointer at (`x`, `y`) lands on one of the face's outputs, in the layout coordinates
+    `seat cursor set` takes; a point outside them is no pixel of any screenshot, so it is
+    refused rather than delivered somewhere it was not aimed."""
+    rects = [o["rect"] for o in compositor.outputs() if o.get("active")]
+    if not any(r["x"] <= x < r["x"] + r["width"] and r["y"] <= y < r["y"] + r["height"]
+               for r in rects):
+        held = ", ".join(f"{r['width']}x{r['height']} at ({r['x']}, {r['y']})" for r in rects)
+        raise FaceError(f"({x}, {y}) is on no output of the face: it is {held or 'no output'}")
+
+
 def listening_unix_sockets(pid: int | None = None) -> set[str]:
     """Pathname sockets something is **listening** on, in the network namespace of `pid`.
 
@@ -771,6 +782,7 @@ class Faces:
             if x is None or y is None:
                 raise FaceError(f"`{action}` needs x and y")
             seat = self._nested_compositor(state)
+            _require_on_an_output(seat, x, y)
             seat.command("seat", "-", "cursor", "set", str(x), str(y))
             if action == "click":
                 if button not in _BUTTONS:

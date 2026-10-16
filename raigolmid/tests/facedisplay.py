@@ -121,12 +121,17 @@ class NestedSway:
         self.commands: list[str] = []
 
     def command(self, *words):
-        """The user's keyboard is the one thing a started face's sway is told; anything else is
-        a command this double does not model, refused as sway refuses one it cannot parse."""
+        """The user's keyboard and an agent's pointer are what a started face's sway is told;
+        anything else is a command this double does not model, refused as sway refuses one it
+        cannot parse."""
         line = " ".join(words)
-        if not line.startswith("input type:keyboard "):
+        if not line.startswith(("input type:keyboard ", "seat - cursor ")):
             raise FaceError(f"the host compositor refused '{line}': not modelled")
         self.commands.append(line)
+
+    def outputs(self):
+        return [{"name": "WL-1", "active": True, "current_mode": {"width": 1280, "height": 800},
+                 "rect": {"x": 0, "y": 0, "width": 1280, "height": 800}}]
 
     def window_events(self, timeout):
         """Each command spawned from now on as the window event it causes; with none left, the

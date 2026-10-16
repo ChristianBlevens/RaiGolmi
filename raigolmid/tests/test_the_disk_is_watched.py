@@ -138,6 +138,7 @@ def test_a_budget_passed_goes_to_its_tab_to_check_once_until_it_is_kept_again(h,
     assert (over.data["body"], over.data["kind"]) == ("myapi", "caches")
     assert over.data["caches"][0]["path"] == "target"
     assert over.tab == h.tab("myapi") and "new range" in over.data["deliver"]["content"]
+    assert "held by `target`" in over.data["deliver"]["content"], "the notice names what grew"
     assert not h.events_of("budget.unset"), "a project with a budget is not asked for one"
     _budget(h, "")      # an empty table keeps nothing, so nothing is past it
     watch.tick()

@@ -48,12 +48,28 @@ def unset_message(body: str, held: dict[str, int], toml: str) -> str:
             "leftovers, clear back within it.")
 
 
-def exceeded_message(kind: str, budget: int, held: int, toml: str) -> str:
+def holding(kind: str, evidence: dict[str, Any]) -> str:
+    """What the reading found holding `kind`, largest first, paths within the project: the
+    caches with their tools, the output's largest paths. Memory is read per project, so it
+    names nothing smaller."""
+    if kind == "caches":
+        parts = [(f"`{c['path']}`" + (f" ({c['tool']})" if c["tool"] else ""), c["bytes"])
+                 for c in sorted(evidence["caches"], key=lambda c: -c["bytes"])]
+    elif kind == "output":
+        parts = [(f"`{o['path']}`", o["bytes"]) for o in evidence["largest_output"]]
+    else:
+        return ""
+    if not parts:
+        return ""
+    return " It is held by " + ", ".join(f"{p} {gb(b)}" for p, b in parts) + "."
+
+
+def exceeded_message(kind: str, budget: int, held: int, toml: str, holders: str) -> str:
     reads = "memory" if kind == "memory" else "disk"
     return (f"From the daemon: this project's {KINDS[kind]} came to {gb(held)}, past the "
-            f"{gb(budget)} budget set for a regular run. Check what grew (`{reads}` reads it "
-            f"again): if it is what the work now regularly needs, set `{kind}` in {toml} to "
-            "that new "
+            f"{gb(budget)} budget set for a regular run.{holders} Check what grew (`{reads}` "
+            f"reads it again): if it is what the work now regularly needs, set `{kind}` in "
+            f"{toml} to that new "
             "range; if it is leftovers — old builds, superseded runs, copies — clear them "
             "back within the budget (a build cache with its own tool, once anything the project "
             "needs is moved out of it). Say which you did.")
@@ -111,6 +127,7 @@ class Budgets:
                          budget=budget, held=held, message=said, **evidence, deliver={
                              "content": exceeded_message(
                                  kind, budget, held,
-                                 self._toml(self.session.catalogue.bodies[body])),
+                                 self._toml(self.session.catalogue.bodies[body]),
+                                 holding(kind, evidence)),
                              # The newest reading replaces one still queued (`channel.py`).
                              "meta": {"from": "daemon", "standing": f"budget {kind}"}})

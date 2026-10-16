@@ -80,6 +80,12 @@ class Library:
         add(Document("preferences", "Machine", "Preferences", p.preferences, True))
         add(Document("work/session-start", "Machine", f"{documents.SESSION_START} (no body)",
                      p.work / documents.SESSION_START, True))
+        # The machine tab's own documents live only in the daemon's state, so the catalog is
+        # where the user reads them.
+        for path in documents.markdown(p.work) if p.work.is_dir() else []:
+            rel = path.relative_to(p.work)
+            if rel != Path(documents.SESSION_START):
+                add(Document(f"work/{rel}", "Machine", f"{rel} (no body)", path, True))
         for path in _md_files(p.agent_plugins):
             rel = path.relative_to(p.agent_plugins)
             add(Document(f"plugin/{rel}", "Machine", f"Plugin {rel}", path, True))

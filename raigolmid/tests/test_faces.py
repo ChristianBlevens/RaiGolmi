@@ -581,3 +581,20 @@ def test_a_face_docker_is_removing_fails_as_a_face_error_not_a_refused_log(rig, 
 
     with pytest.raises(FaceError, match="docker refused this container's logs"):
         faces._await_display(container, paths.face_runtime)
+
+
+def test_a_click_off_the_faces_output_is_refused_and_one_on_it_delivered(rig, tmp_path,
+                                                                        monkeypatch):
+    runtime, paths, events = rig
+    sway = NestedSway(runtime)
+    monkeypatch.setattr(Faces, "_nested_compositor", lambda _self, _s: sway)
+    faces = Faces(runtime, paths, events, host=ScriptedHost(windows_of_faces(runtime)))
+    faces.start(a_face(tmp_path))
+    with pytest.raises(FaceError, match=r"\(99999, -5\) is on no output of the face: it is "
+                                        r"1280x800 at \(0, 0\)"):
+        faces.input("click", x=99999, y=-5)
+    assert not [c for c in sway.commands if c.startswith("seat")], "nothing is delivered"
+    faces.input("click", x=1279, y=0)
+    assert [c for c in sway.commands if c.startswith("seat")] == [
+        "seat - cursor set 1279 0", "seat - cursor press button1",
+        "seat - cursor release button1"]

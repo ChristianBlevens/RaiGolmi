@@ -66,3 +66,12 @@ def test_a_document_its_reader_cannot_read_is_refused_naming_why(world, id, text
     with pytest.raises(DocumentError, match=names):
         m["document_save"](id=id, text=text, version=opened["version"])
     assert m["document"](id=id) == opened, "nothing is written"
+
+
+def test_the_machine_tabs_own_documents_are_in_the_catalog(world):
+    h, m = world
+    (h.paths.work / "archive").mkdir(parents=True, exist_ok=True)
+    (h.paths.work / "archive" / "plan.md").write_text("the old plan\n")
+    listed = {d["id"]: d for d in m["documents"]()}
+    assert listed["work/archive/plan.md"]["editable"]
+    assert m["document"](id="work/archive/plan.md")["text"] == "the old plan\n"
