@@ -791,8 +791,10 @@ class Faces:
             command=args,
             labels={labels.MANAGED: "true", labels.ROLE: str(labels.Role.FACE_INPUT),
                     labels.EPOCH: str(self.epoch)},
+            # wtype decodes its argument by the locale, and under C refuses anything not ASCII.
             environment={"XDG_RUNTIME_DIR": runtime_dir,
-                         "WAYLAND_DISPLAY": state.wayland_display},
+                         "WAYLAND_DISPLAY": state.wayland_display,
+                         "LC_ALL": "C.UTF-8"},
             mounts=(Mount(source=runtime_dir, target=runtime_dir),),
             # wtype writes its keymap to /tmp, and Docker's own tmpfs is root's 0755.
             tmpfs={"/tmp": "mode=1777"},
