@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from pathlib import Path
 
@@ -447,6 +448,23 @@ def test_a_closed_tabs_home_is_archived_and_the_fresh_tab_starts_fresh(h):
     (_, again) = h.events_of("tab.closed")
     assert not list((h.paths.agent_archive / again.data["archive"] / ".claude" / "projects")
                     .glob("-archived-*")), "an archive holds its own conversation only"
+
+
+def test_a_tab_that_continues_another_is_given_its_sandbox(h):
+    """The face stays on the work's body across a hand-on: the successor's sandbox comes up
+    with the same toolbelt without its agent asking, and the face is moved onto it."""
+    old = h.open_sandbox("myapi", "python-dev")
+    successor = h.session.succeed_tab(h.tab("myapi"), by="machine").tab_id
+    deadline = time.monotonic() + 20
+    while not any(e.tab == successor for e in h.events_of("sandbox.opened")):
+        assert time.monotonic() < deadline, h.event_types()[-20:]
+        time.sleep(0.05)
+    carried = naming.instance_id("myapi", successor)
+    assert h.session.intent.focused_instance == carried
+    assert h.session.intent.instances[carried].toolbelt == "python-dev"
+    assert old not in h.session.intent.instances
+    with pytest.raises(SessionError, match="already open"):
+        h.session.sandbox_open(successor, "python-dev")
 
 
 def test_a_tab_that_continues_another_starts_with_its_claude_code_memory(h):

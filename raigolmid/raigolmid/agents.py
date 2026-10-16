@@ -186,7 +186,8 @@ Every piece of work runs in three layers, each its own container, each swappable
 - **The body** is the project as it would deploy, built from its definition. Its working copy
   is `/work`.
 
-A body with a toolbelt is a sandbox, and a tab opens at most one, with `sandbox_open`. Every
+A body with a toolbelt is a sandbox, and a tab opens at most one, with `sandbox_open`; a tab
+taking over another's work is given the sandbox that tab had open, with its toolbelt. Every
 layer is a directory under `/definitions` that you can edit. The product ships no layers: the
 user builds every one through an agent, so writing a face, toolbelt or body is ordinary work.
 
