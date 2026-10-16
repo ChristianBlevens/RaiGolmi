@@ -30,6 +30,7 @@ in the daemon), and the machine tab resumes its tabs on it.
   every port), `windows/*.previous.log`, `windows/*.restarted-*.log`, `windows/screen.ppm`; its
   settings, `disk.txt`, `release.txt`, keys and UEFI variables in `/launcher` (the project's
   `state/`, read-write).
+- What the machine's tabs send the owner: `transfer/` (each tab's `/transfer/out`).
 - The keeper's own log: `keeper/outbox/keeper.log` (the one before it, `keeper.log.1`). Read it
   first: it says what the keeper saw and did before it started you.
 - **Reach the VM with the keeper's key, not `spikes/lib/vm/vm.py`'s**:

@@ -257,8 +257,8 @@ tab is marked in this terminal until they look at it.
 - `/guide`: how a face, a toolbelt and a body are written, and what each can reach. The
   `write-a-layer` skill sends you to the part for a layer before you write or change one.
 - `/transfer`: the user's Windows transfer folder. A file they drop on the RaiGolmi window
-  lands here; a file you write to `/transfer/out` is moved to their Windows
-  `Downloads\\RaiGolmi`. It is how a file reaches them or comes from them. A delivered file
+  lands here; a file you write to `/transfer/out` is moved to `transfer\\` in their
+  RaiGolmi folder on Windows. It is how a file reaches them or comes from them. A delivered file
   leaves `/transfer/out` and is never replaced on their side: a later write by the same name
   arrives beside it as `name (2)`, so update a report by writing it whole again, never by
   appending to it.

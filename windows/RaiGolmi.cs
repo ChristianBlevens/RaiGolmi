@@ -2616,7 +2616,8 @@ class Ssh
 {
     const string Host = "raigolmi";
     public string Key, Config, Credential;
-    // Windows' Downloads\RaiGolmi, where ~/Transfer/out empties to.
+    // The project folder's transfer\, where ~/Transfer/out empties to: inside the folder the
+    // keeper mounts, so a file the machine sends reaches it too.
     public string Outbox;
     string client, tar;
 
@@ -2639,7 +2640,7 @@ class Ssh
         s.Key = Path.Combine(home, "id_ed25519");
         s.Config = Path.Combine(home, "ssh_config");
         s.Credential = Path.Combine(home, "login.credential");
-        s.Outbox = Path.Combine(Native.KnownFolder(Native.Downloads), "RaiGolmi");
+        s.Outbox = Path.Combine(Launcher.Project, "transfer");
         if (!File.Exists(s.Key))
             Generate(keygen, s.Key);
         OwnerOnly(s.Key);
@@ -2838,7 +2839,7 @@ echo 'the launcher closed the channel' >&2
     const string Pack = "tar --sort=name --format=pax " +
         "--pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime -cf - -- \"$1\"";
     // Every tab can write ~/Transfer, so `out` is entered only when it is the directory itself:
-    // a link put in its place would have its target emptied into Downloads.
+    // a link put in its place would have its target emptied into the transfer folder.
     const string IntoOut = "mkdir -p ~/Transfer/out && cd -P ~/Transfer/out || exit\n" +
         "[ \"$(pwd)\" = \"$(cd -P ~ && pwd)/Transfer/out\" ] || " +
         "{ echo \"~/Transfer/out is a link, not a directory, so nothing is taken from it\" >&2; exit 5; }\n";
@@ -2899,7 +2900,7 @@ done
 
     readonly Window window;
     readonly Ssh ssh;
-    readonly string downloads;
+    readonly string transfer;
     Process watch, feed, outbox;
     volatile bool stopped;
     readonly object gate = new object();
@@ -2924,7 +2925,7 @@ done
     {
         this.window = window;
         this.ssh = ssh;
-        downloads = ssh.Outbox;
+        transfer = ssh.Outbox;
     }
 
     public void Start()
@@ -3204,7 +3205,7 @@ done
     void Fetch(string fingerprint, string name64)
     {
         string name = new UTF8Encoding(false).GetString(Convert.FromBase64String(name64));
-        string partial = Path.Combine(downloads, ".partial");
+        string partial = Path.Combine(transfer, ".partial");
         // The guest names the entry, and a Linux name may hold `C:\` or `\\server`, which
         // Path.Combine takes as the whole path: only one name Windows can give a file is fetched.
         if (!PlainName(name))
@@ -3222,7 +3223,7 @@ done
             if (!File.Exists(unpacked) && !Directory.Exists(unpacked))
                 throw new IOException("tar.exe unpacked something other than " + name);
             FromElsewhere(unpacked);
-            string target = Unique(downloads, name);
+            string target = Unique(transfer, name);
             if (Directory.Exists(unpacked)) Directory.Move(unpacked, target);
             else File.Move(unpacked, target);
             Directory.Delete(partial, true);
@@ -3237,7 +3238,7 @@ done
         }
         catch (Exception e)
         {
-            Tell(name + " stays in ~/Transfer/out: it could not be copied to " + downloads + ": " +
+            Tell(name + " stays in ~/Transfer/out: it could not be copied to " + transfer + ": " +
                  e.Message);
         }
     }
@@ -3257,7 +3258,7 @@ done
     }
 
     // Marked as from the internet, as a browser marks a download: a tab wrote it, so Windows
-    // asks before running it. Links are left alone, so no mark lands outside Downloads.
+    // asks before running it. Links are left alone, so no mark lands outside the transfer folder.
     static void FromElsewhere(string path)
     {
         var files = Directory.Exists(path)
@@ -3512,11 +3513,6 @@ static class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool AddClipboardFormatListener(IntPtr hwnd);
 
-    public static readonly Guid Downloads = new Guid("374DE290-123F-4565-9164-39C4925E467B");
-    [DllImport("shell32.dll")]
-    static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid id, uint flags,
-                                           IntPtr token, out IntPtr path);
-    [DllImport("ole32.dll")] static extern void CoTaskMemFree(IntPtr p);
 
     // .NET maps a Windows zone to its IANA name with Windows' own ICU data.
     public static string IanaZone(string windowsId)
@@ -3526,17 +3522,5 @@ static class Native
             throw new LauncherError("Windows' timezone '" + windowsId + "' has no IANA name that " +
                                     ".NET can find, so RaiGolmi cannot take it.");
         return iana;
-    }
-
-    public static string KnownFolder(Guid id)
-    {
-        IntPtr p;
-        int hr = SHGetKnownFolderPath(id, 0, IntPtr.Zero, out p);
-        if (hr != 0)
-            throw new LauncherError("Windows could not say where the folder " + id + " is (0x" +
-                                    hr.ToString("x8") + ").");
-        string path = Marshal.PtrToStringUni(p);
-        CoTaskMemFree(p);
-        return path;
     }
 }

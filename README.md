@@ -482,7 +482,7 @@ restart the window to apply it. A repair is reopened in its terminal with the `r
 
 Copy and paste works both ways between Windows and the machine. Drop a file on the window
 and it shows up in `~/Transfer`. Put a file in `~/Transfer/out` and it lands in
-`Downloads\RaiGolmi`. Every agent tab has the same folder at `/transfer`: it reads what you
+the RaiGolmi folder's `transfer`. Every agent tab has the same folder at `/transfer`: it reads what you
 drop there, and sends you a file by writing it to `/transfer/out`.
 **Ctrl + Alt + R** redraws the window if it ever looks wrong.
 
@@ -510,8 +510,7 @@ time, so `setup.bat` won't put one there.
 There's no uninstaller yet. To take it all off, close the window, then delete:
 
 - the RaiGolmi folder you cloned or unzipped, which holds the disk and, in `state`, the app's
-  settings and keys;
-- `Downloads\RaiGolmi` (files the machine sent you);
+  settings and keys, and in `transfer`, the files the machine sent you;
 - MSYS2, if nothing else of yours uses it: uninstall it from Windows' settings, or delete
   `C:\msys64`. To keep it, remove just the patched packages' `IgnorePkg` lines from
   `C:\msys64\etc\pacman.conf` and the next `pacman -Syu` puts the stock ones back;
@@ -565,7 +564,7 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 
 Open an [issue on GitHub](https://github.com/ChristianBlevens/RaiGolmi/issues) and say what
 you did and what happened. If the machine is running, run `rai diagnose` in the `raigolmi`
-tab's shell and attach the file it makes, which lands in `Downloads\RaiGolmi`: it bundles the
+tab's shell and attach the file it makes, which lands in the RaiGolmi folder's `transfer`: it bundles the
 logs, the journal and state, with your projects' environment values left out. It's worth a
 read before you post it, since issues are public. If the window itself
 won't start, attach `windows\qemu.log` from the RaiGolmi folder.
