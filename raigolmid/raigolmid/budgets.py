@@ -8,12 +8,15 @@ is never trusted and never an error: it is the moment the tab looks, and either 
 what the work now regularly needs, so the tab adjusts the budget to the new range, or it is
 leftovers — old builds, superseded runs, copies — and the tab clears back within it.
 
-The tab says it in its body.toml (`[budget]`: `caches`, `output`, `memory`;
+The tab says it in its body.toml (`[budget]`: `caches`, `output`, `memory`, `cpu`;
 `definitions.Budget`) when its project first holds build caches or output: the daemon asks it
 once (`budget.unset`), and the asks are kept in `Paths.budget_asks`. The disk and memory
 readings (`disk.py`, `memory.py`) hold each project to it; a budget passed is delivered to the
 project's own tab to check (`budget.exceeded`), and is the janitor's only when the project has
-no tab to check it (`budget.untended`). Neither ever changes a project's files for it.
+no tab to check it (`budget.untended`). Neither ever changes a project's files for it, and
+nothing holds a sandbox to a budget: no container has a CPU or memory limit (the owner's call).
+`cpu` is the whole machine unless the tab says less, which matters only when projects run side
+by side.
 """
 from __future__ import annotations
 
@@ -27,12 +30,16 @@ if TYPE_CHECKING:
     from .session import Session
 
 KINDS = {"caches": "build caches", "output": "other git-ignored output",
-         "memory": "peak working memory"}
+         "memory": "peak working memory", "cpu": "share of the machine's CPU"}
 
 
 def gb(n: int) -> str:
     """A size in GB, or in MB under one, so a budget of a few MB never reads as 0.0 GB."""
     return f"{n / 1024 ** 3:.1f} GB" if n >= 1024 ** 3 else f"{n / 1024 ** 2:.1f} MB"
+
+
+def amount(kind: str, n: int) -> str:
+    return f"{n}%" if kind == "cpu" else gb(n)
 
 
 def unset_message(body: str, held: dict[str, int], toml: str) -> str:
@@ -44,7 +51,8 @@ def unset_message(body: str, held: dict[str, int], toml: str) -> str:
             "the runs and snapshots the work still cites, the memory its largest build or run "
             "takes), clear what is stale first, and set each close to that in a `[budget]` "
             f"table in {toml}: `caches`, `output`, `memory`, "
-            "each a size like \"2G\". When one is passed you are told, and check: if the excess "
+            "each a size like \"2G\"; `cpu`, a share of the machine like \"50%\", is the "
+            "whole machine unless you set less for projects run side by side. When one is passed you are told, and check: if the excess "
             "is what the work now regularly needs, set the budget to that new range; if it is "
             "leftovers, clear back within it.")
 
@@ -66,6 +74,12 @@ def holding(kind: str, evidence: dict[str, Any]) -> str:
 
 
 def exceeded_message(kind: str, budget: int, held: int, toml: str, holders: str) -> str:
+    if kind == "cpu":
+        return (f"From the daemon: this project's {KINDS[kind]} came to {held}% over a minute, "
+                f"past the {budget}% budget set for a regular run. Check what is running "
+                f"(`memory` reads it again, `jobs` lists your jobs): if it is what the work now "
+                f"regularly needs, set `cpu` in {toml} to that new range; if it is something "
+                "left running — a job, a watcher, a loop — stop it. Say which you did.")
     reads = "memory" if kind == "memory" else "disk"
     return (f"From the daemon: this project's {KINDS[kind]} came to {gb(held)}, past the "
             f"{gb(budget)} budget set for a regular run.{holders} Check what grew (`{reads}` "
@@ -118,7 +132,8 @@ class Budgets:
                  **evidence: Any) -> None:
         """To the project's tab, which checks it; the janitor's only with no tab to."""
         tab = self.session.intent.body_tab(body)
-        said = f"{body}'s {KINDS[kind]} came to {gb(held)}, past the {gb(budget)} budget"
+        said = (f"{body}'s {KINDS[kind]} came to {amount(kind, held)}, past the "
+                f"{amount(kind, budget)} budget")
         if tab is None:
             self.events.emit("budget.untended", body=body, kind=kind, budget=budget,
                              held=held, message=said + ", and it has no tab to check it",

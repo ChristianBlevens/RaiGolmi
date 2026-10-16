@@ -26,7 +26,7 @@ from .base import (
     ContainerRuntime,
     ContainerSpec,
     DiskUsage,
-    MemoryUse,
+    CgroupUse,
     ExecResult,
     ImageInfo,
     ImageInUse,
@@ -353,7 +353,7 @@ class DockerRuntime(ContainerRuntime):
         except APIError as exc:
             raise RuntimeError_(f"could not prune the build cache: {exc}") from exc
 
-    def memory(self, container_id: str) -> MemoryUse:
+    def use(self, container_id: str) -> CgroupUse:
         """Read from the container's cgroup (v2), where Docker's cgroup driver puts it."""
         if self._cgroup_driver is None:
             try:
@@ -367,9 +367,11 @@ class DockerRuntime(ContainerRuntime):
             stat = dict(line.split() for line in (group / "memory.stat").read_text().splitlines())
             events = dict(line.split() for line in
                           (group / "memory.events").read_text().splitlines())
+            cpu = dict(line.split() for line in (group / "cpu.stat").read_text().splitlines())
         except OSError as exc:
-            raise RuntimeError_(f"could not read {group}'s memory: {exc}") from exc
-        return MemoryUse(working=int(stat["anon"]), oom_kills=int(events["oom_kill"]))
+            raise RuntimeError_(f"could not read {group}'s memory and CPU: {exc}") from exc
+        return CgroupUse(working=int(stat["anon"]), oom_kills=int(events["oom_kill"]),
+                         cpu_usec=int(cpu["usage_usec"]))
 
     def disk_usage(self) -> DiskUsage:
         """`docker system df`'s own reckoning: an image no container uses is unused for the

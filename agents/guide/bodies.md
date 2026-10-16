@@ -53,7 +53,9 @@ Then select the body: its tab opens on the project and takes the work from there
 `[budget]` is the range a regular run of the project stays within with nothing duplicated or
 stale, each a size like `"2G"`: `caches` (its build tools' caches — every directory holding
 `CACHEDIR.TAG`, as cargo's `target/` does), `output` (the rest of what its git ignores), and
-`memory` (the peak working memory of its sandbox). It is a tripwire that keeps the tab on top of
+`memory` (the peak working memory of its sandbox); and `cpu`, its share of the machine's CPU
+over a minute, like `"50%"`, which is the whole machine unless set lower for projects run side
+by side. Nothing limits a sandbox: it is a tripwire that keeps the tab on top of
 what accumulates, not a ceiling: set it close to what a regular run keeps, after clearing what
 is stale. The tab is asked for it when the project first builds or keeps output, and told each
 time one is passed; then it checks whether the excess is what the work now regularly needs (and
@@ -64,6 +66,7 @@ sets that range) or leftovers (and clears back within it).
 caches = "2G"
 output = "500M"
 memory = "3G"
+cpu = "50%"         # only when another project runs beside it
 ```
 
 `[principles]` names the doc the project's work is judged against, a file in the project. When
@@ -104,6 +107,12 @@ compute on the user's GPU. For Bevy keep 3.0: at 3.1 wgpu claims `Rgba16Float` s
 GLES does not have, and Bevy's compute passes fail to compile; at 3.0 Bevy turns them off.
 wgpu's GL backend has no view formats, so a render target is created in the format it is
 viewed in. A program that asks for 12 uniform blocks is refused its device.
+
+With the launcher's Venus on, a body's Vulkan reaches the user's GPU directly (wgpu takes it
+over GL). A window on it needs Mesa 25.2 or later in the body's image: the host has no dma-buf,
+and older Venus then offers no swapchain, where 25.2 presents through a CPU copy. Debian
+trixie's Mesa is 25.0 — install `mesa-vulkan-drivers` from `trixie-backports` — and Fedora's is
+current. Headless Vulkan works on any.
 
 A body has no speakers and no sound server. Its ALSA default output (the machine's
 `/etc/asound.conf`, which replaces the image's own) opens for any program built on the image's

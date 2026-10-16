@@ -297,11 +297,14 @@ class WatchRule:
     action: str = "rebuild"
 
 
-# What a body's tab says its project should take (`[budget]` in body.toml), each in bytes,
-# None where it has said nothing: its build caches, the rest of the output its git ignores,
-# and the peak working memory of its sandbox. Watched by `disk.py` and `memory.py`.
-BUDGET_KINDS = ("caches", "output", "memory")
+# What a body's tab says its project should take (`[budget]` in body.toml): its build caches,
+# the rest of the output its git ignores and the peak working memory of its sandbox, each in
+# bytes and None where it has said nothing; and its share of the machine's CPU, a percentage
+# that is the whole machine unless said, since only projects run side by side share it.
+# Watched by `disk.py` and `memory.py`.
+BUDGET_KINDS = ("caches", "output", "memory", "cpu")
 _SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*([KMGT]?)i?B?", re.IGNORECASE)
+_SHARE = re.compile(r"(\d+)\s*%?")
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +312,16 @@ class Budget:
     caches: int | None = None
     output: int | None = None
     memory: int | None = None
+    cpu: int = 100
+
+
+def _share(value: Any, path: Path) -> int:
+    """`"50%"` or `50`: a whole percentage of the machine's CPU, 1 to 100."""
+    found = _SHARE.fullmatch(str(value).strip())
+    if found is None or not 1 <= int(found[1]) <= 100:
+        raise DefinitionError(f"{path}: [budget] cpu = {value!r} is not a share of the machine "
+                              "like \"50%\", from 1% to 100%")
+    return int(found[1])
 
 
 def _size(value: Any, path: Path, key: str) -> int:
@@ -325,9 +338,11 @@ def _budget(raw: dict[str, Any], path: Path) -> Budget | None:
     if table is None:
         return None
     if not isinstance(table, dict):
-        raise DefinitionError(f"{path}: 'budget' is a table: [budget] with caches, output, memory")
+        raise DefinitionError(f"{path}: 'budget' is a table: [budget] with caches, output, "
+                              "memory, cpu")
     _reject_unknown(table, set(BUDGET_KINDS), path, "[budget]")
-    return Budget(**{k: _size(v, path, k) for k, v in table.items()})
+    return Budget(**{k: _share(v, path) if k == "cpu" else _size(v, path, k)
+                     for k, v in table.items()})
 
 
 def _principles(raw: dict[str, Any], path: Path) -> str | None:

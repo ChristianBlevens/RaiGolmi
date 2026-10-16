@@ -116,12 +116,14 @@ class DiskUsage:
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryUse:
-    """A running container's memory now: its working memory (anonymous pages — what it has
-    allocated, never the page cache it reads through), and how many of its processes the
-    kernel has killed for want of memory since it started."""
+class CgroupUse:
+    """A running container's use, from its cgroup: its working memory now (anonymous pages —
+    what it has allocated, never the page cache it reads through), how many of its processes
+    the kernel has killed for want of memory since it started, and the CPU time it has used
+    since it started, in microseconds."""
     working: int
     oom_kills: int
+    cpu_usec: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,8 +257,8 @@ class ContainerRuntime(abc.ABC):
         cache hit. The bytes reclaimed."""
 
     @abc.abstractmethod
-    def memory(self, container_id: str) -> MemoryUse:
-        """A running container's memory (`memory.py`)."""
+    def use(self, container_id: str) -> CgroupUse:
+        """A running container's memory and CPU (`memory.py`)."""
 
     @abc.abstractmethod
     def disk_usage(self) -> DiskUsage:

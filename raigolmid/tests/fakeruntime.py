@@ -35,7 +35,7 @@ from raigolmid.runtime.base import (
     ContainerRuntime,
     ContainerSpec,
     DiskUsage,
-    MemoryUse,
+    CgroupUse,
     ExecResult,
     ImageInfo,
     ImageInUse,
@@ -84,7 +84,7 @@ class FakeRuntime(ContainerRuntime):
         self.cache_prunes = 0
         self.disk: DiskUsage | None = None
         # Each container's memory, by name, as a test sets it.
-        self.memory_use: dict[str, MemoryUse] = {}
+        self.cgroup_use: dict[str, CgroupUse] = {}
         self.exec_log: list[tuple[str, list[str]]] = []
         self.spawn_log: list[tuple[str, list[str], dict[str, str]]] = []
         # What a command run in a body answers, keyed on the joined argv. A command a
@@ -601,12 +601,12 @@ class FakeRuntime(ContainerRuntime):
         self.cache_prunes += 1
         return 0
 
-    def memory(self, container_id: str) -> MemoryUse:
+    def use(self, container_id: str) -> CgroupUse:
         """As Docker: only a running container has a cgroup to read."""
         rec = next((r for r in self._containers.values() if r["id"] == container_id), None)
         if rec is None or rec["status"] != "running":
             raise RuntimeError_(f"fake: no running container {container_id}")
-        return self.memory_use.get(rec["name"], MemoryUse(working=0, oom_kills=0))
+        return self.cgroup_use.get(rec["name"], CgroupUse(working=0, oom_kills=0, cpu_usec=0))
 
     def disk_usage(self) -> DiskUsage:
         """`disk` as a test sets it; a test that has not, asks of a runtime that cannot answer."""
