@@ -169,6 +169,8 @@ def register_declare(server) -> None:
                 raise ToolError(f"{path}: no such file")
             if state not in ("current", "updated"):
                 raise ToolError(f"{path}: state is `current` or `updated`, not {state!r}")
+            if state == "updated" and not os.access(path, os.W_OK):
+                raise ToolError(f"{path}: read-only to you, so it cannot have been updated")
         return f"declared {len(documents)}"
 
 
