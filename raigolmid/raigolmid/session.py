@@ -822,11 +822,14 @@ class Session:
 
     def session_start(self, tab_id: str) -> str | None:
         """The `SESSION-START.md` at the root of the tab's `/work`, or None while it has
-        none: the one document its next conversation starts from."""
+        none, or its body is no longer defined and names no working copy: the one document
+        its next conversation starts from."""
         with self._lock:
             tab = self.intent.tabs.get(tab_id)
             if tab is None:
                 raise SessionError(f"no tab {tab_id}")
+            if tab.body is not None and tab.body not in self.catalogue.bodies:
+                return None
             doc = self._place(tab).working_copy / documents.SESSION_START
         return doc.read_text(encoding="utf-8") if doc.is_file() else None
 

@@ -31,7 +31,8 @@ KINDS = {"caches": "build caches", "output": "other git-ignored output",
 
 
 def gb(n: int) -> str:
-    return f"{n / 1024 ** 3:.1f} GB"
+    """A size in GB, or in MB under one, so a budget of a few MB never reads as 0.0 GB."""
+    return f"{n / 1024 ** 3:.1f} GB" if n >= 1024 ** 3 else f"{n / 1024 ** 2:.1f} MB"
 
 
 def unset_message(body: str, held: dict[str, int], toml: str) -> str:

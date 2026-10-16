@@ -46,4 +46,5 @@ def test_a_tab_on_a_body_gone_does_not_fail_another_tabs_turn_end(h):
 
     for tab in (other, orphan):
         h.session.agent_activity(tab, busy=False)
+    assert h.session.session_start(orphan) is None
     h.session.queues.close_all()
