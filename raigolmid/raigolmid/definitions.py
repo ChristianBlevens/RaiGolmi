@@ -30,7 +30,7 @@ def _load_toml(path: Path) -> dict[str, Any]:
             return tomllib.load(fh)
     except FileNotFoundError as exc:
         raise DefinitionError(f"{path}: no such file") from exc
-    except tomllib.TOMLDecodeError as exc:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise DefinitionError(f"{path}: {exc}") from exc
 
 
@@ -68,6 +68,46 @@ def _reject_unknown(d: dict[str, Any], known: set[str], path: Path, where: str) 
         raise DefinitionError(
             f"{path}: unknown key(s) in {where}: {', '.join(sorted(unknown))}"
         )
+
+
+# Each check below reads one value as the type the definition says it is, so a wrong one is
+# refused naming its file and key, and `discover` refuses that one layer and loads the rest.
+_KINDS = {str: "text", bool: "true or false", int: "a number", float: "a number",
+          list: "a list", dict: "a table"}
+
+
+def _kind(value: Any) -> str:
+    return _KINDS.get(type(value), type(value).__name__)
+
+
+def _table(d: dict[str, Any], key: str, path: Path, where: str) -> dict[str, Any] | None:
+    value = d.get(key)
+    if value is not None and not isinstance(value, dict):
+        raise DefinitionError(f"{path}: {where} is {_kind(value)}, not a table")
+    return value
+
+
+def _text(d: dict[str, Any], key: str, path: Path, where: str) -> str | None:
+    value = d.get(key)
+    if value is not None and not isinstance(value, str):
+        raise DefinitionError(f"{path}: {where} is {_kind(value)}, not text")
+    return value
+
+
+def _texts(d: dict[str, Any], key: str, path: Path, where: str) -> tuple[str, ...]:
+    value = d.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise DefinitionError(f"{path}: {where} is not a list of strings")
+    return tuple(value)
+
+
+def _id(raw: dict[str, Any], path: Path) -> str:
+    """Every layer's id is a `PLAIN_ID`: it names directories, containers and hosts."""
+    value = _require(raw, "id", path)
+    if not isinstance(value, str) or not PLAIN_ID.fullmatch(value):
+        raise DefinitionError(f"{path}: id {value!r} is not letters, digits, '_', '.' and "
+                              "'-' starting with a letter or digit")
+    return value
 
 
 def _confined(value: str, root: Path, path: Path, what: str) -> Path:
@@ -140,13 +180,15 @@ def load_face(directory: Path) -> Face:
     _reject_unknown(raw, {"id", "name", "requires_toolbelt_capabilities",
                           "desktop", "editor", *ABOUT_KEYS}, path, "face.toml")
 
+    face_id = _id(raw, path)
     editor = None
-    if (e := raw.get("editor")) is not None:
+    if (e := _table(raw, "editor", path, "[editor]")) is not None:
         _reject_unknown(e, {"package", "config_dir", "command", "open"}, path, "[editor]")
         config_dir = (_confined(e["config_dir"], directory, path, "[editor] config_dir")
-                      if e.get("config_dir") else None)
+                      if _text(e, "config_dir", path, "[editor] config_dir") else None)
+        _require(e, "package", path)
         editor = FaceEditor(
-            package=_require(e, "package", path),
+            package=_text(e, "package", path, "[editor] package"),
             config_dir=config_dir,
             command=_argv(_require(e, "command", path), path, "[editor] command",
                           {"socket", "glue", *(("config",) if config_dir else ())}),
@@ -155,15 +197,16 @@ def load_face(directory: Path) -> Face:
         )
 
     desktop = None
-    if (d := raw.get("desktop")) is not None:
+    if (d := _table(raw, "desktop", path, "[desktop]")) is not None:
         _reject_unknown(d, {"compositor", "config_dir", "apps", "browser"}, path,
                         "[desktop]")
+        _require(d, "compositor", path)
         desktop = FaceDesktop(
-            compositor=_require(d, "compositor", path),
+            compositor=_text(d, "compositor", path, "[desktop] compositor"),
             config_dir=(_confined(d["config_dir"], directory, path, "[desktop] config_dir")
-                        if d.get("config_dir") else None),
-            apps=tuple(d.get("apps", [])),
-            browser=d.get("browser"),
+                        if _text(d, "config_dir", path, "[desktop] config_dir") else None),
+            apps=_texts(d, "apps", path, "[desktop] apps"),
+            browser=_text(d, "browser", path, "[desktop] browser"),
         )
 
     if editor is None and desktop is None:
@@ -187,15 +230,12 @@ def load_face(directory: Path) -> Face:
                 f"{path}: [desktop] declares compositor '{desktop.compositor}' but "
                 f"'{conf.name}' is not in '{desktop.config_dir}'")
 
-    face_id = _require(raw, "id", path)
-    if not isinstance(face_id, str) or not PLAIN_ID.fullmatch(face_id):
-        raise DefinitionError(f"{path}: id {face_id!r} is not letters, digits, '_', '.' and "
-                              "'-' starting with a letter or digit")
     return Face(
         id=face_id,
-        name=raw.get("name", raw["id"]),
+        name=_text(raw, "name", path, "'name'") or face_id,
         directory=directory,
-        requires_toolbelt_capabilities=tuple(raw.get("requires_toolbelt_capabilities", [])),
+        requires_toolbelt_capabilities=_texts(raw, "requires_toolbelt_capabilities", path,
+                                              "'requires_toolbelt_capabilities'"),
         editor=editor,
         desktop=desktop,
         **_about(raw, path),
@@ -234,15 +274,16 @@ def load_toolbelt(directory: Path) -> Toolbelt:
     raw = _load_toml(path)
     _reject_unknown(raw, {"id", "name", "supports", "capabilities", "packages",
                           *ABOUT_KEYS}, path, "toolbelt.toml")
-    packages = tuple(raw.get("packages", []))
+    toolbelt_id = _id(raw, path)
+    packages = _texts(raw, "packages", path, "'packages'")
     if not packages:
         raise DefinitionError(f"{path}: a toolbelt with no packages carries no tools")
     return Toolbelt(
-        id=_require(raw, "id", path),
-        name=raw.get("name", raw["id"]),
+        id=toolbelt_id,
+        name=_text(raw, "name", path, "'name'") or toolbelt_id,
         directory=directory,
-        supports=tuple(raw.get("supports", [])),
-        capabilities=tuple(raw.get("capabilities", [])),
+        supports=_texts(raw, "supports", path, "'supports'"),
+        capabilities=_texts(raw, "capabilities", path, "'capabilities'"),
         packages=packages,
         **_about(raw, path),
     )
@@ -476,37 +517,58 @@ def load_body(directory: Path, private: tuple[Path, ...]) -> Body:
                           *ABOUT_KEYS},
                     path, "body.toml")
 
-    dockerfile_name = raw.get("dockerfile")
-    if dockerfile_name is None and not raw.get("image"):
-        raise DefinitionError(f"{path}: a body needs either 'image' or 'dockerfile'")
+    body_id = _id(raw, path)
+    dockerfile_name = _text(raw, "dockerfile", path, "'dockerfile'")
+    image = _text(raw, "image", path, "'image'")
+    if (dockerfile_name is None) == (not image):
+        raise DefinitionError(f"{path}: a body names one of 'image' and 'dockerfile'")
 
     watch: list[WatchRule] = []
-    if (dev := raw.get("develop")) is not None:
+    if (dev := _table(raw, "develop", path, "[develop]")) is not None:
         _reject_unknown(dev, {"watch"}, path, "[develop]")
-        for entry in dev.get("watch", []):
+        entries = dev.get("watch", [])
+        if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+            raise DefinitionError(f"{path}: [develop] watch is not a list of "
+                                  "[[develop.watch]] tables")
+        for entry in entries:
             _reject_unknown(entry, {"path", "action"}, path, "[[develop.watch]]")
-            watch.append(WatchRule(path=_require(entry, "path", path),
-                                   action=entry.get("action", "rebuild")))
+            _require(entry, "path", path)
+            watch.append(WatchRule(
+                path=_text(entry, "path", path, "[[develop.watch]] path"),
+                action=_text(entry, "action", path, "[[develop.watch]] action") or "rebuild"))
 
     working_copy = None
-    if wc := raw.get("working_copy"):
+    if wc := _text(raw, "working_copy", path, "'working_copy'"):
         working_copy = _working_copy(wc, private, path)
 
+    ports = raw.get("ports", [])
+    if not isinstance(ports, list) or not all(
+            isinstance(p, int) and not isinstance(p, bool) and 1 <= p <= 65535 for p in ports):
+        raise DefinitionError(f"{path}: 'ports' is not a list of port numbers from 1 to 65535")
+    environment = _table(raw, "environment", path, "'environment'") or {}
+    for key, value in environment.items():
+        if not isinstance(value, str):
+            raise DefinitionError(f"{path}: environment {key} is {_kind(value)}, not text")
+    read_only = raw.get("read_only", False)
+    if not isinstance(read_only, bool):
+        raise DefinitionError(f"{path}: 'read_only' is {_kind(read_only)}, not true or false")
+    context = _text(raw, "context", path, "'context'")
+
     body = Body(
-        id=_require(raw, "id", path),
-        name=raw.get("name", raw["id"]),
+        id=body_id,
+        name=_text(raw, "name", path, "'name'") or body_id,
         directory=directory,
-        image=raw.get("image"),
+        image=image,
         dockerfile_name=dockerfile_name,
-        build_target=raw.get("target"),
-        context_name=raw.get("context") if raw.get("context") not in (None, ".") else None,
+        build_target=_text(raw, "target", path, "'target'"),
+        context_name=context if context not in (None, ".") else None,
         working_copy=working_copy,
-        command=tuple(raw["command"]) if raw.get("command") else None,
-        ports=tuple(int(p) for p in raw.get("ports", [])),
-        runtime=raw.get("runtime"),
-        shell=raw.get("shell"),
-        read_only=bool(raw.get("read_only", False)),
-        environment={str(k): str(v) for k, v in raw.get("environment", {}).items()},
+        command=_texts(raw, "command", path, "'command'") or None,
+        ports=tuple(ports),
+        runtime=_text(raw, "runtime", path, "'runtime'"),
+        shell=_text(raw, "shell", path, "'shell'"),
+        read_only=read_only,
+        environment=dict(environment),
         watch=tuple(watch),
         budget=_budget(raw, path),
         principles=_principles(raw, path),
