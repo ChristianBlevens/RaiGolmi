@@ -35,3 +35,15 @@ def test_a_body_gone_with_nothing_on_it_leaves_the_listing(h):
     h.session.rediscover()
     assert not h.events_of("body.undefined")
     assert "webui" not in {b["id"] for b in h.session.list_items("body")["bodies"]}
+
+
+def test_a_tab_on_a_body_gone_does_not_fail_another_tabs_turn_end(h):
+    h.open_sandbox("myapi")
+    orphan = h.tab("myapi")
+    other = h.tab(None)
+    shutil.rmtree(h.search.bodies[0] / "myapi")
+    h.session.rediscover()
+
+    for tab in (other, orphan):
+        h.session.agent_activity(tab, busy=False)
+    h.session.queues.close_all()

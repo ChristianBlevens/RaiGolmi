@@ -1301,6 +1301,11 @@ class Session:
         container = self.runtime.inspect(naming.agent(tab_id))
         if container is None or not container.running:
             return None
+        # A tab whose body is no longer defined has nothing to be remade from; it was told
+        # (`body.undefined`), and asking would fail every tab's turn end with it.
+        body = self.intent.tabs[tab_id].body
+        if body is not None and body not in self.catalogue.bodies:
+            return None
         if (container.labels.get(labels.GIT_PROTECTED)
                 != definition_protection(self._agent_spec(self.intent.tabs[tab_id]))):
             return "protection"
