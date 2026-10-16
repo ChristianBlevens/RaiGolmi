@@ -216,6 +216,9 @@ to another tab, tell the user which one and how to reach it, and do not do it he
   registry's too, listed, downloaded, installed and deleted as the user's catalog does
   (`layers`); no tab uploads one — the plugins and templates, the Claude Code every agent runs (`update_claude_code`, when the user asks or the one
   pinned is failing; one that fails its first session is gone back from for you),
+  this machine's copy for another computer (`export_machine`; the user imports it there with
+  `rai import <file>` in the AI terminal's `raigolmi` shell, after dropping the file on the
+  window into ~/Transfer),
   and the body tabs it manages, which it steers with `direct`. The project work inside a body
   is that body's tab's.
 - **The janitor** repairs the machine's failures; nobody works in it.
@@ -524,7 +527,7 @@ class Agents:
                 f"{home} is left from an earlier {spec.tab.tab_id} whose close could not "
                 f"archive it; it holds {git.remaining(home)}. Move it, then open the tab.")
         home.mkdir(parents=True, exist_ok=not fresh_home)
-        if fresh_home and spec.tab.continues is not None:
+        if fresh_home:
             self._carry_memory(spec.tab)
         self._link_archived(spec.tab)
         self._sign_in(home, login)
@@ -748,14 +751,26 @@ class Agents:
         """Claude Code's memory of `/work` (`-work/memory`) is the project's, not one
         conversation's, so a tab that continues another starts with its predecessor's, taken
         from the archive its close just made. A copy: the archive stays that conversation's
-        record. Nothing to carry when the predecessor left no home or wrote no memory."""
-        records = [r for r in sorted(self.paths.agent_archive.glob("*.json"))
-                   if (kept := load_json(r, "archive record")) is not None
-                   and kept.get("tab") == tab.continues and not kept.get("fresh_restart")]
-        if not records:
-            return
-        memory = records[-1].with_suffix("") / ".claude" / "projects" / "-work" / "memory"
-        if memory.is_dir():
+        record. Nothing to carry when the predecessor left no home or wrote no memory.
+
+        A machine tab with no predecessor, on a machine that has archived no machine tab of
+        its own, starts with the memory of the machine tab an import brought
+        (`machinecopy.py`): the direction the user moved here with. Any other tab the user's
+        close opens afresh has none."""
+        archive = self.paths.agent_archive
+        if tab.continues is None:
+            if not tab.machine or any(_machine_record(kept) and not kept.get("imported")
+                                      for _, kept in _records(archive)):
+                return
+            memory = imported_machine_memory(archive)
+        else:
+            records = [r for r, kept in sorted(_records(archive))
+                       if kept.get("tab") == tab.continues and not kept.get("fresh_restart")
+                       and not kept.get("imported")]
+            if not records:
+                return
+            memory = records[-1].with_suffix("") / ".claude" / "projects" / "-work" / "memory"
+        if memory is not None and memory.is_dir():
             shutil.copytree(memory, self._conversation(tab.tab_id) / "memory")
 
     def _unlink_archived(self, tab_id: str) -> None:
@@ -822,3 +837,31 @@ class Agents:
     def command(tab: TabIntent, resume: bool) -> list[str]:
         return [*CLAUDE, *CHANNEL, "--plugin-dir", PLUGINS,
                 *(("--continue",) if resume else ())]
+
+
+def _records(archive: Path) -> list[tuple[Path, dict[str, Any]]]:
+    """Each archive entry's record with its path; an entry whose record never reached the
+    disk names no kind."""
+    return [(r, kept) for r in archive.glob("*.json")
+            if (kept := load_json(r, "archive record")) is not None]
+
+
+def _machine_record(kept: dict[str, Any]) -> bool:
+    """A machine tab's: a body of none, said (an orphaned home's record names no body)."""
+    return "body" in kept and kept["body"] is None and kept.get("tab") != JANITOR
+
+
+def archived_memory(entry: Path, kept: dict[str, Any]) -> Path:
+    """Where an archive entry holds Claude Code's memory of `/work`: a fresh restart's entry
+    is the `-work` directory itself."""
+    return (entry / "memory" if kept.get("fresh_restart")
+            else entry / ".claude" / "projects" / "-work" / "memory")
+
+
+def imported_machine_memory(archive: Path) -> Path | None:
+    """The newest memory a machine tab left among the entries an import brought, by its
+    record's time as `keep` orders entries; None when an import brought none."""
+    found = [(r.stat().st_mtime, memory) for r, kept in _records(archive)
+             if kept.get("imported") and _machine_record(kept)
+             and (memory := archived_memory(r.with_suffix(""), kept)).is_dir()]
+    return max(found)[1] if found else None

@@ -516,6 +516,14 @@ def build_server(client: ApiClient):
     def update_claude_code(pinned: bool = False) -> dict[str, Any]:
         return call("update_claude_code", pinned=pinned)
 
+    @tool(server, description="Machine tab only, when the user asks to move this machine to "
+                             "another computer: write this machine's own things — preferences, "
+                             "history, lessons, the machine's direction, layers and each body's "
+                             "unpushed work, never a credential — into one file in the user's "
+                             "transfer folder, as `rai export` does. Answers its name and size.")
+    def export_machine() -> dict[str, Any]:
+        return call("export_machine")
+
     @tool(server, description="End this conversation: call it last, once /work/SESSION-START.md "
                              "is ready to start the next one from and ~/thoughts.md is finished "
                              "as this one's record. When this turn ends the tab closes, its "

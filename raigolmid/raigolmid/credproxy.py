@@ -75,6 +75,7 @@ from . import claude_login, credential
 from .events import EventLog
 from .runtime import ContainerRuntime
 from .runtime.base import Mount
+from .git import GITHUB_HELPER, GITHUB_VARIABLE
 
 UPSTREAM = "https://api.anthropic.com"
 INTERCEPTED = urlsplit(UPSTREAM).hostname
@@ -102,10 +103,6 @@ SHAPE = {OAUTH: "sk-ant-oat01-rai-", API_KEY: "sk-ant-api03-rai-", GITHUB: "ghp_
 # Remote Control's session, which authenticates with the worker credential Anthropic hands it
 # (Claude Code 2.1.283's `[remote-bridge] Fetched bridge credentials`) rather than a login.
 SESSION_PATHS = "/v1/code/sessions/"
-# The variable gh reads its token from; git's credential helper hands it on.
-GITHUB_VARIABLE = "GH_TOKEN"
-GIT_HELPER = ('!f() { test "$1" = get && printf "username=x-access-token\\npassword=%s\\n" '
-              '"$GH_TOKEN"; }; f')
 # Hop-by-hop headers (RFC 9110 §7.6.1) and the ones this proxy sets itself.
 HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                  "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length"})
@@ -300,7 +297,7 @@ class Broker:
                 GITHUB_VARIABLE: self.placeholders.issue(owner, GITHUB),
                 "GIT_CONFIG_COUNT": "1",
                 "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
-                "GIT_CONFIG_VALUE_0": GIT_HELPER,
+                "GIT_CONFIG_VALUE_0": GITHUB_HELPER,
                 "HTTPS_PROXY": proxy, "https_proxy": proxy,
                 "NODE_EXTRA_CA_CERTS": CA_TARGET}
 

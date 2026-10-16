@@ -486,6 +486,16 @@ the RaiGolmi folder's `transfer`. Every agent tab has the same folder at `/trans
 drop there, and sends you a file by writing it to `/transfer/out`.
 **Ctrl + Alt + R** redraws the window if it ever looks wrong.
 
+### Moving to another computer
+
+`rai export` writes this machine's own things into one file in `~/Transfer/out`, so it lands
+in the RaiGolmi folder's `transfer`: your preferences, settings, history, the agents' lessons
+and the machine tab's direction, your layers and desktop files, and each project's work its
+GitHub repository doesn't have. It never holds a sign-in. On the other computer, drop the file
+on the window and run `rai import ~/Transfer/<file>` in the `raigolmi` tab's shell: it stops
+RaiGolmi, puts everything in place, clones each project again and starts back up. The machine
+tab can make the file for you too.
+
 ### What `setup.bat` installs
 
 It checks for and offers to install:
@@ -622,6 +632,7 @@ Run it from the `raigolmi` tab's shell.
 | `rai ai restart <tab>` / `rai ai kill <tab>` | Restart a tab's agent, or stop it |
 | `rai claude-update [--pinned]` | Move every agent to the newest Claude Code, or back to the one this release pins. Idle tabs restart on their conversations right away, and working ones as their turns end |
 | `rai diagnose` | Bundle the logs and state into one file you can send |
+| `rai export [--out DIR]` / `rai import <file>` | This machine's own things in one file, and that file put in place on another |
 | `rai credential --set`, `rai registry-token --login`, `rai claude-login --login` | Redo the three first-start steps (`--api-key` with `--set` takes a Console API key instead, billed per token, and Remote Control doesn't work with one) |
 
 ### What it's made of

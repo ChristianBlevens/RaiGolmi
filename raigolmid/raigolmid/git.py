@@ -32,6 +32,11 @@ from pathlib import Path
 # from the directory it is found in.
 SAFE_GIT = ("git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
             "-c", "safe.bareRepository=explicit")
+# The user's GitHub sign-in handed to git: a credential helper answering from GITHUB_VARIABLE,
+# which an agent's environment and `with_github` both set.
+GITHUB_VARIABLE = "GH_TOKEN"
+GITHUB_HELPER = ('!f() { test "$1" = get && printf "username=x-access-token\\npassword=%s\\n" '
+                 '"$GH_TOKEN"; }; f')
 # What `commondir` says in a git directory that has none of its own: itself. Git reads an
 # empty one as an error, and one naming another directory takes that directory's config.
 OWN_COMMONDIR = ".\n"
@@ -149,15 +154,40 @@ def _submodule_git_dirs(modules: Path) -> list[Path]:
     return found
 
 
-def run(args: list[str], repo: Path, check: bool = True,
-        timeout: int = 120, input: str | None = None) -> subprocess.CompletedProcess[str]:
+def run(args: list[str], repo: Path, check: bool = True, timeout: int = 120,
+        input: str | None = None, github: str | None = None) -> subprocess.CompletedProcess[str]:
     """`git <args>` on the repository whose root is `repo`, named outright rather than
-    discovered: a `.git` planted below it, or in a directory above it, is never consulted."""
-    cmd = [*SAFE_GIT, *args]
+    discovered: a `.git` planted below it, or in a directory above it, is never consulted.
+    `github` is a GitHub token the command authenticates with (`with_github`)."""
     env = {**os.environ, "GIT_DIR": str(repo / ".git"), "GIT_WORK_TREE": str(repo),
            "GIT_CEILING_DIRECTORIES": str(repo.parent)}
+    config, env = with_github(github, env)
+    return _git([*config, *args], repo, env, check, timeout, input)
+
+
+def clone(url: str, into: Path, timeout: int = 1800, github: str | None = None) -> None:
+    """`git clone --no-checkout <url> <into>`: the caller checks out the commit it wants.
+    Run from `into`'s parent with no repository named, since there is none yet."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    config, env = with_github(github, {**env, "GIT_TERMINAL_PROMPT": "0"})
+    _git([*config, "clone", "--quiet", "--no-checkout", url, str(into)], into.parent,
+         env, True, timeout, None)
+
+
+def with_github(token: str | None, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+    """The config arguments and environment that answer git's credential request with
+    `token`, every other helper cleared so none is asked first; nothing when there is none."""
+    if token is None:
+        return [], env
+    return (["-c", "credential.helper=", "-c", f"credential.helper={GITHUB_HELPER}"],
+            {**env, GITHUB_VARIABLE: token})
+
+
+def _git(args: list[str], cwd: Path, env: dict[str, str], check: bool, timeout: int,
+         input: str | None) -> subprocess.CompletedProcess[str]:
+    cmd = [*SAFE_GIT, *args]
     try:
-        proc = subprocess.run(cmd, cwd=str(repo), env=env, capture_output=True, text=True,
+        proc = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True,
                               timeout=timeout, input=input)
     except FileNotFoundError as exc:
         raise GitError(f"git is not installed: {exc}") from exc

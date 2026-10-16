@@ -521,6 +521,57 @@ def cmd_history(args) -> int:
     return 0
 
 
+def _search_paths(paths: Paths):
+    """The definitions directories as the daemon's unit names them (`~/raigolmi/<kind>`), or
+    as `RAIGOLMID_*_PATH` overrides them here."""
+    from raigolmid.definitions import SearchPaths
+    return SearchPaths.defaults(Path.home() / "raigolmi", paths.private)
+
+
+def cmd_export(args) -> int:
+    """This machine's own things in one file (`machinecopy.py`). Only reads, so the daemon
+    runs on."""
+    from raigolmid import machinecopy
+    paths = Paths.from_env()
+    out = Path(args.out).expanduser() if args.out else paths.transfer / "out"
+    try:
+        made = machinecopy.export(paths, _search_paths(paths), out)
+    except machinecopy.MachineCopyError as exc:
+        raise SystemExit(f"rai export: {exc}") from exc
+    print(f"{made} ({made.stat().st_size / 1024 ** 2:.1f} MB)")
+    return 0
+
+
+def cmd_import(args) -> int:
+    """Another machine's copy written here, with raigolmid stopped for it and started after,
+    whether or not the import went through."""
+    from raigolmid import machinecopy
+    paths = Paths.from_env()
+    subprocess.run(["systemctl", "--user", "stop", "raigolmid"], check=True)
+    try:
+        done = machinecopy.import_archive(paths, _search_paths(paths), Path(args.archive))
+    except machinecopy.MachineCopyError as exc:
+        raise SystemExit(f"rai import: {exc}") from exc
+    finally:
+        subprocess.run(["systemctl", "--user", "start", "raigolmid"], check=True)
+    if args.json:
+        _print(done)
+    else:
+        print(f"from {done['from']['machine']}, made {done['from']['made']}:")
+        for item, count in done["written"].items():
+            print(f"  {item}: {count} file(s)")
+        if done["machine_memory"]:
+            print(f"  the machine tab's memory: {done['machine_memory']}")
+    failed = {b: r["error"] for b, r in done["bodies"].items() if "error" in r}
+    for body, record in done["bodies"].items():
+        if "error" not in record and not args.json:
+            print(f"  body {body}: {record['restored']}")
+    for body, error in failed.items():
+        print(f"rai import: body {body} was not restored by git; its own files are written "
+              f"beside:\n{error}", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def cmd_events(args) -> int:
     """Readable with `raigolmid` dead, which is the point of the recovery path: the
     agent in the AI terminal has to be able to read what happened and fix the cause, and
@@ -1485,6 +1536,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("instance", metavar="sandbox")
     p.add_argument("-n", type=int, default=50)
     p.set_defaults(fn=cmd_history)
+
+    p = sub.add_parser("export", help="this machine's own things in one file, for another "
+                                      "computer's `rai import`")
+    p.add_argument("--out", help="the folder to write it in; default ~/Transfer/out, which "
+                                 "the launcher empties to the RaiGolmi folder's transfer")
+    p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser("import", help="another machine's `rai export` written here; stops "
+                                      "and starts raigolmid")
+    p.add_argument("archive")
+    p.set_defaults(fn=cmd_import)
 
     p = sub.add_parser("events")
     p.add_argument("-n", type=int, default=50)

@@ -72,7 +72,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import api, documents, history, limits
+from . import api, documents, history, limits, machinecopy
 from .channel import DIRECTED, Channels, HandedOn, Message
 from .events import Event, EventLog
 from .faults import Faults, answer_message, stranded_message
@@ -961,11 +961,19 @@ def methods(session: "Session", questions: Questions, channels: Channels,
         ("report_fault", report_fault),
         # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
         ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)),
+        ("export_machine", lambda: export_machine(session)),
         # What the tabs it manages declared against their principles (`principles.py`).
         ("principles", lambda body, rows=60: session.principles.ledger(body, rows)),
         ("principles_checked", lambda body, tabs, drift, direction="", deep=False:
             session.principles.checked(body, tabs, drift, direction, deep)))
     } | {"document_save": document_save, "end_conversation": end_conversation}
+
+
+def export_machine(session: "Session") -> dict[str, Any]:
+    """`rai export`'s, into the transfer folder's `out`, which the launcher empties to the
+    user's Windows transfer folder."""
+    made = machinecopy.export(session.paths, session.search, session.paths.transfer / "out")
+    return {"file": made.name, "bytes": made.stat().st_size}
 
 
 def running(session: "Session") -> bool:
