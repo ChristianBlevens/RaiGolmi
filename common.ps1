@@ -119,7 +119,8 @@ function Apply-Upgrade([string]$image, [string]$archive) {
     do {
         Start-Sleep -Seconds 5
         if (-not (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue)) {
-            Fail "RaiGolmi closed before the machine answered. Run this again."
+            $log = Join-Path (Split-Path $exe) 'qemu.log'
+            Fail "RaiGolmi closed before the machine answered; why is at the end of $log."
         }
         $answer = & $ssh -F $config raigolmi true 2>&1
     } while ($LASTEXITCODE -ne 0 -and (Get-Date) -lt $deadline)

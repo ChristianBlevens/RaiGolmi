@@ -83,14 +83,20 @@ static class Launcher
             {
                 machine = Machine.Prepare(recoveries, door || recoveries > 0);
             }
-            catch (LauncherError e)
+            catch (Exception e)
             {
+                // Anything else from Prepare is a defect, said with its type and stack: before
+                // the window no handler would otherwise record it, and the process ends unseen.
+                string why = e is LauncherError ? e.Message : "starting the machine failed: " + e;
                 // A box would hold the mutex the door needs until somebody came: a successor and
                 // a launch with the keeper on (the sign-in one among them) may have nobody there.
                 if (door || recoveries > 0 || KeeperSetting())
-                    DoorFailed(e.Message, tookStart, recoveries);
+                    DoorFailed(why, tookStart, recoveries);
                 else
-                    Fail(e.Message);
+                {
+                    Log("could not start: " + why);
+                    Fail(why);
+                }
                 return 1;
             }
             if (machine == null)
@@ -2679,16 +2685,26 @@ class Ssh
     // SYSTEM and Administrators can reach; the state folder sits in the project folder, whose
     // drive may give every signed-in user access, and a copied folder brings its drive's
     // inheritance. So each start sets the file's ACL to exactly those three, inheriting nothing.
+    // Only the DACL is written: its owner may always write it, while setting the owner needs
+    // WRITE_OWNER, which ssh-keygen's own ACL on the key (the user at Modify) does not grant.
     static void OwnerOnly(string path)
     {
         var acl = new FileSecurity();
         acl.SetAccessRuleProtection(true, false);
-        SecurityIdentifier user = WindowsIdentity.GetCurrent().User;
-        acl.SetOwner(user);
-        foreach (var who in new[] { user, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+        foreach (var who in new[] { WindowsIdentity.GetCurrent().User,
+                                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
                                     new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null) })
             acl.AddAccessRule(new FileSystemAccessRule(who, FileSystemRights.FullControl, AccessControlType.Allow));
-        new FileInfo(path).SetAccessControl(acl);
+        try
+        {
+            new FileInfo(path).SetAccessControl(acl);
+        }
+        catch (UnauthorizedAccessException e)
+        {
+            throw new LauncherError("Windows refused to limit " + path + " to this user, SYSTEM and " +
+                                    "Administrators (" + e.Message + "), so OpenSSH would refuse it. " +
+                                    "It belongs to someone else: delete it and start RaiGolmi again.");
+        }
     }
 
     // ssh_config reads a backslash as an escape and expands % tokens in these paths.
