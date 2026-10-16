@@ -155,11 +155,11 @@ class Jobs:
             path = self.session.paths.job_ledger(job["body"])
             path.parent.mkdir(parents=True, exist_ok=True)
             append_lines(path, [json.dumps(row)])
-        self.events.emit("job.ended", tab=tab_id, name=name, ended=ended, exit_code=exit_code,
-                         withdraws=f"job {name}")
+        self.events.emit("job.ended", tab=tab_id, instance=job["instance"], name=name,
+                         ended=ended, exit_code=exit_code, withdraws=f"job {name}")
         if row["under"]:
-            self.events.emit("job.under", tab=tab_id, name=name, expect=job["expect"],
-                             seconds=seconds)
+            self.events.emit("job.under", tab=tab_id, instance=job["instance"], name=name,
+                             expect=job["expect"], seconds=seconds)
 
     # --- starting ----------------------------------------------------------------------
 
@@ -333,8 +333,9 @@ class Jobs:
                         "the defences you gave — before you start it again.")
         else:
             message += "It is paused, its work kept: " + self._overrun_said(job)["to_do"] + "."
-        self.events.emit("job.overrun", tab=tab_id, name=name, count=job["overruns"],
-                         seconds=seconds, predicted=predicted, reading=reading, struck=struck,
+        self.events.emit("job.overrun", tab=tab_id, instance=job["instance"], name=name,
+                         count=job["overruns"], seconds=seconds, predicted=predicted,
+                         reading=reading, struck=struck,
                          deliver={"content": message,
                                   "meta": {"from": "daemon", "standing": f"job {name}"}})
 
@@ -421,8 +422,8 @@ class Jobs:
             mine = dict(self._jobs.get(event.tab, {}))
         for name, job in mine.items():
             if job["overrun"] is not None:
-                self.events.emit("job.undefended", tab=event.tab, name=name,
-                                 count=job["overrun"]["count"])
+                self.events.emit("job.undefended", tab=event.tab, instance=job["instance"],
+                                 name=name, count=job["overrun"]["count"])
 
     def run(self, stop: threading.Event) -> None:
         sub = self.events.subscribe()
@@ -476,8 +477,8 @@ class Jobs:
             job["overrun"] = None
             job["until"] = time.time() + expect_more
             self._save()
-        self.events.emit("job.defended", tab=tab_id, name=name, reason=reason,
-                         observed=observed, expect_more=expect_more,
+        self.events.emit("job.defended", tab=tab_id, instance=job["instance"], name=name,
+                         reason=reason, observed=observed, expect_more=expect_more,
                          reading=defence["reading"], withdraws=f"job {name}")
         return {"name": name, "state": "running", "timer_until": round(job["until"]),
                 "daemon_reading": defence["reading"]}
@@ -496,8 +497,8 @@ class Jobs:
                 raise JobError(f"job {name!r} could not be stopped: {exc}") from exc
             job["stopped"], job["overrun"] = reason, None
             self._save()
-        self.events.emit("job.stopped", tab=tab_id, name=name, reason=reason,
-                         withdraws=f"job {name}")
+        self.events.emit("job.stopped", tab=tab_id, instance=job["instance"], name=name,
+                         reason=reason, withdraws=f"job {name}")
         return {"name": name, "state": "stopped"}
 
     def wait(self, tab_id: str, name: str, timeout: float = WAIT_MOST) -> dict[str, Any]:

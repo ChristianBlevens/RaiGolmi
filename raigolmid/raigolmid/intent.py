@@ -185,6 +185,11 @@ class Intent:
         self.next_tab += 1
         return tab_id
 
+    def issued(self, tab_id: str) -> bool:
+        """Whether *tab_id* names a tab this machine opened, closed since or not."""
+        number = re.fullmatch(r"tab-(\d+)", tab_id)
+        return number is not None and int(number.group(1)) < self.next_tab
+
     # --- persistence ----------------------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -107,6 +107,9 @@ def test_a_job_defended_or_ended_withdraws_its_waiting_overrun_notice(h):
     h.launchers.end_job(instance, 1, 0)
     h.session.jobs.list(tab)
     assert not overruns()
+    # Said on the sandbox, so its `history` has how each of its jobs went.
+    assert {"job.started", "job.overrun", "job.defended", "job.ended"} <= {
+        e.type for e in h.events.history(instance)}
 
 
 def test_a_stopped_job_has_ended_when_stop_answers(h):

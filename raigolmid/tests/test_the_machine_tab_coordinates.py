@@ -369,6 +369,8 @@ def test_a_direction_follows_every_handover_to_the_open_tab(h):
     second = m.tab(MACHINE)["restart_fresh"](tab=first, documents_ready=True)["tab"]
     directed = m.tab(MACHINE)["direct"](tab=BODY, content="run the tests")
     assert (directed["tab"], directed["ended"]) == (second, BODY)
+    with pytest.raises(SessionError, match="no tab 'tab-99999' has opened"):
+        m.tab(MACHINE)["direct"](tab="tab-99999", content="run the tests")
 
 
 def test_a_tab_stops_where_the_user_said_and_is_held_until_they_answer(h):

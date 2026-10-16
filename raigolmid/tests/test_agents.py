@@ -567,6 +567,28 @@ def test_the_index_routes_to_the_documents_that_exist_and_every_layer(h, monkeyp
     assert list(listed) == ["toolbelts"]
 
 
+def test_a_tool_refuses_an_argument_outside_what_it_accepts_by_name(h):
+    """Before the daemon is asked: its own answer to one would be Python's."""
+    import asyncio
+    from mcp.server.mcpserver.exceptions import ToolError
+    from raigolmid.mcp_server import build_server
+    from raigolmid.scopes import build_tab_methods
+
+    tools = build_server(h.served(build_tab_methods(
+        h.session, Questions(h.events, h.paths), Channels(h.session, h.events),
+        h.tab("myapi"))))
+    for name, args, arg, said in (
+            ("history", {"n": -1}, "n", "greater than or equal to 1"),
+            ("logs", {"tail": 0}, "tail", "greater than or equal to 1"),
+            ("search_packages", {"query": " "}, "query", "at least 1 character"),
+            ("search_packages", {"query": "rg", "limit": -1}, "limit",
+             "greater than or equal to 1"),
+            ("list_items", {"kind": "BODY"}, "kind", "'face', 'toolbelt' or 'body'")):
+        with pytest.raises(ToolError, match=said) as refused:
+            asyncio.run(tools.call_tool(name, args))
+        assert f"\n{arg}\n" in str(refused.value), name
+
+
 class _Refusing:
     """The daemon as the agent's tools meet it: one refusal, in the daemon's words."""
 

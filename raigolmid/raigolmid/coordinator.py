@@ -1190,6 +1190,9 @@ class Verbs:
         tabs = self.session.intent.tabs
         if tab in tabs:
             return tab
+        if not self.session.intent.issued(tab):
+            raise SessionError(f"no tab {tab!r} has opened on this machine; `managed` lists "
+                               "the tabs you manage")
         continued = {e.data["continues"]: e.tab for e in self.events.read()
                      if e.type == "tab.opened" and e.data.get("continues")}
         continued |= {t.continues: t.tab_id for t in tabs.values() if t.continues}

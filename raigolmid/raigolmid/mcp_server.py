@@ -24,10 +24,18 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import Field, StringConstraints
 
 from .client import ApiClient, ApiError
 from .paths import Paths
+
+# What an argument accepts, in its tool's schema: the model reads it there, and the MCP server
+# refuses a call outside it, naming the argument and what it takes, before the daemon is asked.
+Count = Annotated[int, Field(ge=1)]
+Words = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Kind = Literal["face", "toolbelt", "body"]
 
 INSTRUCTIONS = """\
 You are working inside a RaiGolmi agent container, scoped to one sandbox. `index` is
@@ -210,7 +218,7 @@ def build_server(client: ApiClient):
                              "them: whether each is selected and selectable and why not, a "
                              "toolbelt's capabilities, and the sandboxes running on each body. "
                              "`kind` is face, toolbelt or body; omitted, all three.")
-    def list_items(kind: str | None = None) -> dict[str, Any]:
+    def list_items(kind: Kind | None = None) -> dict[str, Any]:
         return call("list_items", kind=kind)
 
     @tool(server, description="Run a command in your sandbox's toolbelt container, where the "
@@ -281,21 +289,21 @@ def build_server(client: ApiClient):
         return call("rebuild_body")
 
     @tool(server, description="Recent lifecycle events for your sandbox: builds and their "
-                             "outcomes, view restarts and their timings, crashes, and "
-                             "degraded reasons. Read this before guessing why something "
+                             "outcomes, its jobs and how each ended, view restarts and their "
+                             "timings, crashes, and degraded reasons. Read this before guessing why something "
                              "failed.")
-    def history(n: int = 50) -> list[dict[str, Any]]:
+    def history(n: Count = 50) -> list[dict[str, Any]]:
         return call("history", n=n)
 
     @tool(server, description="Container logs for your sandbox's body and toolbelt container.")
-    def logs(tail: int = 100) -> dict[str, Any]:
+    def logs(tail: Count = 100) -> dict[str, Any]:
         return call("logs", tail=tail)
 
     @tool(server, description="Find package names in the nixpkgs-unstable index. Use this "
                              "before putting a name in a toolbelt's package list. A hint: "
                              "Nixery builds from its own pinned snapshot, and a name it "
                              "cannot build fails the pull with its answer naming it.")
-    def search_packages(query: str, limit: int = 20) -> list[str]:
+    def search_packages(query: Words, limit: Count = 20) -> list[str]:
         return client.call("search_packages", query=query, limit=limit)
 
     @tool(server, description="Start your sandbox's body again from the image it runs, "
@@ -325,7 +333,7 @@ def build_server(client: ApiClient):
     @tool(server, description="Open a file under /work at a line in the editor on the user's "
                              "screen, to show them something. Only while your sandbox is the "
                              "one on their screen.")
-    def show_file(path: str, line: int = 1) -> dict[str, Any]:
+    def show_file(path: str, line: Count = 1) -> dict[str, Any]:
         return client.call("show_file", path=path, line=line)
 
     @tool(server, description="Open a URL in the browser of the face on the user's screen. A "
@@ -423,7 +431,7 @@ def build_server(client: ApiClient):
                              "(`lines`) and its last `turns` turns, the last one whole; and "
                              "the directions it has not yet been handed (`direct`), so none "
                              "is sent twice.")
-    def managed_tab(tab: str, turns: int = 20, lines: int = 60,
+    def managed_tab(tab: str, turns: Count = 20, lines: Count = 60,
                     session_start: bool = True) -> dict[str, Any]:
         return call("managed_tab", tab=tab, turns=turns, lines=lines,
                     session_start=session_start)
@@ -549,7 +557,7 @@ def build_server(client: ApiClient):
                              "your last check: each commit its tabs declared, work set aside, "
                              "and the directions you sent its tabs. Read when the daemon asks "
                              "for a principles check or audit.")
-    def principles(body: str, rows: int = 60) -> dict[str, Any]:
+    def principles(body: str, rows: Count = 60) -> dict[str, Any]:
         return call("principles", body=body, rows=rows)
 
     @tool(server, description="Machine tab only: say what a principles check found for a body: "
@@ -665,18 +673,18 @@ def build_machine_server(client: ApiClient):
 
     @tool(server, description="The machine's recent events, newest last: every failure, crash, "
                              "reconcile and start, with its reason.")
-    def events(n: int = 100) -> list[dict[str, Any]]:
+    def events(n: Count = 100) -> list[dict[str, Any]]:
         return call("events", n=n)
 
     @tool(server, description="Output of any container raigolmid manages (agent, body, view, "
                              "face, selector, control), with whether it runs and its exit "
                              "code. Names are in `status` and the events.")
-    def container_logs(container: str, tail: int = 200) -> dict[str, Any]:
+    def container_logs(container: str, tail: Count = 200) -> dict[str, Any]:
         return call("container_logs", container=container, tail=tail)
 
     @tool(server, description="raigolmid's own journal: what the daemon logged, including the "
                              "tracebacks events point at.")
-    def journal(n: int = 200) -> dict[str, Any]:
+    def journal(n: Count = 200) -> dict[str, Any]:
         return call("journal", n=n)
 
     @tool(server, description="The evidence each container that exited on its own left: "
@@ -701,12 +709,12 @@ def build_machine_server(client: ApiClient):
     @tool(server, description="The faces, toolbelts and bodies as the user's selector shows "
                              "them, each with whether it can be used with the rest. `kind` is "
                              "face, toolbelt or body; omitted, all three.")
-    def list_items(kind: str | None = None) -> dict[str, Any]:
+    def list_items(kind: Kind | None = None) -> dict[str, Any]:
         return call("list_items", kind=kind)
 
     @tool(server, description="Find package names in the nixpkgs-unstable index, before "
                              "putting a name in a toolbelt's package list in a repair.")
-    def search_packages(query: str, limit: int = 20) -> list[str]:
+    def search_packages(query: Words, limit: Count = 20) -> list[str]:
         return call("search_packages", query=query, limit=limit)
 
     @tool(server, description="Close a tab failing in a way no `restart_agent`, `unstick` or "

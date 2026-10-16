@@ -161,6 +161,8 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "body.base_local": lambda e: (f"body {e.data['body']} used the machine's copy of "
                                   f"{e.data['image']}: the registry did not answer "
                                   f"({e.data['reason']})"),
+    "body.undefined": lambda e: (f"its body {e.data['body']} is no longer defined: its "
+                                 "body.toml is gone; the tab stays open until you close it"),
     "clipboard.unbridged": lambda e: (f"face {e.data['face']}'s clipboard is its own again, not "
                                       f"the machine's: {e.data['reason']}"),
     "clipboard.copy_failed": lambda e: (f"a copy did not reach the {e.data['to']} clipboard: "
