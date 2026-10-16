@@ -39,11 +39,8 @@ the only thing anyone should need to do is turn the PC back on if it goes off.
      please turn it on, or restart it (Start, Power, Restart)*, Period 5 minutes, Grace 1 hour
      (the window's own restarts take under 10 minutes; a Windows-update reboot and sign-in far
      longer). Under Integrations add ntfy with your topic. Paste the check's ping URL here.
-9. **Settings → Open the keeper's terminal**, and in it:
-   - `python3 /work/RaiGolmi/keeper/keeper.py sign-in`: it runs `claude setup-token`, which
-     opens a sign-in link and then shows a token valid for a year; copy the token, paste it
-     where the helper asks, and press Enter
-   - `gh auth login` (GitHub.com, HTTPS, log in with a browser)
+9. **Settings → Open the keeper's terminal**, and in it `gh auth login` (GitHub.com, HTTPS,
+   log in with a browser). Claude needs no sign-in there: the keeper uses the machine's own.
 10. Close the RaiGolmi window and open it again, so the machine lets the keeper in.
 11. Check, a few minutes later: `keeper\outbox\keeper.json` says `healthy`, and
     `keeper\outbox\keeper.log` shows its checks passing.

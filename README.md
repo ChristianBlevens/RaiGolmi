@@ -470,11 +470,10 @@ window to start, restart or upgrade it. A scheduled task, *RaiGolmi keeper door*
 five minutes while you are signed in and reopens RaiGolmi if it should be running and is not.
 With the keeper on, failures nobody is there to see are not shown in boxes, and the keeper, not
 the window, sends the phone alert, only when it could not fix the machine. Once, after turning
-it on, choose *Settings → Open the keeper's terminal* and sign it in:
-`python3 /work/RaiGolmi/keeper/keeper.py sign-in` (it runs `claude setup-token` and stores the
-year-long token it shows, which you paste), then `gh auth login`. Both sign-ins live on the
-`raigolmi-keeper-home` volume and survive a rebuild; the keeper's key is let into the machine
-from its next start. What it did is in `keeper\outbox\` (`keeper.json`, its log `keeper.log`, and
+it on, choose *Settings → Open the keeper's terminal* and run `gh auth login`; it lives on the
+`raigolmi-keeper-home` volume and survives a rebuild. Claude needs no second sign-in: the keeper
+copies the machine's own agent credential each time it looks, and keeps the last copy for when
+the machine does not answer. The keeper's key is let into the machine from its next start. What it did is in `keeper\outbox\` (`keeper.json`, its log `keeper.log`, and
 each repair's log and notes in `sessions\`); it can change a setting in `state\settings.ini` and
 restart the window to apply it. A repair is reopened in its terminal with the `resume` command
 `keeper.json` records for it.

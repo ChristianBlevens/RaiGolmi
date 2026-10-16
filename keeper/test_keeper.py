@@ -22,7 +22,7 @@ class World:
     def __init__(self, tmp: Path) -> None:
         self.paths = k.Paths(work=tmp / "RaiGolmi", launcher_home=tmp / "launcher",
                              key=tmp / "root" / "keeper_ed25519",
-                             token=tmp / "root" / ".keeper-claude-token")
+                             credential=tmp / "root" / ".keeper-credential")
         self.paths.launcher_home.mkdir(parents=True)
         (self.paths.launcher_home / "settings.ini").write_text("memory=8\nntfy-topic=raigolmi-test\n")
         self.now = T0
@@ -371,10 +371,11 @@ def test_staleness_is_by_the_keepers_clock_not_the_launchers(world: World) -> No
 
 
 def test_claude_ready_answers_rather_than_raises(world: World, monkeypatch) -> None:
-    assert k.claude_ready(world.paths, None)[0] == "signed_out", "no token file"
-    world.paths.token.parent.mkdir(parents=True, exist_ok=True)
-    world.paths.token.write_text("sk-token\n")
-    assert k.claude_ready(world.paths, k.fingerprint("sk-token")) == ("signed_out", "Claude refused its sign-in")
+    assert k.claude_ready(world.paths, None)[0] == "signed_out", "no credential copied"
+    world.paths.credential.parent.mkdir(parents=True, exist_ok=True)
+    world.paths.credential.write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-token\n")
+    assert k.claude_ready(world.paths, k.fingerprint("sk-token")) == (
+        "signed_out", "Claude refused the machine's agent credential")
 
     def hangs(*args, **kwargs):
         raise k.subprocess.TimeoutExpired(args[0], k.CLAUDE_STATUS_SECONDS)
@@ -453,10 +454,16 @@ def test_the_line_outs_word_stands(world: World) -> None:
     assert world.pushes == [], "nothing was said, so no working again"
 
 
-def test_a_token_pasted_twice_is_refused_and_not_stored(world: World, monkeypatch) -> None:
-    token = "sk-ant-oat01-abc"
-    monkeypatch.setattr(k.subprocess, "run", lambda *a, **kw: None)
-    monkeypatch.setattr(k.getpass, "getpass", lambda prompt: token + token)
-    with pytest.raises(SystemExit, match="not one token"):
-        k.sign_in(world.paths)
-    assert not world.paths.token.exists()
+
+def test_the_machines_credential_is_copied_and_a_bad_read_keeps_the_last(world: World, monkeypatch) -> None:
+    answers = iter([(0, "CLAUDE_CODE_OAUTH_TOKEN=sk-one\n", ""), (1, "", "No such file"),
+                    (0, "CLAUDE_CODE_OAUTH_TOKEN=sk-onesk-one\nANTHROPIC_API_KEY=x\n", ""),
+                    (0, "ANTHROPIC_API_KEY=sk-two\n", "")])
+    monkeypatch.setattr(k, "vm_run", lambda client, command, timeout: next(answers))
+    world.paths.credential.parent.mkdir(parents=True, exist_ok=True)
+    for expected in ("sk-one", "sk-one", "sk-one", "sk-two"):
+        k.copy_credential(world.paths, None)
+        env, token = k.claude_env(world.paths)
+        assert token == k.fingerprint(expected)
+    assert env["ANTHROPIC_API_KEY"] == "sk-two" and "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    assert world.paths.credential.stat().st_mode & 0o777 == 0o600

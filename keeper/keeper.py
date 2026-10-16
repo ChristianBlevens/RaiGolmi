@@ -44,8 +44,9 @@ system prompt) with the evidence it gathered. The rules:
   those before, and all incidents together at most `SESSIONS_PER_DAY` in any 24 hours. A
   session that never had an answer from Claude (an API error, the network) does not count; one
   that the API refused for its sign-in stops sessions until the sign-in changes;
-- Claude Code signs in with the long-lived token `claude setup-token` makes (`python3 keeper.py
-  sign-in` stores it in `Paths.token`), handed to each session as `CLAUDE_CODE_OAUTH_TOKEN`;
+- Claude Code runs on the machine's own agent credential (`MACHINE_CREDENTIAL`), copied to
+  `Paths.credential` at each probe that reaches the VM, so it follows the owner's sign-in there
+  and outlasts a VM that does not answer; the keeper has no sign-in of its own;
 - the person near the machine gets an ntfy alert when sessions cannot fix it (spent, the day's
   spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
   alert title at most once in `REALERT_SECONDS` across incidents, and "working again" once the
@@ -58,13 +59,11 @@ the last day, and the alerts. It is also the keeper's memory across a restart of
 The loop's log goes to keeper/outbox/keeper.log as well as stderr.
 
     python3 keeper.py                         the loop (the container's entrypoint)
-    python3 keeper.py sign-in                 `claude setup-token`, and the token it prints stored
     python3 keeper.py vm '<command>' [secs]   one command on the VM, with the keeper's key
     python3 keeper.py request <start|restart|upgrade> '<why>'   a request to the launcher
 """
 from __future__ import annotations
 
-import getpass
 import hashlib
 import http.client
 import json
@@ -131,11 +130,6 @@ UNREACHED_SECONDS = DAY
 # raigolmid's line out sends each cause at most once a day, so a cause that holds was sent
 # within the day before an incident it caused.
 LINE_OUT_COVERS_SECONDS = DAY
-# `claude setup-token` asks for a token valid for 31536000 s, a year, and says so as it prints it.
-TOKEN_SECONDS = 365 * DAY
-# Every token Claude Code makes starts with this, once; a paste holding it twice is two pastes,
-# which the hidden prompt cannot show.
-TOKEN_PREFIX = "sk-ant-"
 # The longest `claude auth status` takes when Claude Code works at all.
 CLAUDE_STATUS_SECONDS = 60
 # A session may wait on a release build and the upgrade it is installed by; one running past
@@ -153,6 +147,10 @@ TRANSITIONAL = {"starting", "restarting", "upgrading"}
 REQUESTS = {"start", "restart", "upgrade"}
 
 VM_HOST, VM_USER = "host.docker.internal", "agent"
+# The machine's agent credential, as raigolmid's `Paths.agent_credentials` places it and
+# `credential.py` writes it: one `KEY=value` line, KEY one of CREDENTIAL_KEYS.
+MACHINE_CREDENTIAL = "${XDG_CONFIG_HOME:-$HOME/.config}/raigolmi/agent-credentials"
+CREDENTIAL_KEYS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 NTFY = "https://ntfy.sh/"
 
 
@@ -162,8 +160,8 @@ class Paths:
     # The launcher's state, <P>\state (compose.yml): its settings, keys, disk record, UEFI vars.
     launcher_home: Path = Path("/launcher")
     key: Path = Path("/root/.ssh/keeper_ed25519")
-    # Claude Code's sign-in: the token `claude setup-token` printed, on the persistent home.
-    token: Path = Path("/root/.keeper-claude-token")
+    # The machine's agent credential as last copied (MACHINE_CREDENTIAL), on the persistent home.
+    credential: Path = Path("/root/.keeper-credential")
 
     @property
     def keeper(self) -> Path:
@@ -365,6 +363,47 @@ print(json.dumps({
 '''
 
 
+def parse_credential(text: str) -> tuple[str, str]:
+    """(KEY, value) of a credential file's one line, or ValueError saying what is wrong."""
+    lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if len(lines) != 1:
+        raise ValueError(f"the machine's credential has {len(lines)} lines, not one")
+    key, sep, value = lines[0].partition("=")
+    key, value = key.strip(), value.strip()
+    if not sep or key not in CREDENTIAL_KEYS or not value:
+        raise ValueError(f"the machine's credential is not KEY=value with KEY one of {', '.join(CREDENTIAL_KEYS)}")
+    return key, value
+
+
+def copy_credential(paths: Paths, client) -> None:
+    """The machine's agent credential into `Paths.credential` (0600) when it differs. A machine
+    with none, or one that cannot be read, leaves the last copy, logged: the copy is what a
+    session runs on while the VM does not answer."""
+    import paramiko
+    try:
+        status, out, err = vm_run(client, f"cat {MACHINE_CREDENTIAL}", SSH_SECONDS)
+    except (OSError, paramiko.SSHException) as exc:
+        logger.warning("the machine's credential was not read: %s: %s", type(exc).__name__, exc)
+        return
+    if status != 0:
+        logger.warning("the machine's credential was not read (exit %d): %s", status, err.strip()[-300:])
+        return
+    try:
+        key, value = parse_credential(out)
+    except ValueError as exc:
+        logger.warning("%s; the last copy stays", exc)
+        return
+    line = f"{key}={value}\n"
+    if paths.credential.exists() and paths.credential.read_text(encoding="utf-8") == line:
+        return
+    partial = paths.credential.with_name(f".{paths.credential.name}.partial")
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(line)
+    os.replace(partial, paths.credential)
+    logger.info("copied the machine's agent credential (%s, %s)", key, fingerprint(value))
+
+
 def probe_vm(paths: Paths) -> dict[str, Any]:
     """The guest as the loop judges it. ssh failing is an answer (`reachable` False), not an
     error: it is the commonest thing the keeper is here to see."""
@@ -376,7 +415,10 @@ def probe_vm(paths: Paths) -> dict[str, Any]:
     try:
         status, out, err = vm_run(client, "python3 -", SSH_SECONDS, stdin=PROBE_SCRIPT)
     except (OSError, paramiko.SSHException) as exc:
+        client.close()
         return {"reachable": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        copy_credential(paths, client)
     finally:
         client.close()
     if status != 0:
@@ -414,23 +456,24 @@ def fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
-def claude_env(paths: Paths) -> dict[str, str]:
-    """The environment Claude Code runs in: the stored token is its sign-in."""
-    return {**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": paths.token.read_text(encoding="utf-8").strip()}
+def claude_env(paths: Paths) -> tuple[dict[str, str], str]:
+    """The environment Claude Code runs in, with the copied credential as its sign-in, and that
+    credential's fingerprint."""
+    key, value = parse_credential(paths.credential.read_text(encoding="utf-8"))
+    env = {k: v for k, v in os.environ.items() if k not in CREDENTIAL_KEYS}
+    return {**env, key: value}, fingerprint(value)
 
 
 def claude_ready(paths: Paths, refused: str | None) -> tuple[str, str]:
-    """("ready", ""), ("signed_out", why) when the sign-in is missing, a year old or the token
+    """("ready", ""), ("signed_out", why) when the sign-in is missing or the token
     the API refused (`refused`, its fingerprint), or ("cannot_run", why) when Claude Code does
     not answer `claude auth status`. Whether the API takes a token is learnt from a session,
     where a refusal costs no plan usage; asking it here would spend some each check."""
-    if not paths.token.exists():
-        return "signed_out", f"it has no sign-in ({paths.token} is missing)"
-    env = claude_env(paths)
-    if fingerprint(env["CLAUDE_CODE_OAUTH_TOKEN"]) == refused:
-        return "signed_out", "Claude refused its sign-in"
-    if time.time() - paths.token.stat().st_mtime > TOKEN_SECONDS:
-        return "signed_out", "its sign-in is more than a year old"
+    if not paths.credential.exists():
+        return "signed_out", "it has not yet copied the machine's agent credential"
+    env, token = claude_env(paths)
+    if token == refused:
+        return "signed_out", "Claude refused the machine's agent credential"
     try:
         done = subprocess.run(["claude", "auth", "status", "--json"], capture_output=True, text=True,
                               env=env, timeout=CLAUDE_STATUS_SECONDS)
@@ -486,8 +529,7 @@ def run_claude(paths: Paths, prompt: str, session_id: str, log: Path) -> dict[st
     command = ["claude", "-p", "--dangerously-skip-permissions", "--verbose",
                "--output-format", "stream-json", "--session-id", session_id,
                "--append-system-prompt", paths.system_prompt.read_text(encoding="utf-8"), prompt]
-    env = claude_env(paths)
-    token = fingerprint(env["CLAUDE_CODE_OAUTH_TOKEN"])
+    env, token = claude_env(paths)
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w", encoding="utf-8") as fh:
         process = subprocess.Popen(command, cwd=paths.work, stdout=fh, stderr=subprocess.STDOUT,
@@ -505,29 +547,6 @@ def run_claude(paths: Paths, prompt: str, session_id: str, log: Path) -> dict[st
                                "and was ended", "reached": True, "signed_out": False, "unreached": None,
                     "token": token}
     return {**read_outcome(log), "token": token}
-
-
-def sign_in(paths: Paths) -> int:
-    """`claude setup-token` in this terminal, then the token it printed, pasted, stored in
-    `Paths.token` (0600). setup-token shows the token on its own screen and nowhere else, so
-    the owner copies it from there."""
-    subprocess.run(["claude", "setup-token"], check=True)
-    token = "".join(getpass.getpass("Paste the token it printed (it is not shown), then Enter: ").split())
-    if not token:
-        raise SystemExit("nothing was pasted; run `python3 /work/RaiGolmi/keeper/keeper.py sign-in` again")
-    if not token.startswith(TOKEN_PREFIX) or token.count(TOKEN_PREFIX) != 1:
-        raise SystemExit(f"what was pasted is not one token (it should start {TOKEN_PREFIX!r} and hold it once; "
-                         "paste it once before Enter); nothing was stored")
-    partial = paths.token.with_name(f".{paths.token.name}.partial")
-    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(token + "\n")
-    os.replace(partial, paths.token)
-    kind, why = claude_ready(paths, None)
-    if kind != "ready":
-        raise SystemExit(f"the token is stored in {paths.token}, but Claude Code does not take it: {why}")
-    logger.info("signed in: the keeper's sessions use the token in %s", paths.token)
-    return 0
 
 
 def push_ntfy(topic: str, title: str, message: str) -> None:
@@ -818,8 +837,8 @@ class Keeper:
         incident["sessions"].append({
             "id": session_id, "started": iso(now), "ended": iso(ended), "log": str(log),
             "notes": str(notes), "verdict": outcome["verdict"], "counted": counts,
-            "resume": "cd /work/RaiGolmi && CLAUDE_CODE_OAUTH_TOKEN=$(cat "
-                      f"{self.paths.token}) claude --resume {session_id}"})
+            "resume": f"cd /work/RaiGolmi && env $(cat {self.paths.credential}) "
+                      f"claude --resume {session_id}"})
         incident["act_at"] = ended + FAILING_SECONDS
         logger.info("session %s ended: %s", session_id, outcome["verdict"])
         if outcome["signed_out"]:
@@ -968,8 +987,6 @@ def main(argv: list[str]) -> int:
         logging.getLogger().addHandler(to_file)
         return loop(paths)
     verb, args = argv[0], argv[1:]
-    if verb == "sign-in":
-        return sign_in(paths)
     if verb == "vm":
         client = connect(paths)
         try:
@@ -982,7 +999,7 @@ def main(argv: list[str]) -> int:
     if verb == "request":
         write_request(paths, args[0], args[1], time.time())
         return 0
-    raise SystemExit(f"unknown verb {verb!r}: none, `sign-in`, `vm '<command>' [secs]`, or "
+    raise SystemExit(f"unknown verb {verb!r}: none, `vm '<command>' [secs]`, or "
                      "`request <start|restart|upgrade> '<why>'`")
 
 
