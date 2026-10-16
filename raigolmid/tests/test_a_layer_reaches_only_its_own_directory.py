@@ -80,3 +80,11 @@ def test_a_working_copy_another_user_owns_is_refused(tmp_path):
     os.chown(project, os.getuid() + 1, os.getgid())
     with pytest.raises(DefinitionError, match="not this machine's user"):
         load_body(_body(tmp_path, f'working_copy = "{project}"\n'), ())
+
+
+@pytest.mark.parametrize("where", ["../../faces", "../../faces/f", "../.."])
+def test_a_working_copy_over_the_faces_is_refused(tmp_path, where):
+    """Only the machine tab edits faces; a body's tab mounts its working copy writable."""
+    (tmp_path / "faces" / "f").mkdir(parents=True)
+    with pytest.raises(DefinitionError, match="the faces"):
+        load_body(_body(tmp_path, f'working_copy = "{where}"\n'), (), (tmp_path / "faces",))

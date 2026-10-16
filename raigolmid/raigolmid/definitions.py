@@ -485,11 +485,13 @@ class Body:
         return out
 
 
-def _working_copy(value: str, private: tuple[Path, ...], path: Path) -> Path:
+def _working_copy(value: str, private: tuple[Path, ...], faces: tuple[Path, ...],
+                  path: Path) -> Path:
     """The user's project, which may be anywhere they keep one, but never where the machine
     keeps its credentials, state and sockets, nor a directory another user owns: the body and
     its tab both mount it, and the body runs as its owner. A hidden directory or `/run` is the
-    machine's too: sway, systemd and the shell run what is written there as the user. A
+    machine's too: sway, systemd and the shell run what is written there as the user. Nor is
+    it the faces, which only the machine tab edits and a body's tab has read-only. A
     relative one is in the body's own directory, where a project made for the body lives."""
     working_copy = path.parent / Path(os.path.expandvars(value)).expanduser()
     real = working_copy.resolve()
@@ -501,14 +503,22 @@ def _working_copy(value: str, private: tuple[Path, ...], path: Path) -> Path:
         if real.is_relative_to(own) or own.is_relative_to(real):
             raise DefinitionError(f"{path}: working_copy '{value}' overlaps {own}, which is the "
                                   "machine's own and is never a body's project")
+    for root in faces:
+        root = root.resolve()
+        if real.is_relative_to(root) or root.is_relative_to(real):
+            raise DefinitionError(f"{path}: working_copy '{value}' overlaps {root}, the faces, "
+                                  "which only the machine tab edits and are never a body's "
+                                  "project")
     if real.is_dir() and (owner := real.stat().st_uid) != os.getuid():
         raise DefinitionError(f"{path}: working_copy '{value}' is owned by uid {owner}, not "
                               "this machine's user, and a body runs as its working copy's owner")
     return working_copy
 
 
-def load_body(directory: Path, private: tuple[Path, ...]) -> Body:
-    """`private` is what a working copy may not overlap (`Paths.private`)."""
+def load_body(directory: Path, private: tuple[Path, ...],
+              faces: tuple[Path, ...] = ()) -> Body:
+    """`private` (`Paths.private`) and `faces` (`SearchPaths.faces`) are what a working copy
+    may not overlap."""
     path = directory / "body.toml"
     raw = _load_toml(path)
     _reject_unknown(raw, {"id", "name", "image", "dockerfile", "target", "context",
@@ -539,7 +549,7 @@ def load_body(directory: Path, private: tuple[Path, ...]) -> Body:
 
     working_copy = None
     if wc := _text(raw, "working_copy", path, "'working_copy'"):
-        working_copy = _working_copy(wc, private, path)
+        working_copy = _working_copy(wc, private, faces, path)
 
     ports = raw.get("ports", [])
     if not isinstance(ports, list) or not all(
@@ -640,7 +650,8 @@ def discover(search: SearchPaths) -> Catalogue:
     for roots, marker, loader, table in (
         (search.faces, "face.toml", load_face, cat.faces),
         (search.toolbelts, "toolbelt.toml", load_toolbelt, cat.toolbelts),
-        (search.bodies, "body.toml", lambda d: load_body(d, search.private), cat.bodies),
+        (search.bodies, "body.toml", lambda d: load_body(d, search.private, search.faces),
+         cat.bodies),
     ):
         for root in roots:
             if not root.is_dir():

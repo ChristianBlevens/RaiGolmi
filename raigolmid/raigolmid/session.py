@@ -260,11 +260,32 @@ class Session:
 
     def rediscover(self) -> Catalogue:
         with self._lock:
+            before = self.catalogue.bodies
             self.catalogue = discover(self.search)
             if self.catalogue.errors:
                 for error in self.catalogue.errors:
                     self.events.emit("definition.error", message=error)
+            for body_id in sorted(before.keys() - self.catalogue.bodies.keys()):
+                self._tell_body_undefined(body_id, before[body_id])
             return self.catalogue
+
+    def _tell_body_undefined(self, body_id: str, body: Body) -> None:
+        """A body whose definition went while its tab is open: the tab is told, and stays
+        until the user closes it, since no tab closes itself; its sandboxes run on and stay
+        listed (`list_items`)."""
+        tab = self.intent.body_tab(body_id)
+        if tab is None:
+            return
+        sandboxes = sorted(i.instance_id for i in self.instances.all().values()
+                           if i.body == body_id)
+        running = (f"Your sandbox {', '.join(sandboxes)} runs on as it is, but cannot be "
+                   "rebuilt or restarted" if sandboxes else "You have no sandbox")
+        self.events.emit("body.undefined", tab=tab.tab_id, body=body_id, sandboxes=sandboxes,
+                         deliver={"content": (
+                             f"Your body '{body_id}' is no longer defined: {body.directory} "
+                             f"no longer holds its body.toml. {running}. This tab stays "
+                             "open until the user closes it; the body comes back if its "
+                             "definition does."), "meta": {"from": "daemon"}})
 
     def definition_roots(self) -> list[Path]:
         """Where definitions are discovered. They are user-owned and agent-editable, so
@@ -281,7 +302,33 @@ class Session:
             table = getattr(self.catalogue, row)
             out[row] = [self._item_row(row, item_id, item, verdicts[row][item_id])
                         for item_id, item in table.items()]
+        if "bodies" in rows:
+            out["bodies"] += [self._undefined_body_row(body_id)
+                              for body_id in sorted(self._undefined_bodies())]
         return out
+
+    def _undefined_bodies(self) -> set[str]:
+        """Bodies no longer defined that a tab or a sandbox is still on."""
+        held = {t.body for t in self.intent.tabs.values() if t.body is not None}
+        held |= {i.body for i in self.instances.all().values() if i.body is not None}
+        return held - self.catalogue.bodies.keys()
+
+    def _undefined_body_row(self, body_id: str) -> dict[str, Any]:
+        """Listed while its tab or sandboxes last, so what still runs on it can be seen and
+        stopped."""
+        tab = self.intent.body_tab(body_id)
+        return {
+            "id": body_id, "name": body_id,
+            "selected": self.intent.selection.body == body_id, "selectable": False,
+            "reason": "it is no longer defined", "warning": "", "directory": None,
+            "tab": tab.tab_id if tab is not None else None,
+            "instances": self._instance_rows(body_id),
+        }
+
+    def _instance_rows(self, body_id: str) -> list[dict[str, Any]]:
+        return [{"instance": inst.instance_id, "health": inst.health,
+                 "reason": inst.reason, "refs": inst.refs}
+                for inst in self.instances.all().values() if inst.body == body_id]
 
     def document_index(self, tab_id: str) -> dict[str, Any]:
         """The router the primer points at — the tab's documents, those
@@ -325,11 +372,7 @@ class Session:
         if row == "bodies":
             tab = self.intent.body_tab(item_id)
             entry["tab"] = tab.tab_id if tab is not None else None
-            entry["instances"] = [
-                {"instance": inst.instance_id, "health": inst.health,
-                 "reason": inst.reason, "refs": inst.refs}
-                for inst in self.instances.all().values() if inst.body == item_id
-            ]
+            entry["instances"] = self._instance_rows(item_id)
         if row == "toolbelts":
             entry["capabilities"] = list(item.capabilities)
         if row == "faces":

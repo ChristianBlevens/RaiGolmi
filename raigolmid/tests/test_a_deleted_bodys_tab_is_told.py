@@ -1,0 +1,37 @@
+"""A body whose definition goes while its tab is open: the tab is told, and the body stays
+listed with its sandbox while either lasts, so what still runs on it can be seen and stopped."""
+import shutil
+
+import pytest
+
+from tests.harness import Harness
+
+
+@pytest.fixture()
+def h(tmp_path, monkeypatch):
+    return Harness(tmp_path, monkeypatch)
+
+
+def test_the_tab_is_told_and_its_sandbox_stays_listed(h):
+    sandbox = h.open_sandbox("myapi")
+    tab = h.tab("myapi")
+
+    shutil.rmtree(h.search.bodies[0] / "myapi")
+    h.session.rediscover()
+
+    [told] = h.events_of("body.undefined")
+    assert told.tab == tab and told.data["sandboxes"] == [sandbox]
+    assert sandbox in told.data["deliver"]["content"]
+    rows = {b["id"]: b for b in h.session.list_items("body")["bodies"]}
+    assert rows["myapi"]["selectable"] is False and rows["myapi"]["tab"] == tab
+    assert [i["instance"] for i in rows["myapi"]["instances"]] == [sandbox]
+
+    h.session.rediscover()
+    assert len(h.events_of("body.undefined")) == 1, "told once, when the body went"
+
+
+def test_a_body_gone_with_nothing_on_it_leaves_the_listing(h):
+    shutil.rmtree(h.search.bodies[0] / "webui")
+    h.session.rediscover()
+    assert not h.events_of("body.undefined")
+    assert "webui" not in {b["id"] for b in h.session.list_items("body")["bodies"]}
