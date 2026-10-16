@@ -451,3 +451,12 @@ def test_the_line_outs_word_stands(world: World) -> None:
     world.vm = dict(HEALTHY)
     world.check(after=k.CHECK_SECONDS)
     assert world.pushes == [], "nothing was said, so no working again"
+
+
+def test_a_token_pasted_twice_is_refused_and_not_stored(world: World, monkeypatch) -> None:
+    token = "sk-ant-oat01-abc"
+    monkeypatch.setattr(k.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(k.getpass, "getpass", lambda prompt: token + token)
+    with pytest.raises(SystemExit, match="not one token"):
+        k.sign_in(world.paths)
+    assert not world.paths.token.exists()

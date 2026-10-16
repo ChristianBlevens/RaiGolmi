@@ -133,6 +133,9 @@ UNREACHED_SECONDS = DAY
 LINE_OUT_COVERS_SECONDS = DAY
 # `claude setup-token` asks for a token valid for 31536000 s, a year, and says so as it prints it.
 TOKEN_SECONDS = 365 * DAY
+# Every token Claude Code makes starts with this, once; a paste holding it twice is two pastes,
+# which the hidden prompt cannot show.
+TOKEN_PREFIX = "sk-ant-"
 # The longest `claude auth status` takes when Claude Code works at all.
 CLAUDE_STATUS_SECONDS = 60
 # A session may wait on a release build and the upgrade it is installed by; one running past
@@ -512,6 +515,9 @@ def sign_in(paths: Paths) -> int:
     token = "".join(getpass.getpass("Paste the token it printed (it is not shown), then Enter: ").split())
     if not token:
         raise SystemExit("nothing was pasted; run `python3 /work/RaiGolmi/keeper/keeper.py sign-in` again")
+    if not token.startswith(TOKEN_PREFIX) or token.count(TOKEN_PREFIX) != 1:
+        raise SystemExit(f"what was pasted is not one token (it should start {TOKEN_PREFIX!r} and hold it once; "
+                         "paste it once before Enter); nothing was stored")
     partial = paths.token.with_name(f".{paths.token.name}.partial")
     fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
