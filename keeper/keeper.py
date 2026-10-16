@@ -55,6 +55,7 @@ system prompt) with the evidence it gathered. The rules:
 keeper/outbox/keeper.json is written each check: the state, the open incident with its sessions
 (each resumable from the keeper's terminal by the `resume` command it records), the sessions of
 the last day, and the alerts. It is also the keeper's memory across a restart of its container.
+The loop's log goes to keeper/outbox/keeper.log as well as stderr.
 
     python3 keeper.py                         the loop (the container's entrypoint)
     python3 keeper.py sign-in                 `claude setup-token`, and the token it prints stored
@@ -68,6 +69,7 @@ import hashlib
 import http.client
 import json
 import logging
+import logging.handlers
 import os
 import re
 import shlex
@@ -154,6 +156,7 @@ NTFY = "https://ntfy.sh/"
 @dataclass(frozen=True)
 class Paths:
     work: Path = Path("/work/RaiGolmi")
+    # The launcher's state, <P>\state (compose.yml): its settings, keys, disk record, UEFI vars.
     launcher_home: Path = Path("/launcher")
     key: Path = Path("/root/.ssh/keeper_ed25519")
     # Claude Code's sign-in: the token `claude setup-token` printed, on the persistent home.
@@ -182,6 +185,10 @@ class Paths:
     @property
     def keeper_json(self) -> Path:
         return self.outbox / "keeper.json"
+
+    @property
+    def log(self) -> Path:
+        return self.outbox / "keeper.log"
 
     @property
     def system_prompt(self) -> Path:
@@ -935,11 +942,24 @@ def loop(paths: Paths) -> int:
         time.sleep(CHECK_SECONDS)
 
 
+# The loop's log in the outbox, so it is read where the rest of the keeper's state is, without
+# `docker logs`. A session reads it whole, so it is kept to what one can: a megabyte and the one
+# before it.
+LOG_BYTES = 1 << 20
+LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+
+
 def main(argv: list[str]) -> int:
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr,
-                        format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format=LOG_FORMAT)
     paths = Paths()
     if not argv:
+        # The loop alone writes the file: with one writer, a rollover never renames a log
+        # another process holds open.
+        paths.outbox.mkdir(parents=True, exist_ok=True)
+        to_file = logging.handlers.RotatingFileHandler(paths.log, maxBytes=LOG_BYTES, backupCount=1,
+                                                       encoding="utf-8")
+        to_file.setFormatter(logging.Formatter(LOG_FORMAT))
+        logging.getLogger().addHandler(to_file)
         return loop(paths)
     verb, args = argv[0], argv[1:]
     if verb == "sign-in":

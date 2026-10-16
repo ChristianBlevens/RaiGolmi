@@ -15,7 +15,6 @@ htmlcov/
 
 # raigolmid runtime state (derived or machine-local, never committed)
 *.sock
-/state/
 /run/
 
 # Nix build output
@@ -52,6 +51,8 @@ result-*
 /windows/screen.ppm.partial
 # Machine-local: the public keys the launcher lets in beside its own
 /windows/authorized_keys
+# Machine-local: the launcher's settings, keys, UEFI variables and disk record (Machine.Home)
+/state/
 
 # The working documents and the VM toolkit: kept on disk, never in the repository.
 /ARCHITECTURE.md

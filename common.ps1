@@ -9,7 +9,9 @@ $msys2 = if ($env:RAIGOLMI_MSYS2) { $env:RAIGOLMI_MSYS2 } else { 'C:\msys64' }
 $exe   = Join-Path $repo 'windows\RaiGolmi.exe'
 $disks = Join-Path $repo 'disk'
 $disk  = Join-Path $disks 'raigolmi.qcow2'
-$state = Join-Path $env:LOCALAPPDATA 'RaiGolmi'
+# The launcher's state (settings, keys, UEFI variables, the disk it boots), the folder RaiGolmi.cs's
+# Machine.Home names.
+$state = Join-Path $repo 'state'
 # The published release the machine runs (setup.ps1). A local build removes it: the machine
 # then runs what was built here.
 $releaseRecord = Join-Path $state 'release.txt'
@@ -105,7 +107,7 @@ function Install-Missing([scriptblock]$prerequisites, [string]$entry) {
 # unit drop-in would outlive the upgrade and run the old tree, so it goes.
 function Apply-Upgrade([string]$image, [string]$archive) {
     $ErrorActionPreference = 'Continue'
-    $config = Join-Path $env:LOCALAPPDATA 'RaiGolmi\ssh_config'
+    $config = Join-Path $state 'ssh_config'
     $ssh    = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
     $scp    = Join-Path $env:SystemRoot 'System32\OpenSSH\scp.exe'
     if (-not (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue)) {
@@ -393,6 +395,12 @@ function Record-Disk {
     New-Item -ItemType Directory -Force $state | Out-Null
     # UTF-8, as the launcher reads it: Set-Content in Windows PowerShell writes the ANSI code page.
     [IO.File]::WriteAllText((Join-Path $state 'disk.txt'), $disk)
+}
+
+# The machine runs this published release from now on (setup.ps1).
+function Record-Release([string]$revision) {
+    New-Item -ItemType Directory -Force $state | Out-Null
+    Set-Content -Path $releaseRecord -Value $revision -NoNewline
 }
 
 # How every way of making or changing the machine here ends (setup.bat installing or updating,

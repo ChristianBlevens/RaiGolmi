@@ -1,8 +1,8 @@
 // The launcher's own settings: how Windows treats RaiGolmi and what QEMU is started with. They
-// live in %LOCALAPPDATA%\RaiGolmi\settings.ini as `key=value` lines and are read once at start;
-// only the ntfy topic reaches inside the OS, handed in at boot. Every one is off, or the
-// launcher's long-standing value, until it is chosen, from the window's title-bar menu or by
-// editing the file.
+// live in settings.ini in the project folder's state\ (Machine.Home) as `key=value` lines and
+// are read once at start; only the ntfy topic reaches inside the OS, handed in at boot. Every
+// one is off, or the launcher's long-standing value, until it is chosen, from the window's
+// title-bar menu or by editing the file (the keeper's sessions may, keeper\KEEPER.md).
 //
 //   start-at-login = on | off     the launcher in HKCU\...\Run, so Windows starts it at sign-in
 //   keep-awake     = on | off     Windows does not sleep while the launcher runs
@@ -10,6 +10,8 @@
 //   venus          = on | off     the GPU offers Vulkan (Venus), at its next start
 //   ntfy-topic     = <topic>      the phone alerts' ntfy topic, at the machine's next start;
 //                                 empty is no alerts (raigolmid/raigolmid/lineout.py)
+//   heartbeat-url  = <https URL>  the outside dead-man's switch's ping URL (healthchecks.io);
+//                                 empty is none
 //   keeper         = on | off     an agent in Docker Desktop, outside the machine, repairs what
 //                                 the launcher cannot (Keeper in RaiGolmi.cs, keeper\)
 using System;

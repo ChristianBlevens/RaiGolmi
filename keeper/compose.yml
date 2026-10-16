@@ -1,6 +1,7 @@
 # The keeper's container (KEEPER.md), started by the launcher with
 # `docker compose -f <P>\keeper\compose.yml up -d --build`. Relative host paths resolve from
-# this file's directory, so `..` is the project folder <P>.
+# this file's directory, so `..` is the project folder <P>. The launcher's state, <P>\state, is
+# /launcher, read-write: the keeper may change a setting and ask for a restart (KEEPER.md).
 name: raigolmi-keeper
 
 services:
@@ -10,7 +11,7 @@ services:
     restart: unless-stopped
     volumes:
       - ..:/work/RaiGolmi
-      - ${LOCALAPPDATA:?the launcher's folder is under LOCALAPPDATA}/RaiGolmi:/launcher:ro
+      - ../state:/launcher
       - raigolmi-keeper-home:/root
     extra_hosts:
       - host.docker.internal:host-gateway

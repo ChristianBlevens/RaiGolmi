@@ -24,6 +24,8 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -33,6 +35,9 @@ using System.Windows.Forms;
 static class Launcher
 {
     const string Title = "RaiGolmi";
+    // The project folder, the parent of windows\, where this exe is: setup.ps1, the keeper's
+    // keeper\ and the machine's state\ are in it.
+    public static readonly string Project = Path.GetFullPath(Path.Combine(Application.StartupPath, ".."));
     // MSYS2's UCRT64 tree; RAIGOLMI_MSYS2 names an MSYS2 installed elsewhere, as for build.ps1.
     static readonly string QemuDir = Path.Combine(
         Environment.GetEnvironmentVariable("RAIGOLMI_MSYS2") ?? @"C:\msys64", "ucrt64");
@@ -239,8 +244,8 @@ class LauncherError : Exception
     public LauncherError(string message) : base(message) { }
 }
 
-// Everything this machine's QEMU needs: its state under %LOCALAPPDATA%\RaiGolmi, its log
-// and screen beside the exe.
+// Everything this machine's QEMU needs: its state in the project folder's state\, its log and
+// screen beside the exe.
 class Machine
 {
     public string Qemu, Firmware, Vars, Disk, Log, Screen, Placement;
@@ -268,8 +273,9 @@ class Machine
     // The keeper's side, while the keeper setting is on; null otherwise.
     public volatile Keeper Keeper;
 
-    public static readonly string Home = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RaiGolmi");
+    // The settings, keys, UEFI variables and disk record, kept with the project so the folder
+    // copied to another PC carries all of it; the keeper reads and writes it (keeper\compose.yml).
+    public static readonly string Home = Path.Combine(Launcher.Project, "state");
 
     // `door`: started by the keeper's door, where nobody may be at the screen, so nothing is asked.
     public static Machine Prepare(int recoveries, bool door)
@@ -328,9 +334,8 @@ class Machine
         if (!File.Exists(path))
             throw new LauncherError(path + " does not exist, and the experimental Venus (Vulkan) " +
                                     "setting runs QEMU from there. Run setup.bat, which installs it, " +
-                                    "or set venus=off in " + Path.Combine(Environment.GetFolderPath(
-                                    Environment.SpecialFolder.LocalApplicationData), "RaiGolmi",
-                                    "settings.ini") + ", then start RaiGolmi again.");
+                                    "or set venus=off in " + Path.Combine(Home, "settings.ini") +
+                                    ", then start RaiGolmi again.");
         return path;
     }
 
@@ -2051,9 +2056,7 @@ class Window : Form
 // Nothing here exists while the keeper setting is off.
 sealed class Keeper
 {
-    // The project folder is the parent of windows\, where this exe is.
-    public static readonly string Project = Path.GetFullPath(Path.Combine(Application.StartupPath, ".."));
-    static readonly string Folder = Path.Combine(Project, "keeper");
+    static readonly string Folder = Path.Combine(Launcher.Project, "keeper");
     static readonly string Inbox = Path.Combine(Folder, "inbox");
     static readonly string Outbox = Path.Combine(Folder, "outbox");
     static readonly string StateFile = Path.Combine(Outbox, "launcher.json");
@@ -2489,7 +2492,7 @@ sealed class Keeper
     // programs' included, and outlives this launcher, which setup closes on the way.
     public static Process StartSetup()
     {
-        string script = Path.Combine(Project, "setup.ps1");
+        string script = Path.Combine(Launcher.Project, "setup.ps1");
         if (!File.Exists(script))
             throw new LauncherError(script + " does not exist.");
         string powershell = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
@@ -2499,7 +2502,7 @@ sealed class Keeper
             " -Unattended > " + Ssh.Quote(SetupLog) + " 2>&1\"");
         info.UseShellExecute = false;
         info.CreateNoWindow = true;
-        info.WorkingDirectory = Project;
+        info.WorkingDirectory = Launcher.Project;
         return Process.Start(info);
     }
 }
@@ -2633,6 +2636,7 @@ class Ssh
         s.Outbox = Path.Combine(Native.KnownFolder(Native.Downloads), "RaiGolmi");
         if (!File.Exists(s.Key))
             Generate(keygen, s.Key);
+        OwnerOnly(s.Key);
         string pub = s.Key + ".pub";
         if (!File.Exists(pub))
             throw new LauncherError(s.Key + " has no public half beside it. Delete it and start " +
@@ -2667,7 +2671,24 @@ class Ssh
             "    ServerAliveCountMax 3",
             "    LogLevel ERROR",
             "" }), new UTF8Encoding(false));
+        OwnerOnly(s.Config);
         return s;
+    }
+
+    // Windows' OpenSSH refuses a private key, and a config file, that anyone but the user,
+    // SYSTEM and Administrators can reach; the state folder sits in the project folder, whose
+    // drive may give every signed-in user access, and a copied folder brings its drive's
+    // inheritance. So each start sets the file's ACL to exactly those three, inheriting nothing.
+    static void OwnerOnly(string path)
+    {
+        var acl = new FileSecurity();
+        acl.SetAccessRuleProtection(true, false);
+        SecurityIdentifier user = WindowsIdentity.GetCurrent().User;
+        acl.SetOwner(user);
+        foreach (var who in new[] { user, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                                    new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null) })
+            acl.AddAccessRule(new FileSystemAccessRule(who, FileSystemRights.FullControl, AccessControlType.Allow));
+        new FileInfo(path).SetAccessControl(acl);
     }
 
     // ssh_config reads a backslash as an escape and expands % tokens in these paths.

@@ -28,7 +28,10 @@ in the daemon), and the machine tab resumes its tabs on it.
   what it routes you to. `docs/driving-the-vm.md` is how the VM is driven.
 - The launcher's state: `keeper/outbox/launcher.json`, `windows/qemu.log` (its first line names
   every port), `windows/*.previous.log`, `windows/*.restarted-*.log`, `windows/screen.ppm`; its
-  settings, `disk.txt` and `release.txt` read-only in `/launcher`.
+  settings, `disk.txt`, `release.txt`, keys and UEFI variables in `/launcher` (the project's
+  `state/`, read-write).
+- The keeper's own log: `keeper/outbox/keeper.log` (the one before it, `keeper.log.1`). Read it
+  first: it says what the keeper saw and did before it started you.
 - **Reach the VM with the keeper's key, not `spikes/lib/vm/vm.py`'s**:
   `python3 /work/RaiGolmi/keeper/keeper.py vm '<command>' [timeout-s]` (default 60 s), or
   `ssh -i /root/.ssh/keeper_ed25519 -p <port> agent@host.docker.internal` (and `scp -P`), the
@@ -55,10 +58,17 @@ closes and reopens. The launcher deletes a request it took and records the outco
 launcher.json's `last_request`; with no launcher running, its scheduled door takes it within
 5 minutes.
 
+**You may change the launcher's settings** in `/launcher/settings.ini` (its keys and format are
+the header of `windows/Settings.cs`), such as `venus=off` or a lower `memory`, then
+`request restart`: the launcher reads them only when it starts. A file it cannot parse stops it
+starting, so keep to those keys and values.
+
 ## What you must not do
 
 - Work on the letthemrise project itself: that is the machine tab's, in the VM.
 - Delete or replace the disk (`disk/`), except through `upgrade`.
+- Edit anything in `/launcher` but `settings.ini`: `disk.txt`, `uefi-vars.fd`, `ssh_config` and
+  the keys are the launcher's.
 - Reboot the guest from inside over ssh. Restart through the launcher (`request restart`).
 - Leave a patched daemon running from an ssh session (SESSION-START § Carried in).
 - Start a machine the user closed: a launcher in `closed` is their decision.

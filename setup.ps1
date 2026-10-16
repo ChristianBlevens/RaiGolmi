@@ -106,7 +106,7 @@ if (-not (Test-Path $disk)) {
     }
     Download $token $release.Files['RaiGolmi.exe'] $exe
     Download $token $release.Files['raigolmi.qcow2'] $disk
-    Set-Content -Path $releaseRecord -Value $release.Revision -NoNewline
+    Record-Release $release.Revision
     Open-RaiGolmi "Installed release $short."
     exit 0
 }
@@ -115,9 +115,13 @@ if (-not (Test-Path $disk)) {
 # downloads itself, and the launcher is replaced once its window has closed.
 $next = "$exe.next"
 Download $token $release.Files['RaiGolmi.exe'] $next
-if (-not (Test-Path $exe)) { Move-Item $next $exe }
+# With no window open the new launcher replaces the old at once, so the one the upgrade opens
+# is the new one, writing its state where this script reads it.
+if (-not (Test-Path $exe) -or -not (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue)) {
+    Move-Item -Force $next $exe
+}
 Record-Disk
 Apply-Upgrade -image $host_image
 if (Test-Path $next) { Move-Item -Force $next $exe }
-Set-Content -Path $releaseRecord -Value $release.Revision -NoNewline
+Record-Release $release.Revision
 Open-RaiGolmi "Updated to release $short, with everything on the machine kept."

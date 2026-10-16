@@ -31,7 +31,7 @@ through a socket the daemon serves them.
 | `agents/` | The agent image (`claude/`) and the layer-writing guide every tab reads (`guide/`) |
 | `host/` | The host image (`Containerfile`), its firewall, units and CI build |
 | `faults.py` | Bugs in RaiGolmi the machine tab hands the keeper outside the VM, and the keeper's answers |
-| `windows/` | The Windows app: a .NET 8 launcher that runs QEMU and draws its display |
+| `windows/` | The Windows app: a .NET 8 launcher that runs QEMU and draws its display; its per-machine state (settings, keys, the disk it boots) goes in `state/`, never committed |
 | `keeper/` | The keeper: a Claude Code agent in Docker Desktop beside the VM that repairs what the machine cannot (`keeper.py` its loop, `KEEPER.md` its brief) |
 | `*.ps1`, `*.bat` | Installing (`setup`), building (`build*`) and upgrading on Windows |
 

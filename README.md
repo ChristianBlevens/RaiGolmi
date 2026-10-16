@@ -58,7 +58,7 @@ missing, then downloads the app and its disk (about 2.5 GB) and starts it. Next 
 Closing it shuts the machine down properly, and so does Windows restarting or shutting down.
 
 Click the icon at the window's top left for **Settings** (all off until you choose them, kept in
-`%LOCALAPPDATA%\RaiGolmi\settings.ini`): *Start RaiGolmi when I sign in to Windows*, *Keep
+`state\settings.ini` in the RaiGolmi folder): *Start RaiGolmi when I sign in to Windows*, *Keep
 Windows awake while RaiGolmi runs* (the screen can still turn off), *Memory* for the machine (8,
 12, 16 or 24 GB, from its next start), *Venus (Vulkan)*, an experiment that needs a
 QEMU built for it, and *Phone alerts*, a box for an ntfy topic (below; from the machine's next
@@ -474,8 +474,9 @@ it on, choose *Settings → Open the keeper's terminal* and sign it in:
 `python3 /work/RaiGolmi/keeper/keeper.py sign-in` (it runs `claude setup-token` and stores the
 year-long token it shows, which you paste), then `gh auth login`. Both sign-ins live on the
 `raigolmi-keeper-home` volume and survive a rebuild; the keeper's key is let into the machine
-from its next start. What it did is in `keeper\outbox\` (`keeper.json`, and each repair's log
-and notes in `sessions\`); a repair is reopened in its terminal with the `resume` command
+from its next start. What it did is in `keeper\outbox\` (`keeper.json`, its log `keeper.log`, and
+each repair's log and notes in `sessions\`); it can change a setting in `state\settings.ini` and
+restart the window to apply it. A repair is reopened in its terminal with the `resume` command
 `keeper.json` records for it.
 
 ### Files and clipboard on Windows
@@ -509,9 +510,9 @@ time, so `setup.bat` won't put one there.
 
 There's no uninstaller yet. To take it all off, close the window, then delete:
 
-- the RaiGolmi folder you cloned or unzipped, which holds the disk;
-- `%LOCALAPPDATA%\RaiGolmi` (the app's settings and keys) and `Downloads\RaiGolmi` (files the
-  machine sent you);
+- the RaiGolmi folder you cloned or unzipped, which holds the disk and, in `state`, the app's
+  settings and keys;
+- `Downloads\RaiGolmi` (files the machine sent you);
 - MSYS2, if nothing else of yours uses it: uninstall it from Windows' settings, or delete
   `C:\msys64`. To keep it, remove just the patched packages' `IgnorePkg` lines from
   `C:\msys64\etc\pacman.conf` and the next `pacman -Syu` puts the stock ones back;

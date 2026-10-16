@@ -22,7 +22,8 @@ the only thing anyone should need to do is turn the PC back on if it goes off.
 
 ## RaiGolmi
 
-6. Get the repo (`git clone https://github.com/ChristianBlevens/RaiGolmi`), run `setup.bat`.
+6. Get the repo (`git clone https://github.com/ChristianBlevens/RaiGolmi`), close the RaiGolmi window
+   if it is open, and run `setup.bat`.
    **Moving from another PC:** copy the old project folder's `disk\` across first (the disk
    holds everything the agents did); if the launcher asks where the disk is, point it at
    `disk\raigolmi.qcow2`.
@@ -45,7 +46,7 @@ the only thing anyone should need to do is turn the PC back on if it goes off.
    - `gh auth login` (GitHub.com, HTTPS, log in with a browser)
 10. Close the RaiGolmi window and open it again, so the machine lets the keeper in.
 11. Check, a few minutes later: `keeper\outbox\keeper.json` says `healthy`, and
-    `docker logs raigolmi-keeper` shows its checks passing.
+    `keeper\outbox\keeper.log` shows its checks passing.
 
 ## Before leaving
 
