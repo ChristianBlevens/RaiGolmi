@@ -86,8 +86,13 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
         instance, note = instance_of(session, tab_id), None
     except SessionError as exc:
         instance, note = None, str(exc)
+    # A tab outlives its body's definition (`Session.rediscover`); with the body gone there is
+    # no working copy to read and no toolbelt to judge, which it is told rather than refused.
+    tab = session.intent.tabs.get(tab_id)
+    gone = (tab.body if tab is not None and tab.body is not None
+            and tab.body not in session.catalogue.bodies else None)
     # Builds are keyed by the working copy built: a tab's are its own body's copy's only.
-    own_copy = session.working_copy(tab_id)
+    own_copy = None if gone is not None else session.working_copy(tab_id)
     out: dict[str, Any] = {
         "instance": instance,
         "tab": next((a for a in full["agents"] if a["tab"] == tab_id), None),
@@ -102,9 +107,12 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
         # The one account every tab spends: how widely to work (`limits.plan_view`).
         "plan": full["plan"],
     }
-    if tab_id != JANITOR:
+    if gone is not None:
+        out["body_note"] = (f"your body '{gone}' is no longer defined: its directory no longer "
+                            "holds its body.toml, so no sandbox opens on it until it is "
+                            "defined again")
+    elif tab_id != JANITOR:
         out["toolbelts"] = session.toolbelts_for(tab_id)
-    tab = session.intent.tabs.get(tab_id)
     if tab is not None and tab.machine:
         # The face it is trying off the user's screen (`try_face`), which only it drives.
         out["trial"] = full["face_runtime"]["trial"]

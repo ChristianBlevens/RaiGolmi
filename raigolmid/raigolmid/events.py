@@ -21,6 +21,18 @@ MAX_BYTES = 8 * 1024 * 1024
 RETAIN = 3
 
 
+class EventLogError(Exception):
+    """A question about the log that has no answer, refused before it is read."""
+
+
+def _latest(n: int) -> deque:
+    """Where the last `n` events read are kept. Fewer than one is no question: `deque`
+    would answer 0 with nothing and refuse a negative with its own words."""
+    if n < 1:
+        raise EventLogError(f"n is how many of the latest events to show, at least 1, not {n}")
+    return deque(maxlen=n)
+
+
 @dataclass(slots=True)
 class Event:
     type: str
@@ -171,7 +183,7 @@ class EventLog:
                 working_copy: str | None = None) -> list[Event]:
         """A sandbox's events, and the builds of `working_copy`, the copy its body builds
         from: a build names the copy it builds, never a sandbox."""
-        keep: deque[Event] = deque(maxlen=n)
+        keep: deque[Event] = _latest(n)
         for event in self.read():
             if event.instance == instance_id or (
                     working_copy is not None and event.type.startswith("build.")
@@ -180,7 +192,7 @@ class EventLog:
         return list(keep)
 
     def tail(self, n: int = 50) -> list[Event]:
-        keep: deque[Event] = deque(maxlen=n)
+        keep: deque[Event] = _latest(n)
         keep.extend(self.read())
         return list(keep)
 

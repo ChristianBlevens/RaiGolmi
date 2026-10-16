@@ -4,6 +4,9 @@ import shutil
 
 import pytest
 
+from raigolmid.channel import Channels
+from raigolmid.questions import Questions
+from raigolmid.scopes import tab_status
 from tests.harness import Harness
 
 
@@ -48,3 +51,16 @@ def test_a_tab_on_a_body_gone_does_not_fail_another_tabs_turn_end(h):
         h.session.agent_activity(tab, busy=False)
     assert h.session.session_start(orphan) is None
     h.session.queues.close_all()
+
+
+def test_a_tab_on_a_body_gone_reads_its_own_status(h):
+    sandbox = h.open_sandbox("myapi")
+    orphan = h.tab("myapi")
+    shutil.rmtree(h.search.bodies[0] / "myapi")
+    h.session.rediscover()
+
+    status = tab_status(h.session, Questions(h.events, h.paths), Channels(h.session, h.events),
+                        orphan)
+    assert status["instance"] == sandbox and status["builds"] == {}
+    assert "'myapi' is no longer defined" in status["body_note"]
+    assert "toolbelts" not in status

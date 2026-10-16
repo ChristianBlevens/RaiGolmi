@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import disk, stalls
-from .events import EventLog
+from .events import EventLog, EventLogError
 from .channel import Channels
 from .intent import JANITOR
 from .catalog import CatalogError
@@ -334,7 +334,7 @@ class Handler(socketserver.StreamRequestHandler):
         try:
             result = fn(*call.args, **call.kwargs)
         except (SessionError, QuestionError, MessageError, HistoryError, CatalogError,
-                RegistryError, DocumentError, JobError) as exc:
+                RegistryError, DocumentError, JobError, EventLogError) as exc:
             self._send({"id": request_id, "ok": False, "error": str(exc),
                         "kind": type(exc).__name__})
         except Exception as exc:                       # noqa: BLE001

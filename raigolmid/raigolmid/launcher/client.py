@@ -33,8 +33,9 @@ class LauncherError(Exception):
 
 
 class LauncherTimeout(LauncherError):
-    """The command started and produced nothing within the timeout. Its own class because
-    a caller can say *what* did not answer, which the launcher cannot."""
+    """The command started and gave no exit within the timeout. Its own class because
+    a caller can say *what* did not answer, which the launcher cannot. The message carries
+    what the command had printed by then, which is often the reason it hung."""
 
 
 class LauncherOutputHeld(LauncherTimeout):
@@ -202,6 +203,8 @@ class LauncherClient:
                     text = protocol.frame_bytes(frame).decode("utf-8", errors="replace")
                     (out if frame.get("stream") == "stdout" else err).append(text)
         except socket.timeout as exc:
+            printed = (f"It printed: stdout {''.join(out)[-2000:]!r} stderr "
+                       f"{''.join(err)[-2000:]!r}")
             if exited is not None:
                 raise LauncherOutputHeld(
                     f"{' '.join(cmd)} exited {exited}, but a process it started in the "
@@ -210,11 +213,10 @@ class LauncherClient:
                     "(`setsid`, GNU `timeout`). `&` after a `&&` list backgrounds the whole "
                     "list, whose shell keeps the output; a job that "
                     "outlives the call is started on its own output: `setsid cmd > log 2>&1 "
-                    f"< /dev/null &`. It printed: stdout {''.join(out)[-2000:]!r} stderr "
-                    f"{''.join(err)[-2000:]!r}") from exc
+                    f"< /dev/null &`. {printed}") from exc
             raise LauncherTimeout(
                 f"{' '.join(cmd)} produced no result within {timeout}s and has been stopped, "
-                "with everything it started"
+                f"with everything it started. {printed}"
             ) from exc
         finally:
             sock.close()

@@ -42,6 +42,18 @@ def test_incompatible_toolbelts_are_greyed_out_with_a_reason_not_hidden(h):
     assert all(b["selectable"] for b in rows["bodies"])
 
 
+def test_list_items_names_a_refused_layer_and_refuses_an_unknown_kind(h):
+    bad = h.search.toolbelts[0] / "zz-bad"
+    bad.mkdir()
+    (bad / "toolbelt.toml").write_text('id = "Bad Id"\n')
+    h.session.rediscover()
+    for kind in (None, "face"):
+        [error] = h.session.list_items(kind)["definition_errors"]
+        assert error.startswith(str(bad / "toolbelt.toml"))
+    with pytest.raises(SessionError, match="no kind 'faces'; the kinds are face, toolbelt"):
+        h.session.list_items("faces")
+
+
 def test_opening_a_sandbox_with_an_incompatible_toolbelt_is_refused_with_the_reason(h):
     h.session.select("face", "backend-focus")
     h.session.ensure_tabs()

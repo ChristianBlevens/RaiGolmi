@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from raigolmid import faces
 from raigolmid.faces import FaceQuiet, FaceRuntimeState, Faces
 from raigolmid.runtime.base import ContainerSpec
 from raigolmid.session import SessionError
@@ -59,12 +60,39 @@ def test_what_the_face_did_not_open_itself_is_opened_again_as_it_was(h, monkeypa
 
     # Restarted, the face's start-up has opened Firefox again by itself.
     _process(h, 50, ["firefox"], ["GTK_THEME=Adwaita:dark"])
-    monkeypatch.setattr(Faces, "_nested_compositor",
-                        lambda _self, _s: Compositor([(50, "firefox")]))
-    assert h.session.faces.reopen(open_) == [["foot", "-c", "/etc/face/foot.ini"]]
+    after = Compositor([(50, "firefox")])
+    monkeypatch.setattr(Faces, "_nested_compositor", lambda _self, _s: after)
+    spawn = h.runtime.spawn
+
+    def maps(container, cmd, *, environment=None):
+        _process(h, 60, cmd[4:], [])
+        after.views.append((60, "foot"))
+        return spawn(container, cmd, environment=environment)
+    monkeypatch.setattr(h.runtime, "spawn", maps)
+
+    answer = h.session.faces.reopen(open_)
+    assert answer["reopened"] == [["foot", "-c", "/etc/face/foot.ini"]]
+    assert answer["missing"] == []
+    assert [w["app"] for w in answer["open"]] == ["firefox", "foot"]
     container, command, env = h.runtime.spawn_log[-1]
     assert container == FACE and command[-3:] == ["foot", "-c", "/etc/face/foot.ini"]
     assert env == {"WAYLAND_DISPLAY": "wayland-3"}
+
+
+def test_a_window_started_again_that_never_maps_is_missing_not_reopened(h, monkeypatch):
+    _process(h, 5, ["firefox"], ["WAYLAND_DISPLAY=wayland-1"])
+    _process(h, 6, ["foot"], ["WAYLAND_DISPLAY=wayland-1"])
+    monkeypatch.setattr(Faces, "_nested_compositor",
+                        lambda _self, _s: Compositor([(5, "firefox"), (6, "foot")]))
+    open_ = h.session.faces.windows()
+
+    _process(h, 50, ["firefox"], [])
+    monkeypatch.setattr(Faces, "_nested_compositor",
+                        lambda _self, _s: Compositor([(50, "firefox")]))
+    monkeypatch.setattr(faces, "START_TIMEOUT", 0.3)
+    answer = h.session.faces.reopen(open_)
+    assert answer["reopened"] == [] and answer["missing"] == [["foot"]]
+    assert [w["app"] for w in answer["open"]] == ["firefox"]
 
 
 def test_only_the_machine_tab_restarts_the_face(h):

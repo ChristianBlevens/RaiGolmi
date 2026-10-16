@@ -44,6 +44,13 @@ def test_a_body_naming_no_doc_is_never_asked(h):
     assert p.owed(BODY) is None
     with pytest.raises(PrinciplesError, match="names no principles doc"):
         p.declare(BODY, [])
+    with pytest.raises(PrinciplesError, match="names no principles doc"):
+        p.ledger("myapi")
+    # A body that is not defined is not one without a doc: it is a wrong name.
+    with pytest.raises(PrinciplesError, match="no body 'gone' is defined"):
+        p.ledger("gone")
+    with pytest.raises(PrinciplesError, match="no body 'gone' is defined"):
+        p.checked("gone", tabs="", drift="none")
 
 
 def test_each_commit_since_the_first_reading_is_owed_until_declared(h):

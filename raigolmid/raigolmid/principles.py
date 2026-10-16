@@ -85,6 +85,19 @@ class Principles:
             return None
         return definition.source_root / definition.principles
 
+    def _named_doc(self, body: str) -> Path:
+        """The doc of a body the machine tab names, refused by what is missing: the body
+        itself, or its doc."""
+        if body not in self.session.catalogue.bodies:
+            raise PrinciplesError(
+                f"no body {body!r} is defined; defined: "
+                f"{', '.join(sorted(self.session.catalogue.bodies)) or 'none'}")
+        doc = self._doc(body)
+        if doc is None:
+            raise PrinciplesError(f"{body} names no principles doc ([principles] doc in its "
+                                  "body.toml)")
+        return doc
+
     # --- a body tab's ----------------------------------------------------------------
     def _owing(self, tab_id: str) -> tuple[str, str, Path, list[tuple[str, str]], list[str]] | None:
         """The body, its HEAD, its doc, the commits since what was declared that are not yet
@@ -207,10 +220,7 @@ class Principles:
     # --- the machine tab's -----------------------------------------------------------
     def ledger(self, body: str, rows: int = 60) -> dict[str, Any]:
         """The body's doc, and its ledger since the machine tab's last check."""
-        doc = self._doc(body)
-        if doc is None:
-            raise PrinciplesError(f"{body} names no principles doc ([principles] doc in its "
-                               "body.toml)")
+        doc = self._named_doc(body)
         every = self._rows(body)
         last = max((i for i, r in enumerate(every) if r["kind"] in ("check", "audit")),
                    default=-1)
@@ -221,9 +231,7 @@ class Principles:
 
     def checked(self, body: str, tabs: str, drift: str, direction: str = "",
                 deep: bool = False) -> dict[str, Any]:
-        if self._doc(body) is None:
-            raise PrinciplesError(f"{body} names no principles doc ([principles] doc in its "
-                               "body.toml)")
+        self._named_doc(body)
         if not drift.strip():
             raise PrinciplesError("`drift` is \"none\" or names what drifted")
         if drift.strip().lower() != "none" and not direction.strip():

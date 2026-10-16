@@ -166,7 +166,8 @@ def register_declare(server) -> None:
             if not path.startswith("/") or not path.endswith(".md"):
                 raise ToolError(f"{path!r}: a document is an absolute path to a `.md` file")
             if not Path(path).is_file():
-                raise ToolError(f"{path}: no such file")
+                raise ToolError(f"{path}: no such file; a document no longer at its path "
+                                "is not asked about and needs no declaring")
             if state not in ("current", "updated"):
                 raise ToolError(f"{path}: state is `current` or `updated`, not {state!r}")
             if state == "updated" and not os.access(path, os.W_OK):
@@ -218,8 +219,9 @@ def build_server(client: ApiClient):
 
     @tool(server, description="The faces, toolbelts and bodies as the user's selector shows "
                              "them: whether each is selected and selectable and why not, a "
-                             "toolbelt's capabilities, and the sandboxes running on each body. "
-                             "`kind` is face, toolbelt or body; omitted, all three.")
+                             "toolbelt's capabilities, and the sandboxes running on each body; "
+                             "`definition_errors` names each layer refused as malformed, which "
+                             "is in no row. `kind` is face, toolbelt or body; omitted, all three.")
     def list_items(kind: Kind | None = None) -> dict[str, Any]:
         return call("list_items", kind=kind)
 
@@ -326,9 +328,9 @@ def build_server(client: ApiClient):
     def disk() -> dict[str, Any]:
         return call("disk")
 
-    @tool(server, description="Your project's peak working memory over the last minute, its "
-                             "memory budget, and the machine's total and available memory "
-                             "now.")
+    @tool(server, description="Your project's peak working memory and its share of the "
+                             "machine's CPU (percent) over the last minute, its memory and "
+                             "cpu budgets, and the machine's total and available memory now.")
     def memory() -> dict[str, Any]:
         return call("memory")
 
@@ -354,8 +356,10 @@ def build_server(client: ApiClient):
     @tool(server, description="Machine tab only: start the user's face again on its definition "
                              "as it is now, so a change to it takes effect. It waits until the "
                              "user is away from the keyboard, and opens again the windows "
-                             "they had open; what was in them that the app does not restore "
-                             "itself is lost, so read `face_windows` first and ask the user "
+                             "they had open; it answers with the windows `open` after, those it "
+                             "`reopened`, and those `missing`. What was in them that the app "
+                             "does not restore itself is lost, so read `face_windows` first "
+                             "and ask the user "
                              "only when a window may hold unsaved work.")
     def restart_face() -> dict[str, Any]:
         return client.call("restart_face")
@@ -717,8 +721,9 @@ def build_machine_server(client: ApiClient):
         return call("screenshot")
 
     @tool(server, description="The faces, toolbelts and bodies as the user's selector shows "
-                             "them, each with whether it can be used with the rest. `kind` is "
-                             "face, toolbelt or body; omitted, all three.")
+                             "them, each with whether it can be used with the rest; "
+                             "`definition_errors` names each layer refused as malformed, which "
+                             "is in no row. `kind` is face, toolbelt or body; omitted, all three.")
     def list_items(kind: Kind | None = None) -> dict[str, Any]:
         return call("list_items", kind=kind)
 
@@ -769,9 +774,10 @@ def build_machine_server(client: ApiClient):
     def disk() -> dict[str, Any]:
         return call("disk")
 
-    @tool(server, description="Memory by project: each one's peak working memory over the last "
-                             "minute, the budget its tab set, and the machine's total and "
-                             "available memory now.")
+    @tool(server, description="Memory and CPU by project: each one's peak working memory and "
+                             "share of the machine's CPU (percent) over the last minute, the "
+                             "budgets its tab set, and the machine's total and available "
+                             "memory now.")
     def memory() -> dict[str, Any]:
         return call("memory")
 

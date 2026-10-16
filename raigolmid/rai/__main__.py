@@ -160,6 +160,7 @@ def cmd_list(args) -> int:
     if args.json:
         _print(rows)
         return 0
+    errors = rows.pop("definition_errors")
     for row_name, items in rows.items():
         print(f"\n{row_name.upper()}")
         for item in items:
@@ -174,6 +175,10 @@ def cmd_list(args) -> int:
             for inst in item.get("instances", []):
                 extra = f" — {inst['reason']}" if inst.get("reason") else ""
                 print(f"       {inst['instance']} [{inst['health']}]{extra}")
+    if errors:
+        print("\nREFUSED (malformed, so in no row)")
+        for error in errors:
+            print(f"  {error}")
     return 0
 
 

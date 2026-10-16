@@ -293,10 +293,20 @@ class Session:
         return [p for p in (*self.search.faces, *self.search.toolbelts, *self.search.bodies)
                 if p.is_dir()]
 
-    def list_items(self, kind: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    def list_items(self, kind: str | None = None) -> dict[str, list[Any]]:
+        """The layers as the selector shows them, and every definition refused as malformed
+        (`definition_errors`, as `status` carries them): a refused layer is in no row, and
+        would otherwise be missing without a word. The errors are not by kind, so each answer
+        carries them all."""
+        return {**self.layer_rows(kind), "definition_errors": list(self.catalogue.errors)}
+
+    def layer_rows(self, kind: str | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Each row of layers that loaded, `kind`'s alone when it is given."""
         out: dict[str, list[dict[str, Any]]] = {}
         verdicts = compatibility.evaluate(self.catalogue, self.intent.selection)
         wanted = {"face": "faces", "toolbelt": "toolbelts", "body": "bodies"}
+        if kind is not None and kind not in wanted:
+            raise SessionError(f"no kind {kind!r}; the kinds are {', '.join(wanted)}")
         rows = wanted.values() if kind is None else [wanted[kind]]
         for row in rows:
             table = getattr(self.catalogue, row)
@@ -336,7 +346,7 @@ class Session:
         tab = self.intent.tabs.get(tab_id)
         if tab is None:
             raise SessionError(f"no tab {tab_id}")
-        layers = self.list_items()
+        layers = self.layer_rows()
         rows = self._layers_of(layers)
         if tab.body is not None:
             # A body tab has the faces read-only: a face doc it cannot write is not expected
@@ -349,7 +359,7 @@ class Session:
     def machine_index(self) -> dict[str, Any]:
         """The janitor's router — its incidents, open and fixed, this
         machine's failure patterns, and every layer."""
-        layers = self.list_items()
+        layers = self.layer_rows()
         return {**documents.janitor_index(self.paths.janitor_documents,
                                           self._layers_of(layers)), "layers": layers}
 
@@ -1747,7 +1757,8 @@ class Session:
 
     def restart_face(self, tab_id: str) -> dict[str, Any]:
         """The user's face started again on its definition as it is now, once they are away
-        from the keyboard, with the windows they had open opened again."""
+        from the keyboard, with the windows they had open opened again; it answers with the
+        windows open once that is done, as `Faces.reopen` reads them."""
         self._machine_only(tab_id, "restarts the face")
         face_id = self.intent.selection.face
         if face_id is None:
@@ -1765,9 +1776,13 @@ class Session:
             if self._restart_face(face_id) is None:
                 raise SessionError(f"face '{face_id}' is no longer the selected one, or has no "
                                    "desktop to restart")
-        reopened = self.faces.reopen(open_)
-        self.events.emit("face.restarted", face=face_id, by=tab_id, reopened=len(reopened))
-        return {"restarted": face_id, "reopened": [shlex.join(c) for c in reopened]}
+        after = self.faces.reopen(open_)
+        self.events.emit("face.restarted", face=face_id, by=tab_id,
+                         reopened=len(after["reopened"]), missing=len(after["missing"]))
+        return {"restarted": face_id,
+                "open": after["open"],
+                "reopened": [shlex.join(c) for c in after["reopened"]],
+                "missing": [shlex.join(c) for c in after["missing"]]}
 
     def _machine_only(self, tab_id: str, what: str) -> None:
         tab = self.intent.tabs.get(tab_id)

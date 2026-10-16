@@ -90,7 +90,7 @@ class Library:
             rel = path.relative_to(p.agent_plugins)
             add(Document(f"plugin/{rel}", "Machine", f"Plugin {rel}", path, True))
 
-        for kind, rows in self.session.list_items().items():
+        for kind, rows in self.session.layer_rows().items():
             for row in rows:
                 if row["directory"]:
                     one = documents._SINGULAR[kind]

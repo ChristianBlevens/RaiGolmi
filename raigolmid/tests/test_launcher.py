@@ -288,6 +288,15 @@ def test_an_exec_whose_caller_timed_out_is_ended_not_left_running(launcher, scri
     assert _exit_of(launcher, script) == code
 
 
+def test_an_exec_that_times_out_says_what_it_printed(launcher):
+    """What a hung command printed before it hung is most often why it hung."""
+    with pytest.raises(LauncherTimeout) as timed_out:
+        launcher.exec(["/bin/sh", "-c", "echo waiting-on-lock; echo no-tty >&2; sleep 30"],
+                      cwd="/tmp", timeout=0.5)
+    said = str(timed_out.value)
+    assert "waiting-on-lock" in said and "no-tty" in said
+
+
 def test_an_exec_whose_output_a_background_job_holds_says_the_job_was_stopped(
         launcher, tmp_path):
     """`&` after a `&&` list backgrounds the whole list, whose shell keeps the output open

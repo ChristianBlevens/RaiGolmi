@@ -112,6 +112,17 @@ def test_history_is_scoped_to_one_instance(api):
         "an agent must see its own instance's history and its body's builds, not the machine's"
 
 
+@pytest.mark.parametrize("n", [0, -1])
+def test_fewer_than_one_event_is_refused_as_no_question(api, n):
+    client, h = api
+    sandbox = h.open_sandbox("myapi", "python-dev")
+    with pytest.raises(ApiError, match=f"at least 1, not {n}"):
+        client.call("history", instance_id=sandbox, n=n)
+    with pytest.raises(ApiError, match=f"at least 1, not {n}"):
+        client.call("events", n=n)
+    assert not h.events_of("api.error"), "a refusal, not a daemon fault"
+
+
 def test_the_socket_is_owner_only(api):
     client, _ = api
     assert client.socket_path.stat().st_mode & 0o777 == 0o600

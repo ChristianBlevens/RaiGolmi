@@ -908,11 +908,17 @@ class Faces:
         while _views(nested.tree()) and time.monotonic() < deadline:
             time.sleep(POLL)
 
-    def reopen(self, windows: list[dict[str, Any]]) -> list[list[str]]:
+    def reopen(self, windows: list[dict[str, Any]]) -> dict[str, Any]:
         """Each of `windows` the restarted face has not opened itself, started again with the
-        environment it had. The face's own start-up opens windows after it is up, so what it
-        opened is read once no window has mapped for `SETTLE` seconds. The editor window is the
-        daemon's to open, and is left to it."""
+        environment it had, and then what is open read back rather than assumed. The face's
+        own start-up opens windows after it is up, so what it opened is read once no window
+        has mapped for `SETTLE` seconds; what was started again is waited on until its window
+        maps or `START_TIMEOUT` passes. The editor window is the daemon's to open, and is left
+        to it.
+
+        The answer: `open`, every window on the face once that wait is over; `reopened`, those
+        started again here whose window is among them; `missing`, those of `windows` with no
+        window open, by command."""
         state = self.current()
         if state is None:
             raise FaceError("no face is running to open the windows in")
@@ -928,11 +934,13 @@ class Faces:
             events.close()
         present = collections.Counter(tuple(w["command"]) for w in self.windows())
         editor = str(self.paths.editor_socket)
-        reopened = []
+        wanted: collections.Counter[tuple[str, ...]] = collections.Counter()
+        spawned: list[list[str]] = []
         for window in windows:
             command = window["command"]
             if not command or any(editor in arg for arg in command):
                 continue
+            wanted[tuple(command)] += 1
             if present[tuple(command)]:
                 present[tuple(command)] -= 1
                 continue
@@ -942,8 +950,24 @@ class Faces:
             self.runtime.spawn(state.container,
                                ["sh", "-c", 'exec "$@" >/dev/null 2>&1', "sh", *command],
                                environment=environment)
-            reopened.append(command)
-        return reopened
+            spawned.append(command)
+        deadline = time.monotonic() + START_TIMEOUT
+        while True:
+            now_open = self.windows()
+            missing = wanted - collections.Counter(tuple(w["command"]) for w in now_open)
+            if not missing or time.monotonic() > deadline:
+                break
+            time.sleep(POLL)
+        unmapped = missing.copy()
+        reopened = []
+        for command in spawned:
+            if unmapped[tuple(command)]:
+                unmapped[tuple(command)] -= 1
+            else:
+                reopened.append(command)
+        return {"open": [{"app": w["app"], "title": w["title"], "command": w["command"]}
+                         for w in now_open],
+                "reopened": reopened, "missing": [list(c) for c in missing.elements()]}
 
     def _proc(self, state: FaceRuntimeState, pid: int, name: str) -> list[str]:
         result = self.runtime.exec(state.container, ["cat", f"/proc/{pid}/{name}"])
