@@ -13,7 +13,7 @@ T0 = 1_800_000_000.0
 HEALTHY = {"reachable": True, "daemon": "active", "restarts": 0, "line_out": None,
            "held": False, "hold": None,
            "run_active": True, "last_event": {"type": "agent.busy", "age_s": 30},
-           "faults": [], "faults_error": None}
+           "faults": [], "faults_error": None, "plan": None}
 FAULT = {"id": "fault-1", "title": "jobs of an earlier tab no tab can stop",
          "body": "job_stop: no such job", "affects": ["tab-2"], "status": "open"}
 
@@ -51,15 +51,18 @@ class World:
         return ("ready", "") if self.signed_in else ("signed_out", "it has no sign-in")
 
     def tell(self, args: list[str]) -> dict:
-        """raigolmid's faults.py as `rai keeper` reaches it: a taken fault is still listed, an
-        answered one is not."""
+        """raigolmid's faults.py as `rai keeper` reaches it: a taken or deferred fault is still
+        listed, one answered otherwise is not."""
         self.told.append(args)
         if not self.vm_answers:
             return {"ok": False, "error": "TimeoutError: timed out"}
         if args[0] == "take":
             self.vm["faults"] = [{**f, "status": "taken"} if f["id"] == args[1] else f
                                  for f in self.vm["faults"]]
-        if args[0] == "answer":
+        if args[0] == "answer" and args[2] == "deferred":
+            self.vm["faults"] = [{**f, "status": "deferred"} if f["id"] == args[1] else f
+                                 for f in self.vm["faults"]]
+        elif args[0] == "answer":
             self.vm["faults"] = [f for f in self.vm["faults"] if f["id"] != args[1]]
         return {"ok": True, "result": {}}
 
@@ -315,18 +318,44 @@ def test_gave_up_with_sessions_spent_keeps_asking_to_start(world: World) -> None
     assert len(world.sessions) == k.SESSIONS_PER_INCIDENT
 
 
-def test_sessions_are_bounded_per_day_across_incidents(world: World) -> None:
+def plan(course: float) -> dict:
+    return {"status": "allowed", "read_at": T0, "windows": {
+        "7d": {"used": 0.3, "resets_at": T0 + 86400, "passed": 0.5, "on_course_for": 0.6},
+        "5h": {"used": 0.5, "resets_at": T0 + 3600, "passed": 0.5, "on_course_for": course}}}
+
+
+def test_a_fault_waits_deferred_while_the_plan_is_past_its_course_then_is_taken_up(world: World) -> None:
     world.launcher("running")
-    for n in range(3):
+    world.vm = {**HEALTHY, "faults": [FAULT], "plan": plan(1.4)}
+    report = world.check()
+    assert world.sessions == [] and report["state"] == "held"
+    assert world.told[-1][:3] == ["answer", "fault-1", "deferred"]
+    assert "5h window is on course for 1.4" in world.told[-1][3]
+    told = len(world.told)
+    world.check(after=k.CHECK_SECONDS)
+    assert len(world.told) == told, "deferred once, not at every check"
+    assert world.pushes == [], "waiting on the plan is not a failure"
+    world.vm["plan"] = plan(0.9)
+    world.verdict = k.FIXED
+    world.check(after=k.CHECK_SECONDS)
+    assert len(world.sessions) == 1, "taken up by the keeper itself, not filed again"
+    assert world.told[-1] == ["answer", "fault-1", "fixed"]
+
+
+def test_faults_are_not_bounded_by_a_day_count(world: World) -> None:
+    world.launcher("running")
+    world.verdict = k.FIXED
+    for n in range(6):
         world.vm = {**HEALTHY, "faults": [{**FAULT, "id": f"fault-{n}"}]}
         world.check(after=k.CHECK_SECONDS)
-        world.check(after=k.FAILING_SECONDS)
-    assert len(world.sessions) == k.SESSIONS_PER_DAY
-    assert world.told[-1][:3] == ["answer", "fault-2", "not_fixed"]
-    assert "sessions for the day are spent" in world.told[-1][3]
-    world.vm = {**HEALTHY, "faults": [{**FAULT, "id": "fault-3"}]}
-    world.check(after=k.DAY)
-    assert len(world.sessions) == k.SESSIONS_PER_DAY + 1, "the window frees"
+    assert len(world.sessions) == 6
+
+
+def test_a_machine_down_never_waits_on_the_plan(world: World) -> None:
+    world.launcher("gave_up")
+    world.vm = {**HEALTHY, "plan": plan(3.0)}
+    world.check()
+    assert len(world.sessions) == 1
 
 
 def test_a_daemon_crash_loop_is_failing_and_one_restart_is_not(world: World) -> None:

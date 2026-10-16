@@ -22,7 +22,7 @@ system prompt) with the evidence it gathered. The rules:
   scheduled door takes it), and the failure is acted on only if the launcher is still gone
   `START_GRACE_SECONDS` later;
 - while a launcher that gave up or is gone gets no session (its incident's sessions are spent,
-  the day's are, or Claude Code cannot run), a `start` request is written again every
+  or Claude Code cannot run), a `start` request is written again every
   `START_RETRY_SECONDS`: the door ignores `gave_up`, so nothing else would start it;
 - a launcher stuck in one of its transitional states for `TRANSITION_SECONDS` is failing;
 - the VM unreachable by ssh, raigolmid not active or restarted by systemd `DAEMON_RESTARTS` times
@@ -37,25 +37,27 @@ system prompt) with the evidence it gathered. The rules:
   `fixed`; or `not_fixed` with the verdict's words once the incident's sessions are spent (with
   the alert below) or Claude Code cannot run. The answer ends the incident; one the VM did not
   take is sent again at each check until it is;
+- a fault spends the plan the run works on, so it is paced as every tab is (`plan`,
+  raigolmid's `limits.plan_view`): while a window is on course past its allowance it waits,
+  answered `deferred` with the window and its reset, and is taken up by the keeper itself once
+  the course is back within it. A machine down never waits;
 - any other failure is acted on once it has lasted `FAILING_SECONDS`, and again that long after
   each session, so what a session started (an upgrade, a restart) has time to take;
 - an incident is the stretch from the first failing check to the next healthy, closed or held
   one. It gets at most `SESSIONS_PER_INCIDENT` sessions, each after the first handed the logs of
-  those before, and all incidents together at most `SESSIONS_PER_DAY` in any 24 hours. A
-  session that never had an answer from Claude (an API error, the network) does not count; one
+  those before. A session that never had an answer from Claude (an API error, the network) does not count; one
   that the API refused for its sign-in stops sessions until the sign-in changes;
 - Claude Code runs on the machine's own agent credential (`MACHINE_CREDENTIAL`), copied to
   `Paths.credential` at each probe that reaches the VM, so it follows the owner's sign-in there
   and outlasts a VM that does not answer; the keeper has no sign-in of its own;
-- the person near the machine gets an ntfy alert when sessions cannot fix it (spent, the day's
-  spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
+- the person near the machine gets an ntfy alert when sessions cannot fix it (spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
   alert title at most once in `REALERT_SECONDS` across incidents, and "working again" once the
   machine is healthy after one. None is sent while raigolmid's line out has already told them
   a cause (`line-out.json`) during the incident: theirs is the word that stands.
 
 keeper/outbox/keeper.json is written each check: the state, the open incident with its sessions
 (each resumable from the keeper's terminal by the `resume` command it records), the sessions of
-the last day, and the alerts. It is also the keeper's memory across a restart of its container.
+and the alerts. It is also the keeper's memory across a restart of its container.
 The loop's log goes to keeper/outbox/keeper.log as well as stderr.
 
     python3 keeper.py                         the loop (the container's entrypoint)
@@ -118,10 +120,6 @@ DAEMON_RESTART_WINDOW = 30 * 60
 # A second session sees the first's log; a third would repeat what two could not do, so the
 # person is told instead.
 SESSIONS_PER_INCIDENT = 2
-# Sessions spend the plan the run itself works on. Two incidents' sessions in one day is a
-# machine failing for a cause sessions are not reaching, and more would spend the run's usage
-# on it; counted over all incidents, since each fault is an incident of its own.
-SESSIONS_PER_DAY = 2 * SESSIONS_PER_INCIDENT
 DAY = 24 * 3600
 # A session that never had an answer from Claude spent nothing, and an outage or a network
 # down for less than a day passes on its own; a day of them is told (raigolmid lineout.py's
@@ -354,6 +352,7 @@ print(json.dumps({
     "restarts": restarts,
     "line_out": json.loads(line_out.read_text()) if line_out.exists() else None,
     "faults": json.loads(seen.stdout)["faults"] if seen.returncode == 0 else None,
+    "plan": json.loads(seen.stdout)["plan"] if seen.returncode == 0 else None,
     "faults_error": None if seen.returncode == 0 else (seen.stdout + seen.stderr).strip()[-2000:],
     "last_event": None if last is None else {"type": last["type"], "age_s": round(time.time() - last["ts"])},
     "held": hold is not None and hold["type"] == "account.limited",
@@ -583,6 +582,20 @@ ALERT_FAULT = (
 ALERT_RECOVERED = ("RaiGolmi is working again", "RaiGolmi is working again. Nothing to do.")
 
 
+def past_course(plan: dict[str, Any] | None) -> str | None:
+    """The plan's window furthest on course past its allowance, in words, or None when every
+    window is within it (or the plan has never been read: nothing says to wait)."""
+    if plan is None:
+        return None
+    over = [(w["on_course_for"], name, w["resets_at"]) for name, w in plan["windows"].items()
+            if w.get("on_course_for") is not None and w["on_course_for"] > 1]
+    if not over:
+        return None
+    course, name, resets_at = max(over)
+    return (f"the plan's {name} window is on course for {course} of its allowance, so a "
+            f"session now would cut the run off before it resets at {iso(resets_at)}")
+
+
 def counted(incident: dict[str, Any]) -> int:
     """The incident's sessions that count toward SESSIONS_PER_INCIDENT: each one Claude answered
     without an API error. One kept from before `counted` was recorded counts."""
@@ -612,8 +625,6 @@ class Keeper:
         self.alerted: dict[str, float] = {}
         # A machine-down alert went out and "working again" has not followed it.
         self.owed_recovery = False
-        # When each session that Claude answered started, for SESSIONS_PER_DAY.
-        self.session_starts: list[float] = []
         # The fingerprint of the token the API refused; no session runs on it again.
         self.refused_token: str | None = None
         # The launcher's transitional state and when the keeper first saw it.
@@ -633,7 +644,6 @@ class Keeper:
             # A keeper.json from before these were kept has none of them, which is what it says.
             self.alerted = kept.get("alerted", {})
             self.owed_recovery = kept.get("owed_recovery", False)
-            self.session_starts = kept.get("session_starts", [])
             self.refused_token = kept.get("refused_token")
             if self.incident is not None:
                 self.incident.setdefault("unreached_since", None)
@@ -696,6 +706,10 @@ class Keeper:
         faults = [f for f in vm["faults"] if f["id"] not in self.unanswered]
         if faults:
             fault = faults[0]
+            over = past_course(vm["plan"])
+            if over is not None:
+                self._defer(fault, over)
+                return Seen("held", f"fault {fault['id']} waits: {over}")
             return Seen("failing", f"the machine tab reported a fault in RaiGolmi: {fault['title']}",
                         {**evidence, "fault": fault}, act_now=True)
         return Seen("healthy")
@@ -763,12 +777,6 @@ class Keeper:
             # A fault's answer goes with its last session, so only a machine down is here.
             self._cannot_fix(incident, seen, ALERT_NOT_FIXED, "", now)
             return
-        self.session_starts = [t for t in self.session_starts if now - t < DAY]
-        if len(self.session_starts) >= SESSIONS_PER_DAY:
-            logger.warning("no session: %d sessions in the last day", len(self.session_starts))
-            self._cannot_fix(incident, seen, ALERT_NOT_FIXED, f"the keeper's {SESSIONS_PER_DAY} "
-                             "sessions for the day are spent", now)
-            return
         kind, why = self.ready(self.refused_token)
         if kind == "signed_out":
             self._cannot_fix(incident, seen, ALERT_SIGNED_OUT, f"the keeper's Claude Code cannot run: {why}", now)
@@ -832,8 +840,6 @@ class Keeper:
         outcome = self.runner(self.prompt(incident, session_id, notes), session_id, log)
         ended = self.clock()
         counts = outcome["unreached"] is None and not outcome["signed_out"]
-        if outcome["reached"]:
-            self.session_starts.append(now)
         incident["sessions"].append({
             "id": session_id, "started": iso(now), "ended": iso(ended), "log": str(log),
             "notes": str(notes), "verdict": outcome["verdict"], "counted": counts,
@@ -864,6 +870,20 @@ class Keeper:
                      .removeprefix("not fixed:").strip() or outcome["verdict"])
             self._answer(fault["id"], "fixed" if fixed else "not_fixed", "" if fixed else words,
                          ended)
+
+    def _defer(self, fault: dict[str, Any], over: str) -> None:
+        """A fault the plan cannot pay for yet stays filed, and the machine tab is told why and
+        that the keeper takes it up itself; said once, and again only if the VM did not take it."""
+        if fault["status"] == "deferred":
+            return
+        told = self.tell(["answer", fault["id"], "deferred",
+                          f"{over}. The keeper takes it up itself once the plan's course is back "
+                          f"within its allowance, by that reset at the latest."])
+        if told["ok"]:
+            logger.info("deferred fault %s: %s", fault["id"], over)
+        else:
+            logger.warning("fault %s's deferral did not reach the VM; said again next check: %s",
+                           fault["id"], told["error"])
 
     def _answer(self, fault_id: str, verdict: str, words: str, now: float) -> None:
         """The fault's answer to the machine tab, which ends its incident."""
@@ -941,7 +961,7 @@ class Keeper:
             "at": iso(now), "state": self.state, "why": self.why, "incident": self.incident,
             "last_incident": self.last_incident, "last_alert": self.last_alert,
             "alerted": self.alerted, "owed_recovery": self.owed_recovery,
-            "session_starts": self.session_starts, "refused_token": self.refused_token,
+            "refused_token": self.refused_token,
             "unanswered": self.unanswered})
 
 

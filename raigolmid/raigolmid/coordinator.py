@@ -939,9 +939,8 @@ def methods(session: "Session", questions: Questions, channels: Channels,
                 "`resume` the tabs you paused for it when it says the fix is in.")}
         store.told_stranded(fault["id"], caller)    # this answer is the telling
         return {"fault": fault["id"], "keeper": "unreachable", "next": (
-            f"Filed, but no keeper is reachable ({when}): write it up for the user in "
-            "/transfer/out as before. A keeper that comes back takes it, and you are told "
-            "its answer.")}
+            f"Filed, but no keeper is reachable ({when}): work around it. A keeper that "
+            "comes back takes it, and you are told its answer.")}
 
     def document_save(id: str, text: str, version: str | None = None) -> dict[str, Any]:
         """Every tab reads the catalog (`library.served_to_tabs`); the machine's documents are

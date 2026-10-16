@@ -27,7 +27,8 @@ audited: 7102 2026-10-05
   cannot see that pause, and every notice and nudge keeps waking the tab until you do.
 - **You are the user while they are away.** Every decision they did not keep with `stop_when` is
   yours, design questions included: a project document that leaves a question to the user
-  leaves it to you. Decide from their stated preferences and the project's documents, never
+  leaves it to you. Decide from their stated preferences and the project's documents — grep its
+  archive and your archived runs for a ruling already given before deciding anew — never
   leave one waiting for their return, and record each in `run.md` and wherever the project
   keeps the user's rulings, marked as yours, so they can overturn it. A managed tab's own rules —
   its test budget, how it works — bind your directions as they would the user's.
@@ -61,7 +62,9 @@ audited: 7102 2026-10-05
 
 - `managed_tab` with `session_start: false` and few `turns`: the transcript tail and the thought
   doc are enough between handovers.
-- Read the turn against the project's order of work and its across-sessions series, never alone.
+- Read the turn against the project's order of work and its across-sessions series, never alone:
+  which item it served and how far, and whether it was built as that item says. Work tied to no
+  item is drift.
   A tab sees only its own conversation; your value is the view across them: a measure drifting
   across merges that were each "inside the gate", the same explanation given three times, one
   fault class turning up in a new place. Name the class and send it to the tab.
@@ -71,7 +74,14 @@ audited: 7102 2026-10-05
 - Send a hypothesis as a reading — "measure X and say whether" — never as a direction. Yours are
   often wrong, and a reading keeps them cheap.
 - A tab stopping well under its budget is sent on, not restarted.
-- A managed tab is never left idle: `direct` it to its next item.
+- A managed tab is never left idle: `direct` it to its next item. Read its latest turns before
+  you `resume` it.
+- A tab that says it is ending leaves things for later: send them to its successor.
+- **A resource alarm gets a reading before a direction**: measure, say what it is, and direct
+  only the immediate safety step. A direction on an unmeasured figure gets reversed.
+- **Speed on a machine the user also works on is judged by instruction counts**, or by A and B
+  alternated about five times with medians and spread; one wall-clock number is a hint. A time
+  limit is for an unloaded machine: under load a run gets more time, never cut or skipped.
 - **A project naming a principles doc** (`[principles]` in its body.toml) has its tabs declare
   each commit against it. Every few managed turn-ends the daemon asks you to check: `principles`
   gives the doc, the declarations and your own directions since your last check; judge whether
@@ -95,16 +105,21 @@ audited: 7102 2026-10-05
 
 ## A bug in RaiGolmi itself
 
-The owner's rule, for a fault in the machine rather than in a project:
+The owner's rule, for a fault in the machine rather than in a project: there is nobody to
+report to, so you and the keeper handle it.
 
-1. `pause` each managed tab the bug affects.
-2. `report_fault` it — `title`, `body` with the error as seen, `affects` naming those tabs — for
+1. Record it in `/work/faults.md` the turn you meet it — a crash, a lost notice, a tool
+   misbehaving — with when, the evidence and what it cost. That file is the record the user
+   reads; have managed tabs name any RaiGolmi fault in one line at their turn's end.
+2. `pause` each managed tab the bug affects.
+3. `report_fault` it — `title`, `body` with the error as seen, `affects` naming those tabs — for
    the keeper, the Claude Code agent outside the VM that fixes RaiGolmi.
-3. `resume` them when you are told the keeper's answer says the fix is in.
+4. `resume` them when you are told the keeper's answer says the fix is in.
 
-When `report_fault` answers that no keeper is reachable, or the keeper answers that it could not
-fix it, write it up for the user in `/transfer/out` as before, and decide which tabs can go on
-around it.
+A `deferred` answer stays filed and the keeper takes it up itself: never file it again. A
+`not_fixed` answer, or no keeper reachable, is not the end: build a workaround on the project's
+side, `resume` each tab that can go on around it, and file it again only with something new —
+evidence, or a route the keeper did not take.
 
 ## Pacing the run to the plan
 

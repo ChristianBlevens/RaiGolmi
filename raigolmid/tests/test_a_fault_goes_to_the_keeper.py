@@ -34,7 +34,7 @@ def test_a_fault_is_filed_and_says_whether_a_keeper_is_reachable(h):
     m.tab(MACHINE)["manage"](tab=BODY)
     first = m.tab(MACHINE)["report_fault"](title="jobs leak", body="job_stop: no such job",
                                            affects=[BODY])
-    assert first["keeper"] == "unreachable" and "/transfer/out" in first["next"]
+    assert first["keeper"] == "unreachable" and "work around it" in first["next"]
     assert "ever looked" in first["next"]
     api = keeper(h, m)
     [listed] = api["keeper_seen"]()["faults"]
@@ -79,6 +79,24 @@ def test_the_keepers_answer_reaches_the_machine_tab_naming_the_tabs_to_resume(h)
     assert len(told_of(m, MACHINE, id)) == 1
 
 
+def test_a_deferred_fault_stays_the_keepers_and_its_later_answer_is_told_too(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    id = m.tab(MACHINE)["report_fault"](title="no swapchain", body="create_swapchain_khr",
+                                        affects=[BODY])["fault"]
+    api = keeper(h, m)
+    assert "plan" in api["keeper_seen"](), "the keeper paces faults by the plan"
+    with pytest.raises(SessionError, match="says in words"):
+        api["keeper_answer"](id=id, verdict="deferred")
+    api["keeper_answer"](id=id, verdict="deferred", words="the 5h window is on course for 1.4")
+    [told] = told_of(m, MACHINE, id)
+    assert "deferred" in told and "do not file it again" in told
+    assert [f["status"] for f in api["keeper_seen"]()["faults"]] == ["deferred"]
+    assert api["keeper_take"](id=id)["status"] == "taken"
+    api["keeper_answer"](id=id, verdict="fixed")
+    assert "fix is in" in told_of(m, MACHINE, id)[-1]
+
+
 def test_an_answer_after_a_machine_tab_handover_reaches_its_successor(h):
     m = Machine(h)
     m.tab(MACHINE)["manage"](tab=BODY)
@@ -92,7 +110,7 @@ def test_an_answer_after_a_machine_tab_handover_reaches_its_successor(h):
     assert successor != MACHINE
     keeper(h, m)["keeper_answer"](id=id, verdict="not_fixed", words="the channel loses seq")
     [told] = told_of(m, successor, id)
-    assert "could not fix" in told and "the channel loses seq" in told and "/transfer/out" in told
+    assert "could not fix" in told and "the channel loses seq" in told and "Work around it" in told
     assert faults.Faults(h.paths, h.events).get(id)["told"] == successor
 
 
@@ -108,6 +126,6 @@ def test_a_fault_left_waiting_by_a_keeper_gone_is_said_once_with_the_fallback(h)
     gone = time.time() + faults.SEEN_SECONDS + 1
     m.coordinator.tick(gone)
     [told] = told_of(m, MACHINE, id)
-    assert "no keeper is reachable" in told and "/transfer/out" in told and BODY in told
+    assert "no keeper is reachable" in told and "Work around it" in told and BODY in told
     m.coordinator.tick(gone + 60)
     assert len(told_of(m, MACHINE, id)) == 1, "said once"

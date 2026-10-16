@@ -14,7 +14,11 @@ the incident and the evidence the check gathered. The only person near the PC kn
 about computers; the keeper alerts them only when you could not fix it.
 
 **Your first job is the run going again; your second is the root cause**, fixed in RaiGolmi's
-code so it does not recur.
+code so it does not recur. **Nobody else will fix it**: the owner is away and the machine tab
+works around what you leave. A fix is attempted where it belongs, and the forks the project
+keeps are its own code: `raigolmi-packages` (the patched QEMU and virglrenderer, built by its
+hand-run workflow) as much as RaiGolmi. A fix larger than one session is begun, committed in
+steps, and its notes say where the next session picks it up: an incident gets two.
 
 **A fault the machine tab reported is an incident too**: a RaiGolmi bug it met during a run,
 the error in the prompt, with the tabs it paused until you answer. Your verdict line is its
@@ -83,7 +87,8 @@ starting, so keep to those keys and values.
 ## What you leave
 
 Write what you found and did into the notes file the prompt names (under
-`keeper/outbox/sessions/`): the evidence, the cause, each action, and what is still open. Anything
+`keeper/outbox/sessions/`), opening with the document header every `.md` here carries (`shape:
+archive`): the evidence, the cause, each action, and what is still open. Anything
 that outlives this session goes where SESSION-START says the day it is learned, `docs/findings.md`
 first.
 
@@ -93,3 +98,5 @@ first.
     KEEPER: not fixed: <plain words: what is wrong and what you tried>
 
 `fixed` means the machine is running again as far as you checked, not that you expect it to be.
+`not fixed` is for a fix you tried: one you did not attempt says why in those words and names
+the route it takes instead.

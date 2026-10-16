@@ -7,19 +7,23 @@ fault is one JSON file under `Paths.faults`, named by its id, whose `status` is
     open       filed, not yet taken
     taken      a keeper session is working on it
     fixed      the keeper says the fix is in
-    not_fixed  the keeper could not fix it, and says why in `answer`
+    deferred   the keeper will take it up itself later, and says when and why in `answer`
+    not_fixed  the keeper tried and could not fix it, and says why in `answer`
 
 The keeper reaches the daemon over ssh through `rai keeper`: every probe of its loop says it
 looked (`seen`, kept in `Paths.keeper`) and is answered with the faults open or taken; it
-`take`s one before a session on it and `answer`s it with that session's verdict. An answer is
-`fault.answered`, which the coordinator delivers to the machine tab, or to whichever machine tab
-opens next when none is open; one handed over is carried to its successor by the channel.
+`take`s one before a session on it and `answer`s it with that session's verdict. A fault it
+cannot work yet (the plan's usage, `keeper.py`) is answered `deferred` and stays waiting, so
+nobody files it again. An answer is `fault.answered`, which the coordinator delivers to the
+machine tab, or to whichever machine tab opens next when none is open; one handed over is
+carried to its successor by the channel.
 
 A keeper is reachable while it looked within `SEEN_SECONDS`, or is in a session it said may last
 longer (`busy_seconds`), since its loop does not look while a session runs. `report_fault` says
-when none is, so the machine tab falls back to its report in /transfer/out; and a fault still
-waiting when its keeper stops being reachable is said to the machine tab once the same way
-(`stranded`), since the tabs it paused for it would otherwise wait on an answer nobody gives.
+when none is; and a fault still waiting when its keeper stops being reachable is said to the
+machine tab once (`stranded`), since the tabs it paused for it would otherwise wait on an answer
+nobody gives. Nobody is there to report to while a run goes on: what the keeper cannot fix the
+machine tab works around.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ from typing import Any
 
 from .events import EventLog
 from .intent import load_json, save_json
+from .limits import plan_view
 from .paths import Paths
 from .session import SessionError
 
@@ -40,8 +45,8 @@ logger = logging.getLogger(__name__)
 # The keeper looks every minute while the launcher runs the VM (keeper/keeper.py
 # CHECK_SECONDS); five looks missed is a keeper that is gone, not one that is slow.
 SEEN_SECONDS = 5 * 60
-WAITING = ("open", "taken")
-VERDICTS = ("fixed", "not_fixed")
+WAITING = ("open", "taken", "deferred")
+VERDICTS = ("fixed", "not_fixed", "deferred")
 
 # Every Faults reads and writes the same files; one daemon process holds them.
 _lock = threading.Lock()
@@ -99,11 +104,13 @@ class Faults:
 
     # --- the keeper -----------------------------------------------------------------------
     def seen(self, busy_seconds: float = 0) -> dict[str, Any]:
-        """The keeper looked, and will not look again for up to `busy_seconds` (a session)."""
+        """The keeper looked, and will not look again for up to `busy_seconds` (a session); it
+        is answered with the faults waiting and the plan it paces them by."""
         now = time.time()
         with _lock:
             save_json(self.paths.keeper, {"seen": now, "busy_until": now + busy_seconds})
-        return {"faults": [f for f in self.all() if f["status"] in WAITING]}
+        return {"faults": [f for f in self.all() if f["status"] in WAITING],
+                "plan": plan_view(load_json(self.paths.plan, "plan"), now)}
 
     def take(self, id: str, busy_seconds: float = 0) -> dict[str, Any]:
         with _lock:
@@ -123,6 +130,8 @@ class Faults:
             raise SessionError(f"a verdict is one of {', '.join(VERDICTS)}, not {verdict!r}")
         if verdict == "not_fixed" and not words.strip():
             raise SessionError("`not_fixed` says in words what is wrong and what was tried")
+        if verdict == "deferred" and not words.strip():
+            raise SessionError("`deferred` says in words why and when the keeper takes it up")
         with _lock:
             fault = self.get(id)
             if fault["status"] == verdict:
@@ -131,6 +140,7 @@ class Faults:
                 raise SessionError(f"fault {id} is answered already ({fault['status']})")
             fault["status"], fault["answered_at"] = verdict, time.time()
             fault["answer"] = words.strip() or None
+            fault["told"] = None
             self._save(fault)
         self.events.emit("fault.answered", id=id, verdict=verdict, answer=fault["answer"])
         logger.info("fault %s answered by the keeper: %s", id, verdict)
@@ -162,9 +172,11 @@ class Faults:
             self._save(fault)
 
 
-def _not_fixed(tabs: str) -> str:
-    return (f"Write it up for the user in /transfer/out as before. Whether the tabs you paused "
-            f"for it ({tabs}) can go on around it is yours to decide; `resume` each that can.")
+def _around(tabs: str) -> str:
+    return (f"Work around it: whether the tabs you paused for it ({tabs}) can go on around it is "
+            f"yours to decide; `resume` each that can. Record it in your faults log, and file it "
+            f"again only with something new about it, since a fault filed again is worked from "
+            f"the start.")
 
 
 def answer_message(fault: dict[str, Any]) -> str:
@@ -173,13 +185,17 @@ def answer_message(fault: dict[str, Any]) -> str:
     if fault["status"] == "fixed":
         return (f"The keeper fixed fault {fault['id']} ({fault['title']}): the fix is in. "
                 f"`resume` the tabs you paused for it ({tabs}).")
-    return (f"The keeper could not fix fault {fault['id']} ({fault['title']}): "
-            f"{fault['answer']}\n\n" + _not_fixed(tabs))
+    if fault["status"] == "deferred":
+        return (f"The keeper deferred fault {fault['id']} ({fault['title']}): "
+                f"{fault['answer']}\n\nIt stays filed and the keeper takes it up itself; do not "
+                f"file it again. You are told its answer. " + _around(tabs))
+    return (f"The keeper tried and could not fix fault {fault['id']} ({fault['title']}): "
+            f"{fault['answer']}\n\n" + _around(tabs))
 
 
 def stranded_message(fault: dict[str, Any], when: str) -> str:
     """A fault still waiting with no keeper reachable, as the machine tab is told it."""
     tabs = ", ".join(fault["affects"]) or "none named"
     return (f"From the daemon: no keeper is reachable for fault {fault['id']} "
-            f"({fault['title']}) — {when} — so it is not being fixed. " + _not_fixed(tabs)
+            f"({fault['title']}) — {when} — so it is not being fixed. " + _around(tabs)
             + " A keeper that comes back takes it, and you are told its answer.")

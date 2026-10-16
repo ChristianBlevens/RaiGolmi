@@ -1346,8 +1346,9 @@ def cmd_agent_activity(args) -> int:
     hook = json.load(sys.stdin)
     from raigolmid.transcript import main_rows, undeclared_documents
     # Its own thought doc is the conversation's record, never declared; a doc it cannot write
-    # (the guide, a read-only layer), or one in a body another tab has, is not its to keep:
-    # that body is its tab's (the primer's "Which tab you are"). The janitor keeps the machine.
+    # (the guide, a read-only layer) or that is gone (`report_run` files `run.md` away), or one
+    # in a body another tab has, is not its to keep: that body is its tab's (the primer's
+    # "Which tab you are"). The janitor keeps the machine.
     thoughts = str(Path.home() / "thoughts.md")
     others: tuple[str, ...] = ()
     owed = None
@@ -1616,7 +1617,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("keeper", help="the keeper outside the VM: it looked, takes a fault, "
                        "answers one")
     verbs = p.add_subparsers(dest="verb", required=True)
-    v = verbs.add_parser("seen", help="the faults open or taken")
+    v = verbs.add_parser("seen", help="the faults waiting, and the plan")
     v.add_argument("--busy", type=float, default=0,
                    help="seconds it may not look again for: a session")
     v = verbs.add_parser("take")
@@ -1624,7 +1625,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--busy", type=float, default=0)
     v = verbs.add_parser("answer")
     v.add_argument("id")
-    v.add_argument("verdict", choices=["fixed", "not_fixed"])
+    v.add_argument("verdict", choices=["fixed", "not_fixed", "deferred"])
     v.add_argument("words", nargs="?", default="")
     p.set_defaults(fn=cmd_keeper)
 
