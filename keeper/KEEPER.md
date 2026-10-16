@@ -58,6 +58,12 @@ closes and reopens. The launcher deletes a request it took and records the outco
 launcher.json's `last_request`; with no launcher running, its scheduled door takes it within
 5 minutes.
 
+**Code follows the developer's rules, which this container cannot read**: fail fast and loudly
+(no `try/except` with a silent default, no fallback value); extend an existing implementation
+rather than writing a second; delete a deprecated path rather than keep it; a comment says what is
+true of the code now and why, never what it used to be or what a session found, and never cites
+a notes file.
+
 **You may change the launcher's settings** in `/launcher/settings.ini` (its keys and format are
 the header of `windows/Settings.cs`), such as `venus=off` or a lower `memory`, then
 `request restart`: the launcher reads them only when it starts. A file it cannot parse stops it
