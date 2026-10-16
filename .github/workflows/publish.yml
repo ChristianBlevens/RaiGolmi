@@ -4,7 +4,10 @@
 #
 #   ghcr.io/<owner>/raigolmi:<commit>, :latest   the launcher and a compressed qcow2, an OCI
 #                                                 artifact of two files (oras), annotated with
-#                                                 the commit
+#                                                 the commit; `latest` only from main, and a
+#                                                 branch's own tag (machine/x -> machine-x) from
+#                                                 any other, which the machines following it
+#                                                 install (setup.ps1, state\channel.txt)
 #   ghcr.io/<owner>/raigolmi:host-<commit>       the bootc host image; a machine already
 #                                                 installed switches to it to upgrade
 #
@@ -66,6 +69,9 @@ jobs:
         run: |
           echo "PACKAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/raigolmi" >> "$GITHUB_ENV"
           echo "HOST_TAG=host-${{ github.sha }}" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF" = refs/heads/main ]; then channel=latest
+          else channel="${GITHUB_REF_NAME//\//-}"; fi
+          echo "CHANNEL=$channel" >> "$GITHUB_ENV"
 
       # The build context is the repository root: the Containerfile installs raigolmid and
       # ui from source, both of which live above host/.
@@ -154,4 +160,4 @@ jobs:
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             RaiGolmi.exe:application/vnd.microsoft.portable-executable \
             raigolmi.qcow2:application/vnd.raigolmi.qcow2
-          oras tag "$PACKAGE:${{ github.sha }}" latest
+          oras tag "$PACKAGE:${{ github.sha }}" "$CHANNEL"

@@ -50,11 +50,23 @@ in the daemon), and the machine tab resumes its tabs on it.
 
 Everything SESSION-START allows a development session: read, edit, run targeted tests (pytest;
 `dotnet build` of a copy of `windows/` with `EnableWindowsTargeting`; every `.ps1` parsed with
-`pwsh` before a push), commit to main as `138273879+ChristianBlevens@users.noreply.github.com` /
-"Christian Blevens" (already the container's git identity), and push. **The owner grants the
-keeper what SESSION-START reserves for them**: publish a release when the fix needs one
-(`gh workflow run publish.yml -R ChristianBlevens/RaiGolmi`, then watch it go green with
-`gh run watch`), and the raigolmi-packages builds. Ask the launcher, never Windows directly:
+`pwsh` before a push), commit as `138273879+ChristianBlevens@users.noreply.github.com` /
+"Christian Blevens" (already the container's git identity), and push — **never to `main`**.
+RaiGolmi is public and `main` takes what the owner merges from the machines' branches.
+
+- **Your fixes live on this machine's branch, `machine/<login>`** (`gh api user --jq .login`,
+  lowercased), in your own clone `/root/RaiGolmi`, never in `/work/RaiGolmi`, which is the
+  owner's checkout on `main`. Before a fix, merge `origin/main` into the branch; a conflict is
+  yours to resolve.
+- **A release from it**: `gh workflow run publish.yml -R <the repo you push to> --ref
+  machine/<login>`, then `gh run watch` until it is green. It is tagged `machine-<login>`, never
+  `latest`. The first time, write `/launcher/channel.txt` as `<repo owner, lowercased>/raigolmi:machine-<login>`
+  so this machine's upgrades install your branch (`setup.ps1`); the owner of a fork makes its
+  package public once.
+- **The owner grants the keeper what SESSION-START reserves for them**: those releases, and the
+  raigolmi-packages builds (their fixes go on a `machine/<login>` branch there too).
+
+Ask the launcher, never Windows directly:
 
     python3 /work/RaiGolmi/keeper/keeper.py request start|restart|upgrade '<why>'
 
@@ -78,8 +90,9 @@ starting, so keep to those keys and values.
 
 - Work on the letthemrise project itself: that is the machine tab's, in the VM.
 - Delete or replace the disk (`disk/`), except through `upgrade`.
-- Edit anything in `/launcher` but `settings.ini`: `disk.txt`, `uefi-vars.fd`, `ssh_config` and
-  the keys are the launcher's.
+- Edit anything in `/launcher` but `settings.ini` and `channel.txt`: `disk.txt`,
+  `uefi-vars.fd`, `ssh_config` and the keys are the launcher's.
+- Commit in `/work/RaiGolmi`, or push to `main` of any repository.
 - Reboot the guest from inside over ssh. Restart through the launcher (`request restart`).
 - Leave a patched daemon running from an ssh session (SESSION-START § Carried in).
 - Start a machine the user closed: a launcher in `closed` is their decision.

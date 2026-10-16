@@ -15,6 +15,10 @@ $state = Join-Path $repo 'state'
 # The published release the machine runs (setup.ps1). A local build removes it: the machine
 # then runs what was built here.
 $releaseRecord = Join-Path $state 'release.txt'
+# The published release this machine follows, `<package>:<tag>` (setup.ps1): absent, the public
+# `latest`, built from main. A machine whose keeper publishes from its own branch follows that
+# branch's tag, in the keeper's own package when it is a fork's.
+$channelRecord = Join-Path $state 'channel.txt'
 
 # Each box is shown above every window: one that opened behind the console would leave setup
 # waiting on a question nobody can see. With setup.ps1's -Unattended (no other entry has it, so

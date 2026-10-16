@@ -16,10 +16,16 @@ trap {
           "this stopped.")
 }
 
-# Published by .github/workflows/publish.yml. `latest` (and `<commit>`) carry the launcher and
-# a fresh disk; `host-<commit>` is the host image a machine already installed upgrades to.
+# Published by .github/workflows/publish.yml. `latest` (main) or a branch's tag, and `<commit>`,
+# carry the launcher and a fresh disk; `host-<commit>` is the host image a machine already
+# installed upgrades to. Which one this machine follows is `$channelRecord`.
 $registry = 'ghcr.io'
-$package  = 'christianblevens/raigolmi'
+$channel  = if (Test-Path $channelRecord) { (Get-Content $channelRecord -Raw).Trim() } `
+            else { 'christianblevens/raigolmi:latest' }
+if ($channel -notmatch '^([a-z0-9._-]+/[a-z0-9._-]+):([A-Za-z0-9._-]+)$') {
+    Fail "$channelRecord says '$channel', not a release like 'christianblevens/raigolmi:latest'."
+}
+$package, $tag = $Matches[1], $Matches[2]
 
 # curl.exe, which Windows carries: it resumes a download, and drops the registry's token when
 # a blob redirects to the CDN that serves it. Its exit code is read, not its stderr.
@@ -30,23 +36,23 @@ function Curl-Json([string[]]$arguments) {
     return ($said -join "`n") | ConvertFrom-Json
 }
 
-# Anonymous: the package is public.
+# Anonymous: the package is public (a fork's too, once its owner makes it so).
 function Registry-Token {
     (Curl-Json @("https://$registry/token?scope=repository:${package}:pull")).token
 }
 
-# What `latest` names: the commit it was built from and its two files, by title.
-function Latest-Release([string]$token) {
+# What the channel's tag names: the commit it was built from and its two files, by title.
+function Channel-Release([string]$token) {
     $manifest = Curl-Json @('-H', "Authorization: Bearer $token",
                             '-H', 'Accept: application/vnd.oci.image.manifest.v1+json',
-                            "https://$registry/v2/$package/manifests/latest")
+                            "https://$registry/v2/$package/manifests/$tag")
     $files = @{}
     foreach ($layer in $manifest.layers) {
         $files[$layer.annotations.'org.opencontainers.image.title'] = $layer
     }
     $revision = $manifest.annotations.'org.opencontainers.image.revision'
     if (-not $revision -or -not $files['RaiGolmi.exe'] -or -not $files['raigolmi.qcow2']) {
-        Fail ("$registry/${package}:latest is not a release this script knows: it names commit " +
+        Fail ("$registry/${package}:$tag is not a release this script knows: it names commit " +
               "'$revision' and files '$($files.Keys -join ', ')'.")
     }
     return @{ Revision = $revision; Files = $files }
@@ -89,7 +95,7 @@ function Download([string]$token, $layer, [string]$target) {
 Install-Missing { Run-Prerequisites } 'setup.bat'
 
 $token   = Registry-Token
-$release = Latest-Release $token
+$release = Channel-Release $token
 $host_image = "$registry/${package}:host-$($release.Revision)"
 $installed = if (Test-Path $releaseRecord) { (Get-Content $releaseRecord -Raw).Trim() } else { '' }
 $short = $release.Revision.Substring(0, 12)
