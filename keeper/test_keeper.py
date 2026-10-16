@@ -324,22 +324,28 @@ def plan(course: float) -> dict:
         "5h": {"used": 0.5, "resets_at": T0 + 3600, "passed": 0.5, "on_course_for": course}}}
 
 
-def test_a_fault_waits_deferred_while_the_plan_is_past_its_course_then_is_taken_up(world: World) -> None:
+def test_a_fault_past_the_plans_course_is_worked_narrower_never_held(world: World) -> None:
     world.launcher("running")
     world.vm = {**HEALTHY, "faults": [FAULT], "plan": plan(1.4)}
-    report = world.check()
-    assert world.sessions == [] and report["state"] == "held"
+    world.verdict = k.FIXED
+    world.check()
+    assert len(world.sessions) == 1, "pacing never holds a repair back"
+    assert "5h window is on course for 1.4" in world.sessions[0] and "narrower" in world.sessions[0]
+
+
+def test_a_fault_under_the_usage_limit_is_deferred_once_then_taken_up(world: World) -> None:
+    world.launcher("running")
+    world.vm = {**HEALTHY, "faults": [FAULT], "held": True}
+    assert world.check()["state"] == "held" and world.sessions == []
     assert world.told[-1][:3] == ["answer", "fault-1", "deferred"]
-    assert "5h window is on course for 1.4" in world.told[-1][3]
     told = len(world.told)
     world.check(after=k.CHECK_SECONDS)
     assert len(world.told) == told, "deferred once, not at every check"
-    assert world.pushes == [], "waiting on the plan is not a failure"
-    world.vm["plan"] = plan(0.9)
+    world.vm["held"] = False
     world.verdict = k.FIXED
     world.check(after=k.CHECK_SECONDS)
-    assert len(world.sessions) == 1, "taken up by the keeper itself, not filed again"
-    assert world.told[-1] == ["answer", "fault-1", "fixed"]
+    assert len(world.sessions) == 1 and world.told[-1] == ["answer", "fault-1", "fixed"]
+    assert "narrower" not in world.sessions[0]
 
 
 def test_faults_are_not_bounded_by_a_day_count(world: World) -> None:
@@ -351,11 +357,6 @@ def test_faults_are_not_bounded_by_a_day_count(world: World) -> None:
     assert len(world.sessions) == 6
 
 
-def test_a_machine_down_never_waits_on_the_plan(world: World) -> None:
-    world.launcher("gave_up")
-    world.vm = {**HEALTHY, "plan": plan(3.0)}
-    world.check()
-    assert len(world.sessions) == 1
 
 
 def test_a_daemon_crash_loop_is_failing_and_one_restart_is_not(world: World) -> None:

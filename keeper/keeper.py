@@ -37,10 +37,10 @@ system prompt) with the evidence it gathered. The rules:
   `fixed`; or `not_fixed` with the verdict's words once the incident's sessions are spent (with
   the alert below) or Claude Code cannot run. The answer ends the incident; one the VM did not
   take is sent again at each check until it is;
-- a fault spends the plan the run works on, so it is paced as every tab is (`plan`,
-  raigolmid's `limits.plan_view`): while a window is on course past its allowance it waits,
-  answered `deferred` with the window and its reset, and is taken up by the keeper itself once
-  the course is back within it. A machine down never waits;
+- a session is paced as every tab is (`pace`, from the plan raigolmid's `limits.plan_view`
+  reads): a window on course past its allowance has it work narrower, never wait. Only the
+  account's usage limit holds a fault, as it holds every agent: it is answered `deferred`, so it
+  is not filed again, and taken up once the limit lifts;
 - any other failure is acted on once it has lasted `FAILING_SECONDS`, and again that long after
   each session, so what a session started (an upgrade, a restart) has time to take;
 - an incident is the stretch from the first failing check to the next healthy, closed or held
@@ -592,18 +592,20 @@ ALERT_FAULT = (
 ALERT_RECOVERED = ("RaiGolmi is working again", "RaiGolmi is working again. Nothing to do.")
 
 
-def past_course(plan: dict[str, Any] | None) -> str | None:
-    """The plan's window furthest on course past its allowance, in words, or None when every
-    window is within it (or the plan has never been read: nothing says to wait)."""
-    if plan is None:
-        return None
-    over = [(w["on_course_for"], name, w["resets_at"]) for name, w in plan["windows"].items()
-            if w.get("on_course_for") is not None and w["on_course_for"] > 1]
+def pace(plan: dict[str, Any] | None) -> str:
+    """How widely a session works, as every tab is told (raigolmid's `limits.plan_view`): the
+    plan's window furthest on course past its allowance narrows it; none, or no reading, leaves
+    it as wide as the repair needs. A repair is never held back for it."""
+    over = [] if plan is None else [
+        (w["on_course_for"], name, w["resets_at"]) for name, w in plan["windows"].items()
+        if w.get("on_course_for") is not None and w["on_course_for"] > 1]
     if not over:
-        return None
+        return ""
     course, name, resets_at = max(over)
-    return (f"the plan's {name} window is on course for {course} of its allowance, so a "
-            f"session now would cut the run off before it resets at {iso(resets_at)}")
+    return (f"The plan's {name} window is on course for {course} of its allowance before it "
+            f"resets at {iso(resets_at)}, and the run spends the same plan: work narrower — one "
+            "thing at a time, the cheapest check that settles it first, no speculative work — "
+            "but do the repair.\n\n")
 
 
 def counted(incident: dict[str, Any]) -> int:
@@ -707,6 +709,11 @@ class Keeper:
             return Seen("failing", f"raigolmid did not answer `rai keeper seen` ({vm['faults_error']})",
                         evidence)
         if vm["held"]:
+            # Every agent waits the usage limit out, the keeper too; a fault waiting is told
+            # why, so nobody files it again, and is taken up once the limit lifts.
+            for fault in vm["faults"]:
+                if fault["id"] not in self.unanswered:
+                    self._defer(fault)
             return Seen("held", "the account is on its usage limit")
         last = vm["last_event"]
         if vm["run_active"] and last is not None and last["age_s"] > EVENTS_SILENT_SECONDS:
@@ -716,10 +723,6 @@ class Keeper:
         faults = [f for f in vm["faults"] if f["id"] not in self.unanswered]
         if faults:
             fault = faults[0]
-            over = past_course(vm["plan"])
-            if over is not None:
-                self._defer(fault, over)
-                return Seen("held", f"fault {fault['id']} waits: {over}")
             return Seen("failing", f"the machine tab reported a fault in RaiGolmi: {fault['title']}",
                         {**evidence, "fault": fault}, act_now=True)
         return Seen("healthy")
@@ -881,16 +884,16 @@ class Keeper:
             self._answer(fault["id"], "fixed" if fixed else "not_fixed", "" if fixed else words,
                          ended)
 
-    def _defer(self, fault: dict[str, Any], over: str) -> None:
-        """A fault the plan cannot pay for yet stays filed, and the machine tab is told why and
-        that the keeper takes it up itself; said once, and again only if the VM did not take it."""
+    def _defer(self, fault: dict[str, Any]) -> None:
+        """A fault waiting out the account's usage limit stays filed, and the machine tab is
+        told so; said once, and again only if the VM did not take it."""
         if fault["status"] == "deferred":
             return
         told = self.tell(["answer", fault["id"], "deferred",
-                          f"{over}. The keeper takes it up itself once the plan's course is back "
-                          f"within its allowance, by that reset at the latest."])
+                          "the account is on its usage limit, which holds every agent; the keeper "
+                          "takes it up itself the moment the limit lifts."])
         if told["ok"]:
-            logger.info("deferred fault %s: %s", fault["id"], over)
+            logger.info("deferred fault %s: the usage limit", fault["id"])
         else:
             logger.warning("fault %s's deferral did not reach the VM; said again next check: %s",
                            fault["id"], told["error"])
@@ -925,6 +928,7 @@ class Keeper:
             f"{incident['reason']}.\n\nWhat the check gathered:\n"
             f"{json.dumps(incident['evidence'], indent=2)}\n\n"
             f"The last lines of windows/qemu.log:\n{qemu_tail}\n\n"
+            + pace(((incident["evidence"] or {}).get("vm") or {}).get("plan"))
             + (f"Earlier keeper sessions on this incident did not fix it:{earlier}\n"
                "Read their logs and notes before acting.\n\n" if earlier else "")
             + (f"The machine tab paused the tabs this fault affects "

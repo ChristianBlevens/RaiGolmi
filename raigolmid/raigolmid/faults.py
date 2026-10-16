@@ -12,9 +12,9 @@ fault is one JSON file under `Paths.faults`, named by its id, whose `status` is
 
 The keeper reaches the daemon over ssh through `rai keeper`: every probe of its loop says it
 looked (`seen`, kept in `Paths.keeper`) and is answered with the faults open or taken; it
-`take`s one before a session on it and `answer`s it with that session's verdict. A fault it
-cannot work yet (the plan's usage, `keeper.py`) is answered `deferred` and stays waiting, so
-nobody files it again. An answer is `fault.answered`, which the coordinator delivers to the
+`take`s one before a session on it and `answer`s it with that session's verdict. A fault
+waiting out the account's usage limit, which holds every agent (`keeper.py`), is answered
+`deferred` and stays waiting, so nobody files it again. An answer is `fault.answered`, which the coordinator delivers to the
 machine tab, or to whichever machine tab opens next when none is open; one handed over is
 carried to its successor by the channel.
 
