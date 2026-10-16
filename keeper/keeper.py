@@ -137,6 +137,10 @@ SESSION_SECONDS = 4 * 3600
 REALERT_SECONDS = DAY
 # The longest one ssh login and the probe it runs take on a guest that answers at all.
 SSH_SECONDS = 30
+# The newest Opus the installed Claude Code knows (the owner's call, 2026-10-16), and that Claude
+# Code brought to its newest before each session, so a new Opus reaches the keeper by itself.
+MODEL = "opus"
+UPDATE_SECONDS = 300
 # What a session's verdict line starts with (KEEPER.md).
 VERDICT = "KEEPER:"
 FIXED = "KEEPER: fixed"
@@ -521,11 +525,17 @@ def read_outcome(log: Path) -> dict[str, Any]:
 
 
 def run_claude(paths: Paths, prompt: str, session_id: str, log: Path) -> dict[str, Any]:
-    """One headless session with every permission, as the keeper's container is the sandbox
+    """One headless session on `MODEL` with every permission, as the keeper's container is the sandbox
     (IS_SANDBOX). Its stream-json transcript is the log; the conversation itself is kept by
     Claude Code under /root, so `claude --resume <session_id>` reopens it. `token` names the
     sign-in it ran with."""
-    command = ["claude", "-p", "--dangerously-skip-permissions", "--verbose",
+    update = subprocess.run(["claude", "update"], capture_output=True, text=True,
+                            timeout=UPDATE_SECONDS)
+    if update.returncode != 0:
+        # A repair is not held back for the updater; the session runs on the installed version.
+        logger.warning("claude update exited %d: %s", update.returncode,
+                       (update.stdout + update.stderr).strip()[-2000:])
+    command = ["claude", "-p", "--model", MODEL, "--dangerously-skip-permissions", "--verbose",
                "--output-format", "stream-json", "--session-id", session_id,
                "--append-system-prompt", paths.system_prompt.read_text(encoding="utf-8"), prompt]
     env, token = claude_env(paths)
