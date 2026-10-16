@@ -16,17 +16,23 @@ A job starts with a prediction and is defended when it runs past it. A job that 
 longer than its tab expected is a fault until shown otherwise, and a tab waiting on it only
 says "still running"; so `start` takes `expect` (seconds) and a `basis` for it, and handed back
 are the body's last rows for the same command from its ledger. When `expect` runs out the
-watch pauses the job (SIGSTOP to its process group, so its work so far is kept) and tells the
+watch pauses the job (SIGSTOP to every process it started, so its work so far is kept) and tells the
 tab; `wait` and `list` then say OVERRUN, never a status, until `defend` names a cause and the
 evidence it is progressing, beside the daemon's own reading of the job (CPU seconds and bytes
 printed since the last defence), and gives a new prediction — or `stop` ends it. A later
 defence repeating an earlier cause carries `confirmed`. The job and its defence are the tab's
 that started it, and no one else's. Three overruns end it: a task whose prediction was wrong
-three times is not the task its tab thinks it is, so the third is struck out (SIGTERM) and the
+three times is not the task its tab thinks it is, so the third is struck out and the
 tab told to find out what it is before starting it again. A turn that ends with a job
 undefended is said in the tab's history. Each job's end writes a row
 to its body's ledger (`Paths.job_ledger`), a run under a third of its prediction included,
-since a prediction far too long hides a fault as well as one too short.
+since a prediction far too long hides a fault as well as one too short. The end is kept on the
+job as first seen, so a toolbelt recreated later never turns an exit into "gone", and it
+withdraws an overrun notice still waiting in the tab's channel (`withdraws`).
+
+A job ends with its tab (`close`): the tab's sandbox is its own and stops with it, so a job never
+passes to the tab that takes its work over. One still running is ended, each end not
+yet seen is a ledger row saying why, and the successor is told how each ended.
 
 A job printing while it is waited on is said as `job.progressed`, at most once a
 `PROGRESS_SECONDS`, which the stall watch reads as the tab's work moving (`stalls.py`); a
@@ -100,12 +106,13 @@ class Jobs:
         self.path = session.paths.jobs
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, dict[str, Any]]] = load_json(self.path, "jobs") or {}
-        # A job started with no prediction cannot be timed; its tab is told it is forgotten.
+        # A job started with no prediction cannot be timed, and one with no body has no ledger
+        # to end in (both written by an earlier daemon); its tab is told it is forgotten.
         for tab, named in self._jobs.items():
-            for name in [n for n, job in named.items() if "expect" not in job]:
+            for name in [n for n, job in named.items() if "expect" not in job or "body" not in job]:
                 del named[name]
                 self.events.emit("job.forgotten", tab=tab, name=name, deliver={
-                    "content": f"Your job {name!r} was started without a prediction and is no "
+                    "content": f"Your job {name!r} was started by an earlier daemon and is no "
                                "longer tracked; it still runs in your toolbelt container",
                     "meta": {"from": "daemon"}})
 
@@ -127,25 +134,29 @@ class Jobs:
         key = command_key(cmd)
         return [r for r in read_lines(path) if command_key(r["cmd"]) == key][-SIMILAR_ROWS:]
 
-    def _ledger(self, tab_id: str, name: str, job: dict[str, Any], ended: str,
-                exit_code: int | None = None) -> None:
-        """Once per job, when its end is first seen."""
-        if job.get("ledgered"):
-            return
-        job["ledgered"] = True
-        self._save()
-        body = self._body(tab_id)
-        if body is None:
-            return
-        seconds = round(time.time() - job["started"])
+    def _end(self, tab_id: str, name: str, job: dict[str, Any], ended: str,
+             exit_code: int | None = None, why: str | None = None, tail: str = "",
+             printed: int = 0) -> None:
+        """Once per job, when its end is first seen: kept on the job as it was then, and a row
+        in its body's ledger."""
+        with self._lock:
+            if "end" in job:
+                return
+            seconds = round(time.time() - job["started"])
+            job["end"] = {"ended": ended, "exit_code": exit_code, "why": why, "tail": tail,
+                          "printed": printed, "seconds": seconds}
+            self._save()
         row = {"name": name, "cmd": job["cmd"], "expect": job["expect"], "basis": job["basis"],
                "seconds": seconds, "defences": len(job["defences"]), "ended": ended,
                "exit_code": exit_code, "reasons": [d["reason"] for d in job["defences"]],
                "under": not job["defences"] and seconds < job["expect"] / 3,
-               "at": round(time.time())}
-        path = self.session.paths.job_ledger(body)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        append_lines(path, [json.dumps(row)])
+               "at": round(time.time()), **({} if why is None else {"why": why})}
+        if job["body"] is not None:
+            path = self.session.paths.job_ledger(job["body"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            append_lines(path, [json.dumps(row)])
+        self.events.emit("job.ended", tab=tab_id, name=name, ended=ended, exit_code=exit_code,
+                         withdraws=f"job {name}")
         if row["under"]:
             self.events.emit("job.under", tab=tab_id, name=name, expect=job["expect"],
                              seconds=seconds)
@@ -176,13 +187,10 @@ class Jobs:
         proc, launcher = self.session.views.client(instance_id).start_job(cmd, cwd=cwd)
         now = time.time()
         job = {"instance": instance_id, "launcher": launcher, "proc": proc, "cmd": cmd,
-               "cwd": cwd, "started": now, "expect": expect, "basis": basis,
+               "cwd": cwd, "body": self._body(tab_id), "started": now, "expect": expect, "basis": basis,
                "until": now + expect, "overruns": 0, "overrun": None, "defences": [],
                "mark": {"cpu": 0.0, "printed": 0}}
         with self._lock:
-            # A closed tab's jobs are no one's to wait on.
-            for gone in self._jobs.keys() - self.session.intent.tabs.keys():
-                del self._jobs[gone]
             self._jobs.setdefault(tab_id, {})[name] = job
             self._save()
         self.events.emit("job.started", tab=tab_id, instance=instance_id, name=name, cmd=cmd,
@@ -214,33 +222,50 @@ class Jobs:
                     "ended with the old one, and left no exit code")
         return known
 
+    def _tail(self, job: dict[str, Any]) -> str:
+        try:
+            printed = self.session.views.client(job["instance"]).scrollback(job["proc"])
+        except LauncherError as exc:
+            raise JobError(f"the toolbelt's launcher could not give what the job printed: "
+                           f"{exc}") from exc
+        # Read back from a terminal, whose line ends are \r\n.
+        return printed.replace("\r\n", "\n")[-TAIL_CHARS:]
+
     def _state(self, tab_id: str, name: str, job: dict[str, Any],
                tail: bool = False) -> dict[str, Any]:
         """running, OVERRUN (paused past its prediction, undefended), exited (with its code)
-        or gone (no launcher knows it any more)."""
-        known = self._known(job)
-        if isinstance(known, str):
-            with self._lock:
-                self._ledger(tab_id, name, job, "gone")
-            return {"state": "gone", "why": known}
-        if known["exit"] is not None:
-            with self._lock:
-                self._ledger(tab_id, name, job, "struck out" if job.get("struck")
-                             else "stopped" if job.get("stopped") else "exited",
-                             known["exit"])
-            out = {"state": "exited", "exit_code": known["exit"]}
-            if job.get("stopped"):
-                out["stopped"] = job["stopped"]
-        elif job["overrun"] is not None:
-            out = {"state": "OVERRUN", **self._overrun_said(job)}
-        else:
-            out = {"state": "running"}
-        out["printed"] = known["printed"]
+        or gone (no launcher knows it any more); an ended job as its end was first seen."""
+        if "end" not in job:
+            known = self._known(job)
+            if isinstance(known, str):
+                self._end(tab_id, name, job, "gone", why=known)
+            elif known["exit"] is not None:
+                self._end(tab_id, name, job, "struck out" if job.get("struck")
+                          else "stopped" if job.get("stopped") else "exited",
+                          known["exit"], tail=self._tail(job), printed=known["printed"])
+            else:
+                out = ({"state": "OVERRUN", **self._overrun_said(job)}
+                       if job["overrun"] is not None else {"state": "running"})
+                out["printed"] = known["printed"]
+                if tail:
+                    out["tail"] = self._tail(job)
+                return out
+        end = job["end"]
+        if end["ended"] == "gone":
+            return {"state": "gone", "why": end["why"]}
+        out = {"state": "exited", "exit_code": end["exit_code"], "printed": end["printed"]}
+        if job.get("stopped"):
+            out["stopped"] = job["stopped"]
         if tail:
-            # Read back from a terminal, whose line ends are \r\n.
-            client = self.session.views.client(job["instance"])
-            out["tail"] = client.scrollback(job["proc"]).replace("\r\n", "\n")[-TAIL_CHARS:]
+            out["tail"] = end["tail"]
         return out
+
+    @staticmethod
+    def _seconds(job: dict[str, Any]) -> int:
+        """How long it ran: to its end once that is seen."""
+        if "end" in job:
+            return job["end"]["seconds"]
+        return round(time.time() - job["started"])
 
     def _overrun_said(self, job: dict[str, Any]) -> dict[str, Any]:
         overrun = job["overrun"]
@@ -260,7 +285,7 @@ class Jobs:
         """Pauses the job if its prediction has run out and it is still running, and ends it
         at its third."""
         with self._lock:
-            if job["overrun"] is not None or job.get("ledgered") or job.get("stopped") \
+            if job["overrun"] is not None or "end" in job or job.get("stopped") \
                     or time.time() < job["until"]:
                 return
             known = self._known(job)
@@ -269,7 +294,10 @@ class Jobs:
             struck = job["overruns"] + 1 >= STRIKES
             client = self.session.views.client(job["instance"])
             try:
-                client.signal(job["proc"], signal.SIGTERM if struck else signal.SIGSTOP)
+                if struck:
+                    client.end(job["proc"])
+                else:
+                    client.signal(job["proc"], signal.SIGSTOP, tree=True)
             except LauncherError as exc:
                 known = self._known(job)
                 if isinstance(known, str) or known["exit"] is not None:
@@ -311,6 +339,17 @@ class Jobs:
                                   "meta": {"from": "daemon", "standing": f"job {name}"}})
 
     def tick(self) -> None:
+        # A tab gone from the intent with its jobs still here closed while the daemon was
+        # down, between `Session._close` and `close`.
+        with self._lock:
+            unclosed = self._jobs.keys() - set(list(self.session.intent.tabs))
+        for tab_id in unclosed:
+            try:
+                self.close(tab_id, None)
+            except Exception as exc:                       # noqa: BLE001
+                # Said rather than raised: this thread ending would end the daemon.
+                self.events.emit("job.watch_failed", tab=tab_id,
+                                 error=f"{type(exc).__name__}: {exc}")
         with self._lock:
             mine = [(tab, name, job) for tab, named in self._jobs.items()
                     for name, job in named.items()]
@@ -321,6 +360,58 @@ class Jobs:
                 # Said rather than raised: this thread ending would end the daemon.
                 self.events.emit("job.pause_failed", tab=tab_id, name=name,
                                  error=f"{type(exc).__name__}: {exc}")
+
+    def close(self, tab_id: str, successor: str | None) -> None:
+        """The tab closes, or hands its work on to `successor`: its jobs end with it. One still
+        running is ended, since it is the tab's alone and its sandbox stops with the tab; each
+        end not yet seen is recorded with why, and said to the successor."""
+        ended = "handed on" if successor is not None else "closed"
+        why = (f"tab {tab_id} handed its work on to {successor}, and a job ends with the tab "
+               "that started it" if successor is not None
+               else f"tab {tab_id} closed, and a job ends with the tab that started it")
+        said = []
+        with self._lock:
+            mine = self._jobs.pop(tab_id, {})
+            for name, job in mine.items():
+                if "end" not in job:
+                    said.append({"name": name, "cmd": job["cmd"],
+                                 "how": self._end_with_tab(tab_id, name, job, ended, why)})
+            self._save()
+        if not said:
+            return
+        told = {}
+        if successor is not None:
+            lines = "\n".join(f"- {j['name']!r} ({' '.join(j['cmd'])}): {j['how']}"
+                              for j in said)
+            told = {"deliver": {
+                "content": f"Your predecessor {tab_id}'s jobs ended when it handed its work on "
+                           f"to you, since a job is the tab's that started it and its sandbox "
+                           f"stopped with it:\n{lines}\nEach is a row in the body's job "
+                           "ledger, handed back when you start the same command.",
+                "meta": {"from": "daemon"}}}
+        self.events.emit("job.ended_with_tab", tab=successor or tab_id, closed=tab_id,
+                         continued_by=successor, jobs=said, **told)
+
+    def _end_with_tab(self, tab_id: str, name: str, job: dict[str, Any], ended: str,
+                      why: str) -> str:
+        """Under `_lock`: the job's end recorded as its tab closes, and how it ended, said."""
+        try:
+            known = self._known(job)
+            if isinstance(known, str):
+                self._end(tab_id, name, job, "gone", why=known)
+                return f"gone before the hand-on: {known}"
+            if known["exit"] is not None:
+                self._state(tab_id, name, job)
+                return f"exited with code {known['exit']} before the hand-on"
+            self.session.views.client(job["instance"]).end(job["proc"])
+        except (JobError, LauncherError) as exc:
+            self._end(tab_id, name, job, ended,
+                      why=f"{why}; it could not be ended ({exc}), so it ends as its sandbox "
+                          "stops")
+            return f"could not be ended ({exc}); it ends as the sandbox stops"
+        self._end(tab_id, name, job, ended, why=why)
+        return (f"ended after {self._seconds(job)} s of a predicted "
+                f"{job['expect']} s")
 
     def on_event(self, event: Event) -> None:
         """A turn that ends with a job undefended."""
@@ -378,7 +469,7 @@ class Jobs:
                        "at": time.time(), "reading": overrun["reading"]}
             client = self.session.views.client(job["instance"])
             try:
-                client.signal(job["proc"], signal.SIGCONT)
+                client.signal(job["proc"], signal.SIGCONT, tree=True)
             except LauncherError as exc:
                 raise JobError(f"job {name!r} could not be continued: {exc}") from exc
             job["defences"].append(defence)
@@ -387,7 +478,7 @@ class Jobs:
             self._save()
         self.events.emit("job.defended", tab=tab_id, name=name, reason=reason,
                          observed=observed, expect_more=expect_more,
-                         reading=defence["reading"])
+                         reading=defence["reading"], withdraws=f"job {name}")
         return {"name": name, "state": "running", "timer_until": round(job["until"]),
                 "daemon_reading": defence["reading"]}
 
@@ -398,14 +489,15 @@ class Jobs:
         with self._lock:
             client = self.session.views.client(job["instance"])
             try:
-                # A stopped group takes SIGTERM only once continued, so it can clean up.
-                client.signal(job["proc"], signal.SIGTERM)
-                client.signal(job["proc"], signal.SIGCONT)
+                # Answered once nothing the job started runs, children that left its
+                # session included.
+                client.end(job["proc"])
             except LauncherError as exc:
                 raise JobError(f"job {name!r} could not be stopped: {exc}") from exc
             job["stopped"], job["overrun"] = reason, None
             self._save()
-        self.events.emit("job.stopped", tab=tab_id, name=name, reason=reason)
+        self.events.emit("job.stopped", tab=tab_id, name=name, reason=reason,
+                         withdraws=f"job {name}")
         return {"name": name, "state": "stopped"}
 
     def wait(self, tab_id: str, name: str, timeout: float = WAIT_MOST) -> dict[str, Any]:
@@ -425,11 +517,8 @@ class Jobs:
                 self.events.emit("job.progressed", tab=tab_id, name=name)
             printed = state["printed"]
             time.sleep(min(POLL_SECONDS, max(deadline - time.monotonic(), 0.0)))
-        if state["state"] in ("exited", "gone"):
-            self.events.emit("job.ended", tab=tab_id, name=name, state=state["state"],
-                             exit_code=state.get("exit_code"))
         state.pop("printed", None)
-        return {"name": name, "seconds": round(time.time() - job["started"]), **state}
+        return {"name": name, "seconds": self._seconds(job), **state}
 
     def list(self, tab_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -440,7 +529,7 @@ class Jobs:
             state = self._state(tab_id, name, job)
             state.pop("printed", None)
             out.append({"name": name, "cmd": job["cmd"], "cwd": job["cwd"],
-                        "seconds": round(time.time() - job["started"]),
+                        "seconds": self._seconds(job),
                         "expect": job["expect"], "defences": len(job["defences"]), **state})
         return out
 

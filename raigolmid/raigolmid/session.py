@@ -1398,7 +1398,7 @@ class Session:
             self.intent.tabs[successor.tab_id] = successor
             if successor.managed and self.intent.run is not None:
                 self.intent.run.tabs.setdefault(successor.tab_id, successor.body)
-            closed, released = self._close(tab)
+            closed, released = self._close(tab, successor=successor.tab_id)
             self.store.save(self.intent)
             self.events.emit("tab.closed", **closed, reason="continued",
                              continued_by=successor.tab_id, by=by)
@@ -1430,10 +1430,12 @@ class Session:
                                "`rai ai restart janitor` reopens it")
         return tab
 
-    def _close(self, tab: TabIntent) -> tuple[dict[str, Any], str | None]:
-        """Under the lock: the tab's agent stopped, its home archived, its sandbox released
-        and the tab gone from the intent. What `tab.closed` says, and the released sandbox
-        for `_stop_released` once the lock is let go."""
+    def _close(self, tab: TabIntent, successor: str | None = None
+               ) -> tuple[dict[str, Any], str | None]:
+        """Under the lock: the tab's agent stopped, its home archived, its jobs ended with it
+        (told to `successor`, the tab taking its work over), its sandbox released and the tab
+        gone from the intent. What `tab.closed` says, and the released sandbox for
+        `_stop_released` once the lock is let go."""
         try:
             self.agents.stop(tab.tab_id)
         except AgentError as exc:
@@ -1445,6 +1447,7 @@ class Session:
         except AgentError as exc:
             self.events.emit("agent.home_archive_failed", tab=tab.tab_id, reason=str(exc))
         self._prune_kept()
+        self.jobs.close(tab.tab_id, successor)
         held = self.intent.sandbox_of(tab.tab_id)
         released = None
         if held is not None:

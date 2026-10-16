@@ -4,7 +4,9 @@ Which tabs are managed is the intent's (`TabIntent.managed`, set by `Session.man
 system reads that mark and the events, and reaches the machine tab only by events whose data
 carries `deliver`, which its channel holds until its turn ends (`channel.py`):
 
-- a managed tab's turn ending, with its context use against the budget;
+- a managed tab's turn ending, with its context use against the budget, said as it stands when
+  it is pushed (`Channels.restate_at_push`): withdrawn once the tab has closed, started another
+  turn or been given back;
 - a question the judge referred from a managed tab (`question.referred`), which the machine
   tab answers with `answer_question`; the same for a tab handed over while asking, and, when a
   machine tab opens, everything it has not heard because it was not there to hear it;
@@ -71,7 +73,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from . import api, documents, history, limits
-from .channel import DIRECTED, Channels, HandedOn
+from .channel import DIRECTED, Channels, HandedOn, Message
 from .events import Event, EventLog
 from .faults import Faults, answer_message, stranded_message
 from .intent import Run, TabIntent
@@ -223,6 +225,8 @@ TIME_UP = "coordinator.time_up"
 RESTART_ASKED = "coordinator.restart_asked"
 REPORT_ASKED = "coordinator.report_asked"
 IDLE_WOKEN = "coordinator.idle_woken"
+# A managed tab's turn end, to the machine tab.
+TURN_ENDED = "coordinator.idle"
 
 
 def on_its_way(channels: Channels, questions: Questions, tab_id: str) -> list[str]:
@@ -400,16 +404,17 @@ class Coordinator:
         self._handed: set[tuple[str, str]] = set()
         # The idle watch (`tick`), in memory: a daemon that starts starts its clocks. When a
         # turn of the run's tabs, and of the machine tab, last started or ended; how each
-        # managed tab's last turn ended (done, error); whether a wake is due to the machine
-        # tab now; its own turn, "due" until it starts and "on" until it ends; and how long the
-        # next wake waits.
+        # managed tab's last turn ended (done, error, when); whether a wake is due to the
+        # machine tab now; its own turn, "due" until it starts and "on" until it ends; and how
+        # long the next wake waits.
         self._quiet_since = self._machine_quiet_since = time.time()
-        self._ended: dict[str, tuple[bool, str | None]] = {}
+        self._ended: dict[str, tuple[bool, str | None, float]] = {}
         self._woken = False
         self._wake_turn: str | None = None
         self._wait = IDLE_SECONDS
         self._limited = False
         self.faults = Faults(session.paths, events)
+        channels.restate_at_push(TURN_ENDED, self._restated)
 
     def run(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -508,7 +513,7 @@ class Coordinator:
                 self._give_back(tab)
                 return
             # Only the newest turn end of a tab is where it stands (`channel.py`, `standing`).
-            self._to_machine(event.tab, "coordinator.idle", self._idle_message(
+            self._to_machine(event.tab, TURN_ENDED, self._idle_message(
                 event.tab, tab.body, event.data["done"], error, event.ts), why="idle",
                 standing=f"{event.tab} turn end")
         elif event.type == "question.referred" and event.data["kind"] == "question":
@@ -540,7 +545,7 @@ class Coordinator:
         if tab.machine:
             self._machine_quiet_since = event.ts
         if event.type == "agent.idle":
-            self._ended[tab.tab_id] = (event.data["done"], event.data.get("error"))
+            self._ended[tab.tab_id] = (event.data["done"], event.data.get("error"), event.ts)
             if tab.machine and self._wake_turn == "on":
                 self._woken, self._wake_turn = False, None
                 self._wait = min(2 * self._wait, IDLE_CEILING_SECONDS)
@@ -578,7 +583,7 @@ class Coordinator:
             and not any(i["tab"] in ids | {machine.tab_id} and not (
                 i["kind"] == "question" and i["tab"] in ids) for i in pending)
             and any(t.status != "paused" and t.held is None for t in managed)
-            and not any(self._ended.get(t, (None, None))[1] in resumed
+            and not any(self._ended.get(t, (None, None, None))[1] in resumed
                         for t in ids | {machine.tab_id}))
         if not (run_idle or waiting and now - self._machine_quiet_since >= self._wait):
             return
@@ -595,7 +600,7 @@ class Coordinator:
                     said.append(f"- Tab {tab.tab_id} ({tab.body}) is held for the user.")
                 else:
                     said.append("- " + self._idle_message(
-                        tab.tab_id, tab.body, *self._ended.get(tab.tab_id, (None, None))))
+                        tab.tab_id, tab.body, *self._ended.get(tab.tab_id, (None, None, None))))
             if waiting:
                 said.append("Waiting on you:\n" + "\n".join(f"- {w}" for w in waiting))
             said.append("Carry the run on: direct each tab, `hold` one at its stop, or give "
@@ -831,6 +836,18 @@ class Coordinator:
                 f"{_context_line(context_tokens(self.session.agents.home(tab_id)), budget)} "
                 "`managed_tab` shows its thought doc and latest turns."
                 f"{stop_line(self.session.intent.tabs[tab_id])}")
+
+    def _restated(self, message: Message) -> str | None:
+        """A turn end as it stands when pushed. None once the tab has closed, started another
+        turn, been given back or had a turn cut that the daemon resumes: whatever it said then
+        no longer holds, and a newer turn end follows where one is due."""
+        tab = self.session.intent.tabs.get(message.meta["tab"])
+        if tab is None or tab.busy or not tab.managed:
+            return None
+        done, error, at = self._ended.get(tab.tab_id, (None, None, None))
+        if error == limits.LIMIT or error in limits.TRANSIENT:
+            return None
+        return self._idle_message(tab.tab_id, tab.body, done, error, at)
 
     def _to_machine(self, about: str, event: str, content: str, **meta: str) -> None:
         machine = self.session.intent.machine_tab()

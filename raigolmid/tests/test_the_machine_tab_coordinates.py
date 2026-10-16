@@ -715,6 +715,50 @@ def test_a_turn_end_names_what_it_waits_on_and_a_resumed_sessions_own_row_is_not
     assert m.tab(MACHINE)["managed_tab"](tab=BODY)["on_its_way"] == ["1 × your direction"]
 
 
+def test_a_turn_end_is_said_as_it_stands_when_it_reaches_the_machine_tab(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(MACHINE)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=True)
+    sent = m.tab(BODY)["message"](to="machine", content="which port?")["message"]
+    m.tab(BODY)["agent_activity"](busy=False)
+    [queued] = [q for q in m.queued(MACHINE) if q["cause"] == "coordinator.idle"]
+    assert f"waits on a reply to its message {sent}" in queued["content"]
+    m.tab(MACHINE)["midturn"]()
+    m.tab(MACHINE)["reply"](message=sent, content="8080")
+    m.tab(MACHINE)["agent_activity"](busy=False)
+    m.pump()
+    said = m.channels.take(MACHINE)["content"]
+    assert (f"{BODY} (myapi), which you manage, ended its turn and waits on 1 × the answer "
+            "to its message.") in said, "the reply it waited on is given"
+
+
+def test_a_turn_end_of_a_tab_closed_since_never_reaches_the_machine_tab(h):
+    m = Machine(h)
+    m.tab(MACHINE)["manage"](tab=BODY)
+    m.tab(MACHINE)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)
+    assert [q["cause"] for q in m.queued(MACHINE)] == ["coordinator.idle"]
+    m.tab(BODY)["end_conversation"]()
+    m.tab(BODY)["agent_activity"](busy=True)
+    m.tab(BODY)["agent_activity"](busy=False)
+    m.pump()
+    assert BODY not in h.session.intent.tabs
+    m.tab(MACHINE)["agent_activity"](busy=False)
+    m.pump()
+    said = []
+    while (item := m.channels.take(MACHINE)) is not None:
+        said.append(item["content"])
+        m.tab(MACHINE)["agent_activity"](busy=True, channel_seq=item["seq"])
+        m.tab(MACHINE)["agent_activity"](busy=False)
+        m.pump()
+    assert any("ended its own conversation" in s for s in said)
+    assert not any(f"Tab {BODY} (myapi), which you manage, is done" in s for s in said)
+    [stale] = h.events_of("channel.withdrawn")
+    assert (stale.tab, stale.data["cause"]) == (MACHINE, "coordinator.idle")
+
+
 def test_a_tabs_own_jobs_and_cut_turn_are_not_carried_to_its_successor(h):
     m = Machine(h)
     m.tab(MACHINE)["manage"](tab=BODY)

@@ -125,6 +125,10 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
     "job.undefended": lambda e: (f"ended its turn with its job {e.data['name']} paused past its "
                                  "prediction and undefended"),
     "job.stopped": lambda e: f"stopped its job {e.data['name']}: {e.data['reason']}",
+    "job.ended_with_tab": lambda e: (
+        (f"took over {e.data['closed']}'s work, whose jobs ended with it: "
+         if e.data["continued_by"] else "closed, its jobs ending with it: ")
+        + ", ".join(j["name"] for j in e.data["jobs"])),
     "tab.resumed": lambda e: (f"resumed by the machine tab after {e.data['paused_for'] // 60} "
                               "min" + ("" if e.data["how"] == "thawed"
                                        else ", on its conversation: the machine restarted")),

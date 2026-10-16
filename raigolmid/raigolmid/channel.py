@@ -49,6 +49,10 @@ the machine tab.
 meta: a managed tab's turn end, a budget's reading): only the newest is still true, so one
 queued, or carried at a handover, is dropped once a newer with the same `standing` is behind it,
 said as `channel.superseded`. Each wakes its tab, and each wake would end a turn of its own.
+An event that makes one untrue names its `standing` in `withdraws` (a job defended or ended
+withdraws its overrun notice), and the queued one is dropped the same way. **And one is said
+as it stands when it is pushed** (`restate_at_push`): what queued it says it afresh then, or it
+is withdrawn as no longer holding (`channel.withdrawn`).
 """
 from __future__ import annotations
 
@@ -57,7 +61,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from .events import Event, EventLog
 from .intent import load_json, save_json
@@ -86,7 +90,7 @@ MIDTURN = frozenset({DIRECTED, "janitor.told", "message.sent", "message.answered
 OPENING = frozenset({"coordinator.continued", "coordinator.restarted",
                      "coordinator.machine_restarted"})
 # What speaks of the closed tab's own conversation or sandbox, both ended by its handover: its
-# jobs, which stopped with its sandbox (`Session._stop_released`), and a nudge to continue a
+# jobs, which end with it (`Jobs.close`, which tells the successor), and a nudge to continue a
 # turn of its own. Never carried to its successor, which starts fresh on a sandbox of its own.
 # The meta key marking the usage-limit probe's continue (`limits.py`), pushed through the hold.
 PROBE = "probe"
@@ -221,6 +225,12 @@ class Channels:
         self._hold_until = 0.0
         # Each handover's record until the coordinator asks for it, by the successor's id.
         self._handed_on: dict[str, HandedOn] = {}
+        self._restaters: dict[str, Callable[[Message], str | None]] = {}
+
+    def restate_at_push(self, cause: str, restate: Callable[[Message], str | None]) -> None:
+        """A message of `cause` said as it stands when it is pushed: `restate` gives its content
+        then, or None when it no longer holds, and it is withdrawn instead."""
+        self._restaters[cause] = restate
 
     # --- routing ----------------------------------------------------------------------
     def run(self, stop: threading.Event) -> None:
@@ -247,9 +257,20 @@ class Channels:
         if event.tab is None:
             return
         deliver = event.data.get("deliver")
+        withdraws = event.data.get("withdraws")
         with self._lock:
-            if self._apply(event, deliver):
+            withdrawn = withdraws is not None and self._withdraw(event.tab, withdraws)
+            if self._apply(event, deliver) or withdrawn:
                 self._save()
+
+    def _withdraw(self, tab_id: str, standing: str) -> bool:
+        """Under `_lock`: the queued messages with this `standing` dropped, no longer true."""
+        tab = self._tabs.get(tab_id)
+        if tab is None:
+            return False
+        queued = len(tab.queue)
+        self._supersede(tab_id, tab, standing)
+        return len(tab.queue) != queued
 
     def _apply(self, event: Event, deliver: dict | None) -> bool:
         """Whether what is written to `Paths.channels` changed."""
@@ -407,6 +428,8 @@ class Channels:
         self._catch_up()
         agent = self.session.intent.tabs.get(tab_id)
         idle = agent is not None and agent.status == "running" and not agent.busy
+        if idle:
+            self._restate_head(tab_id)
         with self._lock:
             tab = self._tabs.get(tab_id)
             if tab is None:
@@ -454,6 +477,36 @@ class Channels:
             self.events.emit("channel.pushed", tab=tab_id, seq=self._seq,
                              cause=tab.pushed.message.cause)
             return self._item(tab.pushed)
+
+    def _restate_head(self, tab_id: str) -> None:
+        """The message `take` pushes next, said as it stands now (`restate_at_push`), each
+        withdrawn until the head is one that holds. Outside `_lock`: a restater reads the
+        channel too."""
+        while True:
+            with self._lock:
+                tab = self._tabs.get(tab_id)
+                if (tab is None or tab.pushed is not None or not tab.session_up
+                        or not tab.queue or time.time() < self._hold_until):
+                    return
+                head = tab.queue[0]
+                restate = self._restaters.get(head.cause)
+            if restate is None:
+                return
+            content = restate(head)
+            with self._lock:
+                if self._tabs.get(tab_id) is not tab or not tab.queue or tab.queue[0] is not head:
+                    continue        # taken or replaced meanwhile
+                if content == head.content:
+                    return
+                tab.queue.popleft()
+                if content is not None:
+                    tab.queue.appendleft(Message(content=content, meta=head.meta,
+                                                 cause=head.cause))
+                    self._save()
+                    return
+                self._save()
+                self.events.emit("channel.withdrawn", tab=tab_id, cause=head.cause,
+                                 meta=head.meta)
 
     def take_midturn(self, tab_id: str) -> list[str]:
         """What a working tab is handed at its next tool call, by its `PostToolUse` hook,
