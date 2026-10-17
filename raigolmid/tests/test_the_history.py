@@ -153,6 +153,23 @@ def test_a_question_is_the_users_to_see_once_referred_and_is_read_where_it_is_ke
         "read as it stands now, not as it was when the entry was written"
 
 
+def test_an_entry_whose_question_is_not_held_is_said_and_removed_at_the_start(
+        tmp_path, monkeypatch):
+    """A history carried to another machine without its questions named items no reader
+    could find, and every read of the menu failed on the first of them."""
+    events, questions, judge, runtime = standalone(tmp_path, monkeypatch)
+    history = History(events, machine(tmp_path))
+    judge_says(runtime, "UNCLEAR")
+    kept = questions.ask("tab-1", "Colour?")
+    settle_judging(judge, questions)
+    heard(history)
+    questions._items.pop(kept)
+    history.forget_lost_questions(set(questions.items()))
+    assert with_items(history.entries(), questions, set()) == []
+    [lost] = [e for e in events.read() if e.type == "history.questions_lost"]
+    assert lost.data["questions"] == [kept]
+
+
 def test_dropped_events_are_read_back_from_the_log_once(log):
     events, history = log
     events.emit("agent.idle", tab="tab-1", done=True)

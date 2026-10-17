@@ -149,6 +149,7 @@ class Daemon:
         self.history = History(self.events, paths)
         self.maintenance = Maintenance(self.session, self.events)
         self.questions = Questions(self.events, paths)
+        self.history.forget_lost_questions(set(self.questions.items()))
         self.judge = Judge(self.events, runtime, paths.preferences, self.session.agents.broker,
                            self.epoch, self.session.agents.image)
         self.channels = Channels(self.session, self.events)

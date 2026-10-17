@@ -361,6 +361,22 @@ class History:
             self._save()
         self.events.emit("history.added", id=entry.id, new=not entry.born_seen)
 
+    def forget_lost_questions(self, known: set[str]) -> None:
+        """At the daemon's start: an entry whose question `questions.py` does not hold has
+        nothing to show, and is removed and said rather than failing every read of the
+        history."""
+        with self._lock:
+            lost = {id: e.question for id, e in self._entries.items()
+                    if e.question and e.question not in known}
+            for id in lost:
+                del self._entries[id]
+            self._questions -= set(lost.values())
+            if lost:
+                self._save()
+        if lost:
+            self.events.emit("history.questions_lost", entries=sorted(lost),
+                             questions=sorted(set(lost.values())))
+
     def _over(self, event: Event) -> None:
         with self._lock:
             over = [e for e in self._entries.values()

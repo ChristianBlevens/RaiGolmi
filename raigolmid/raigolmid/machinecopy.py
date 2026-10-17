@@ -1,7 +1,7 @@
 """This machine's own things, carried to another RaiGolmi in one file.
 
 What goes in is what nothing else can give back: the user's preferences, permissions,
-settings, templates and plugins; their history and the tabs' messages; the janitor's documents;
+settings, templates and plugins; their history, questions and the tabs' messages; the janitor's documents;
 the job and principles ledgers; the machine tab's `/work` (its direction) and the run reports;
 each tab's lessons (`thoughts.md`, Claude Code's memory of `/work`, the archive record); the face
 home's files; the local layer definitions; and of each body what its remote lacks — the
@@ -93,6 +93,8 @@ ITEMS: tuple[Item, ...] = (
     Item("permissions", "state/permissions.md", "file", lambda p, s: p.permissions),
     Item("history", "state/history.json", "file", lambda p, s: p.history),
     Item("messages", "state/messages.json", "file", lambda p, s: p.messages),
+    # What a question's history entry shows is read here (`history.py`).
+    Item("questions", "state/questions.json", "file", lambda p, s: p.questions),
     Item("settings", "config/settings.toml", "file", lambda p, s: p.settings),
     Item("agent templates", "config/agent-templates", "tree", lambda p, s: p.agent_templates),
     Item("agent plugins", "config/agent-plugins", "tree", lambda p, s: p.agent_plugins),
