@@ -1651,8 +1651,8 @@ class Window : Form
         Tell(message, MessageBoxIcon.Warning);
     }
 
-    // With the keeper on, a box is shown from a thread of its own, which has no active window
-    // to own it (WinForms MessageBox takes GetActiveWindow's): it never disables this window,
+    // With the keeper on, a box is shown from a thread of its own, owned by a hidden window
+    // there rather than by this one: it never disables this window,
     // which setup closes to upgrade and Process.CloseMainWindow refuses when disabled, and it
     // never keeps this process alive.
     void Tell(string message, MessageBoxIcon icon)
@@ -1662,8 +1662,23 @@ class Window : Form
             BeginInvoke(new Action(() => MessageBox.Show(this, message, "RaiGolmi", MessageBoxButtons.OK, icon)));
             return;
         }
-        var shown = new Thread(() => MessageBox.Show(message, "RaiGolmi", MessageBoxButtons.OK, icon))
-            { IsBackground = true, Name = "box" };
+        // Owned by a window of its own thread that is never shown: an unowned box is a candidate
+        // for Process.MainWindowHandle, the first visible unowned top-level window in Z order, and
+        // setup's CloseMainWindow then closes the box, the no-sound warning every start shows,
+        // instead of this window, and waits five minutes for a machine that never shuts down.
+        var shown = new Thread(() =>
+        {
+            var owner = new NativeWindow();
+            owner.CreateHandle(new CreateParams());
+            try
+            {
+                MessageBox.Show(owner, message, "RaiGolmi", MessageBoxButtons.OK, icon);
+            }
+            finally
+            {
+                owner.DestroyHandle();
+            }
+        }) { IsBackground = true, Name = "box" };
         shown.SetApartmentState(ApartmentState.STA);
         shown.Start();
     }
