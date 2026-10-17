@@ -1444,6 +1444,8 @@ class Window : Form
     {
         if (machine.Keeper == null || exited || keeperAlerting)
             return;
+        if (!Keeper.Checkout())
+            DeliverKeeper();
         string absence = Keeper.Absence();
         try
         {
@@ -1480,6 +1482,30 @@ class Window : Form
         Note("keeper: not there (" + absence + "), so it is started again");
         keeperRetried = true;
         Keeper.Compose("up -d", Note);
+    }
+
+    // The keeper's files from this launcher's release, written over the folder's that differ, and
+    // the container recreated once its loop is between sessions (Keeper.Deliver). A write that
+    // fails is said and tried again at the next tick.
+    void DeliverKeeper()
+    {
+        string outdated;
+        try
+        {
+            foreach (string name in Keeper.Deliver())
+                Note("keeper: " + name + " written from this launcher's release");
+            outdated = Keeper.Outdated();
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is JsonException ||
+                                  e is KeyNotFoundException || e is InvalidOperationException)
+        {
+            Note("keeper: its files could not be brought up to this launcher's release: " + e.Message);
+            return;
+        }
+        if (outdated == null || Keeper.ComposedWithin(KeeperRetry))
+            return;
+        Note("keeper: " + outdated + ", so its container is recreated");
+        Keeper.Compose("up -d --build --force-recreate", Note);
     }
 
     // Each Watch tick: the state is written, and the oldest request is acted on, on the window's
@@ -2220,6 +2246,92 @@ sealed class Keeper
         if (age <= (state == "repairing" ? RepairingWithin : PresentWithin))
             return null;
         return KeeperFile + " was last written " + (int)age.TotalMinutes + " minutes ago (" + state + ")";
+    }
+
+    // --- the keeper's files ----------------------------------------------------------------------
+
+    // A release replaces this program and the disk, and nothing else in the project folder, so it
+    // carries the keeper's files (RaiGolmi.csproj embeds them as keeper/<name>). On a folder that
+    // is not a git checkout they are written over the folder's keeper\ and the container is
+    // recreated, between sessions, while its loop runs another keeper.py: the loop keeps the code
+    // it loaded, and `compose up -d` leaves a running container as it is. A checkout is the
+    // developer's, whose keeper\ is the one they mean to run.
+    const string CarriedPrefix = "keeper/";
+
+    public static bool Checkout()
+    {
+        string git = Path.Combine(Launcher.Project, ".git");
+        return Directory.Exists(git) || File.Exists(git);
+    }
+
+    static byte[] Carried(string resource)
+    {
+        using (Stream s = typeof(Keeper).Assembly.GetManifestResourceStream(resource))
+        {
+            if (s == null)
+                throw new LauncherError("this launcher was built without " + resource);
+            var bytes = new MemoryStream();
+            s.CopyTo(bytes);
+            return bytes.ToArray();
+        }
+    }
+
+    static IEnumerable<string> CarriedNames()
+    {
+        bool any = false;
+        foreach (string resource in typeof(Keeper).Assembly.GetManifestResourceNames())
+            if (resource.StartsWith(CarriedPrefix, StringComparison.Ordinal))
+            {
+                any = true;
+                yield return resource;
+            }
+        if (!any)
+            throw new LauncherError("this launcher was built without the keeper's files (RaiGolmi.csproj)");
+    }
+
+    // The carried files that differ from the folder's, written whole; their names.
+    public static List<string> Deliver()
+    {
+        var written = new List<string>();
+        foreach (string resource in CarriedNames())
+        {
+            string name = resource.Substring(CarriedPrefix.Length);
+            string target = Path.Combine(Folder, name);
+            byte[] carried = Carried(resource);
+            if (File.Exists(target) && File.ReadAllBytes(target).AsSpan().SequenceEqual(carried))
+                continue;
+            string partial = target + ".partial";
+            File.WriteAllBytes(partial, carried);
+            File.Move(partial, target, true);
+            written.Add(name);
+        }
+        return written;
+    }
+
+    // Why the keeper's container is to be recreated now, or null: it is there, between sessions
+    // (a session is cut off by a recreate), and its loop runs a keeper.py other than the one this
+    // launcher carries and has written. A keeper.py from before keeper.json named its own writes
+    // no `source`.
+    public static string Outdated()
+    {
+        if (Absence() != null)
+            return null;
+        byte[] carried = Carried(CarriedPrefix + "keeper.py");
+        if (!File.ReadAllBytes(Path.Combine(Folder, "keeper.py")).AsSpan().SequenceEqual(carried))
+            return null;
+        string state, source;
+        using (var doc = JsonDocument.Parse(File.ReadAllText(KeeperFile)))
+        {
+            state = doc.RootElement.GetProperty("state").GetString();
+            source = doc.RootElement.TryGetProperty("source", out JsonElement s) ? s.GetString() : null;
+        }
+        if (state == "repairing")
+            return null;
+        string sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(carried)).ToLowerInvariant();
+        if (source == sha)
+            return null;
+        return "its loop runs keeper.py " + (source ?? "from before keeper.json named it") +
+               ", and this launcher carries " + sha;
     }
 
     // The alert that the keeper is gone was sent, and it has not been back since: kept beside the

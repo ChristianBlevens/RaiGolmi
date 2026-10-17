@@ -60,7 +60,7 @@ system prompt) with the evidence it gathered. The rules:
   machine is healthy after one. None is sent while raigolmid's line out has already told them
   a cause (`line-out.json`) during the incident: theirs is the word that stands.
 
-keeper/outbox/keeper.json is written each check: the state, the open incident with its sessions
+keeper/outbox/keeper.json is written each check: the state, the keeper.py it runs (`SOURCE`), the open incident with its sessions
 (each resumable from the keeper's terminal by the `resume` command it records), the sessions of
 and the alerts. It is also the keeper's memory across a restart of its container.
 The loop's log goes to keeper/outbox/keeper.log as well as stderr.
@@ -161,6 +161,10 @@ VM_HOST, VM_USER = "host.docker.internal", "agent"
 MACHINE_CREDENTIAL = "${XDG_CONFIG_HOME:-$HOME/.config}/raigolmi/agent-credentials"
 CREDENTIAL_KEYS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 NTFY = "https://ntfy.sh/"
+# The sha256 of this file as the loop loaded it, written to keeper.json: the launcher carries
+# the keeper's files to a project folder that is not a git checkout and recreates the container
+# while this differs from the keeper.py it carries (RaiGolmi.cs Keeper.Deliver).
+SOURCE = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -1050,7 +1054,8 @@ class Keeper:
 
     def report(self, now: float) -> None:
         write_json(self.paths.keeper_json, {
-            "at": iso(now), "state": self.state, "why": self.why, "incident": self.incident,
+            "at": iso(now), "state": self.state, "why": self.why, "source": SOURCE,
+            "incident": self.incident,
             "last_incident": self.last_incident, "last_alert": self.last_alert,
             "alerted": self.alerted, "owed_recovery": self.owed_recovery,
             "refused_token": self.refused_token,

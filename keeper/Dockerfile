@@ -1,6 +1,7 @@
 # The keeper: a Claude Code agent outside the VM that repairs a machine which cannot recover
-# itself (KEEPER.md). keeper.py runs from the mounted project, so a fix to it lands with the
-# repository and needs no rebuild; this image holds only the tools a repair uses.
+# itself (KEEPER.md). keeper.py runs from the mounted project, so a fix to it needs no rebuild:
+# a release's launcher writes the keeper's files there and recreates the container (RaiGolmi.cs
+# Keeper.Deliver). This image holds only the tools a repair uses.
 # The machine's own suite runs on CPython 3.14, so the keeper's targeted tests do too.
 FROM python:3.14-slim-trixie
 

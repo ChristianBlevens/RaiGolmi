@@ -1,5 +1,6 @@
 """The keeper's decisions (keeper.py's module docstring), against doubles for the clock, the
 VM, Claude Code and ntfy."""
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -101,6 +102,12 @@ def test_healthy_does_nothing(world: World) -> None:
     world.launcher("running")
     assert world.check()["state"] == "healthy"
     assert world.sessions == [] and world.pushes == [] and world.inbox() == []
+
+
+def test_keeper_json_names_the_keeper_py_it_runs(world: World) -> None:
+    world.launcher("running")
+    source = hashlib.sha256(Path(k.__file__).read_bytes()).hexdigest()
+    assert world.check()["source"] == source
 
 
 def test_closed_is_respected_even_when_stale(world: World) -> None:
