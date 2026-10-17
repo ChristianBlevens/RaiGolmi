@@ -51,13 +51,20 @@ in the daemon), and the machine tab resumes its tabs on it.
 Everything SESSION-START allows a development session: read, edit, run targeted tests (pytest;
 `dotnet build` of a copy of `windows/` with `EnableWindowsTargeting`; every `.ps1` parsed with
 `pwsh` before a push), commit as `138273879+ChristianBlevens@users.noreply.github.com` /
-"Christian Blevens" (already the container's git identity), and push — **never to `main`**.
-RaiGolmi is public and `main` takes what the owner merges from the machines' branches.
+"Christian Blevens" (already the container's git identity), and push where the prompt says
+you may — **never to `main`**. RaiGolmi is public and `main` takes what the owner merges from
+the machines' branches.
 
 - **Your fixes live on this machine's branch, `machine/<login>`** (`gh api user --jq .login`,
   lowercased), in your own clone `/root/RaiGolmi`, never in `/work/RaiGolmi`, which is the
   owner's checkout on `main`. Before a fix, merge `origin/main` into the branch; a conflict is
   yours to resolve.
+- **Where you may push is in the prompt**, read from this container's GitHub sign-in: the
+  owner's repositories when the sign-in is theirs, the sign-in's fork of each when it has one it
+  can push to, and nowhere otherwise. **Never fork a repository or open a pull request to make a
+  push possible**: a fork is the person's to make. Where you may not push, the fix is still made
+  and committed on the branch in your clone, and nothing is released: a fix that only a release
+  puts on this machine is then `not fixed`, its words naming the commit and that it waits for a fork.
 - **A release from it**: `gh workflow run publish.yml -R <the repo you push to> --ref
   machine/<login>`, then `gh run watch` until it is green. It is tagged `machine-<login>`, never
   `latest`. The first time, write `/launcher/channel.txt` as `<repo owner, lowercased>/raigolmi:machine-<login>`

@@ -42,7 +42,7 @@ class World:
         return k.Keeper(self.paths, lambda: self.now, lambda: self.now, lambda: self.vm, self.run,
                         self.ready,
                         lambda topic, title, message: self.pushes.append((topic, title, message)),
-                        self.tell)
+                        self.tell, lambda: "Push nowhere.\n\n")
 
     def ready(self, refused: str | None) -> tuple[str, str]:
         self.refused.append(refused)
@@ -497,3 +497,46 @@ def test_the_machines_credential_is_copied_and_a_bad_read_keeps_the_last(world: 
         assert token == k.fingerprint(expected)
     assert env["ANTHROPIC_API_KEY"] == "sk-two" and "CLAUDE_CODE_OAUTH_TOKEN" not in env
     assert world.paths.credential.stat().st_mode & 0o777 == 0o600
+
+
+def github(login: str | None, forks: dict[str, str]):
+    """GitHub as gh reaches it: `login` signed in (None: no sign-in), and `forks` its fork of
+    each repository it has one of, by name, as `full_name<TAB>push`."""
+    def run(args: list[str]) -> tuple[int, str, str]:
+        if login is None:
+            return 4, "", "To get started with GitHub CLI, please run:  gh auth login"
+        if args[1] == "user":
+            return 0, login + "\n", ""
+        repo = args[-3].split("/")[2]
+        if args[1] == "--paginate":
+            return 0, forks.get(repo, ""), ""
+        return 0, f"{k.UPSTREAM}/{repo}\ttrue\n", ""
+    return run
+
+
+def test_a_sign_in_with_no_fork_is_told_to_push_nowhere() -> None:
+    words = k.push_targets(github("someone", {"RaiGolmi": "someone/RaiGolmi\ttrue\n"}))
+    assert "push `machine/someone` to `someone/RaiGolmi`" in words
+    assert "raigolmi-packages: `someone` has no fork" in words
+    assert f"to `{k.UPSTREAM}/" not in words
+
+
+def test_a_fork_the_sign_in_cannot_push_to_is_no_fork() -> None:
+    words = k.push_targets(github("someone", {"RaiGolmi": "someone/RaiGolmi\tfalse\n"}))
+    assert "RaiGolmi: `someone` has no fork" in words
+
+
+def test_the_owner_pushes_to_their_own_repositories() -> None:
+    words = k.push_targets(github(k.UPSTREAM, {}))
+    assert f"to `{k.UPSTREAM}/RaiGolmi`" in words and f"to `{k.UPSTREAM}/raigolmi-packages`" in words
+
+
+def test_no_sign_in_pushes_nothing() -> None:
+    words = k.push_targets(github(None, {}))
+    assert "no GitHub sign-in" in words and "push nothing" in words
+
+
+def test_a_sessions_prompt_says_where_it_may_push(world: World) -> None:
+    world.launcher("gave_up")
+    world.check()
+    assert world.sessions and "Push nowhere." in world.sessions[0]

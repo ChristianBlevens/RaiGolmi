@@ -47,6 +47,9 @@ system prompt) with the evidence it gathered. The rules:
   one. It gets at most `SESSIONS_PER_INCIDENT` sessions, each after the first handed the logs of
   those before. A session that never had an answer from Claude (an API error, the network) does not count; one
   that the API refused for its sign-in stops sessions until the sign-in changes;
+- a session's prompt says where it may push (`push_targets`, from the container's GitHub
+  sign-in): UPSTREAM's repositories when the sign-in is UPSTREAM, its fork of each when it has one
+  it can push to, and nowhere otherwise, so a machine with no fork keeps its fixes in its clone;
 - Claude Code runs on the machine's own agent credential (`MACHINE_CREDENTIAL`), copied to
   `Paths.credential` at each probe that reaches the VM, so it follows the owner's sign-in there
   and outlasts a VM that does not answer; the keeper has no sign-in of its own;
@@ -558,6 +561,73 @@ def run_claude(paths: Paths, prompt: str, session_id: str, log: Path) -> dict[st
     return {**read_outcome(log), "token": token}
 
 
+# --- GitHub --------------------------------------------------------------------------------
+
+# The repositories a keeper's fixes go to (KEEPER.md), and whose they are.
+UPSTREAM = "ChristianBlevens"
+REPOSITORIES = ("RaiGolmi", "raigolmi-packages")
+GH_SECONDS = 60
+# A request that had no answer is asked again: the container's DNS flaps and a retry succeeds.
+GH_ATTEMPTS = 3
+
+
+def gh(args: list[str]) -> tuple[int, str, str]:
+    """`gh <args>` on the container's GitHub sign-in: exit code, stdout, stderr."""
+    try:
+        done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_SECONDS)
+    except subprocess.TimeoutExpired:
+        return -1, "", f"gh did not answer within {GH_SECONDS} s"
+    return done.returncode, done.stdout, done.stderr
+
+
+def ask_github(run: Callable[[list[str]], tuple[int, str, str]],
+               args: list[str]) -> tuple[str, str]:
+    """("answered", stdout), ("signed_out", why) when gh has no sign-in or GitHub refuses it
+    (gh's exit 4, or a 401), or ("unasked", why) when no attempt had an answer."""
+    for _ in range(GH_ATTEMPTS):
+        code, out, err = run(args)
+        if code == 0:
+            return "answered", out.strip()
+        why = err.strip() or f"gh exited {code}"
+        if code == 4 or "HTTP 401" in err:
+            return "signed_out", why
+    return "unasked", why
+
+
+def push_targets(run: Callable[[list[str]], tuple[int, str, str]]) -> str:
+    """Where a session may push, as its prompt says it. A sign-in pushes to a repository of
+    REPOSITORIES only where GitHub says it can: UPSTREAM's own when it is UPSTREAM, otherwise its
+    fork of it. Without a fork the session's fixes stay in its clone, because pushing is never
+    made possible by forking for them (KEEPER.md)."""
+    nowhere = ("Commit your fixes on `machine/<login>` in your clone, push nothing, and release "
+               "nothing (KEEPER.md § What you may do).")
+    kind, login = ask_github(run, ["api", "user", "--jq", ".login"])
+    if kind == "signed_out":
+        return f"This container has no GitHub sign-in (`gh api user`: {login}). {nowhere}\n\n"
+    if kind == "unasked":
+        return f"GitHub could not be asked who this container signs in as ({login}). {nowhere}\n\n"
+    branch = f"machine/{login.lower()}"
+    lines = [f"GitHub signs this container in as `{login}`; your branch is `{branch}`."]
+    for repo in REPOSITORIES:
+        row = "[.full_name, (.permissions.push | tostring)] | @tsv"
+        if login.lower() == UPSTREAM.lower():
+            query = ["api", f"repos/{UPSTREAM}/{repo}", "--jq", row]
+        else:
+            query = ["api", "--paginate", f"repos/{UPSTREAM}/{repo}/forks", "--jq",
+                     f'.[] | select(.owner.login == "{login}") | {row}']
+        kind, found = ask_github(run, query)
+        pushable = [r.split("\t")[0] for r in found.splitlines() if r.endswith("\ttrue")]
+        if kind != "answered":
+            lines.append(f"- {repo}: whether `{login}` can push to it could not be asked ({found}): "
+                         "commit on the branch in your clone and push nothing there.")
+        elif pushable:
+            lines.append(f"- {repo}: push `{branch}` to `{pushable[0]}`, and release from it.")
+        else:
+            lines.append(f"- {repo}: `{login}` has no fork of `{UPSTREAM}/{repo}` it can push to: "
+                         "commit on the branch in your clone, push nothing and release nothing there.")
+    return "\n".join(lines) + "\n\n"
+
+
 def push_ntfy(topic: str, title: str, message: str) -> None:
     request = urllib.request.Request(NTFY + topic, data=message.encode("utf-8"), method="POST",
                                      headers={"Title": title})
@@ -619,16 +689,19 @@ class Keeper:
     against doubles: `clock` (epoch seconds), `monotonic` (the keeper's own clock, for how long
     something stayed the same), `probe` (the VM), `runner` (one Claude Code session: prompt, id,
     log -> read_outcome's dict and `token`), `ready` (refused token -> claude_ready's answer),
-    `push` (one ntfy alert), and `tell` (`rai keeper <args>` on the VM -> {ok, result or error})."""
+    `push` (one ntfy alert), `tell` (`rai keeper <args>` on the VM -> {ok, result or error}), and
+    `targets` (push_targets' words for a session's prompt)."""
 
     def __init__(self, paths: Paths, clock: Callable[[], float], monotonic: Callable[[], float],
                  probe: Callable[[], dict[str, Any]],
                  runner: Callable[[str, str, Path], dict[str, Any]],
                  ready: Callable[[str | None], tuple[str, str]],
                  push: Callable[[str, str, str], None],
-                 tell: Callable[[list[str]], dict[str, Any]]) -> None:
+                 tell: Callable[[list[str]], dict[str, Any]],
+                 targets: Callable[[], str]) -> None:
         self.paths, self.clock, self.monotonic, self.probe = paths, clock, monotonic, probe
         self.runner, self.ready, self.push, self.tell = runner, ready, push, tell
+        self.targets = targets
         self.state, self.why = "starting", None
         self.incident: dict[str, Any] | None = None
         self.last_incident: dict[str, Any] | None = None
@@ -929,6 +1002,7 @@ class Keeper:
             f"{json.dumps(incident['evidence'], indent=2)}\n\n"
             f"The last lines of windows/qemu.log:\n{qemu_tail}\n\n"
             + pace(((incident["evidence"] or {}).get("vm") or {}).get("plan"))
+            + self.targets()
             + (f"Earlier keeper sessions on this incident did not fix it:{earlier}\n"
                "Read their logs and notes before acting.\n\n" if earlier else "")
             + (f"The machine tab paused the tabs this fault affects "
@@ -994,7 +1068,7 @@ def loop(paths: Paths) -> int:
                 keeper = Keeper(paths, time.time, time.monotonic, lambda: probe_vm(paths),
                                 lambda prompt, sid, log: run_claude(paths, prompt, sid, log),
                                 lambda refused: claude_ready(paths, refused), push_ntfy,
-                                lambda args: rai_keeper(paths, args))
+                                lambda args: rai_keeper(paths, args), lambda: push_targets(gh))
             keeper.check()
         except Exception:
             logger.exception("the check failed; the next is in %d s", CHECK_SECONDS)
