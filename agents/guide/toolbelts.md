@@ -12,7 +12,7 @@ the body. `exec`, `rai terminal` and a face's language servers run there.
 
 ## The definition
 
-`toolbelts/<id>/toolbelt.toml`. An unknown key is an error.
+`toolbelts/<id>/toolbelt.toml`. An unknown key is an error. `description` and `author` (text) are accepted on every layer, and a `thumbnail.png` beside the file; the catalog shows them.
 
 ```toml
 id = "python"
@@ -24,8 +24,10 @@ packages = ["bashInteractive", "coreutils", "python3", "util-linux", "libcap", "
 ```
 
 `packages` are Nix attribute names; find each with `search_packages` first (a hint: Nixery's answer when the image is pulled is the check). An empty list is
-refused, and so is one missing any of `libcap`, `python3`, `coreutils` and `util-linux`, which
-the view's launcher runs on.
+refused, and one missing any of `libcap`, `python3`, `coreutils` and `util-linux`, which
+the view's launcher runs on, is refused when a sandbox opens on it (not in `definition_errors`).
+A package Nixery cannot serve (an unfree one) is built on the machine from a flake the daemon
+generates from the same list, which can take many minutes; nothing is written for it.
 
 The daemon writes `toolbelt.lock` beside the definition once the toolbelt runs: the image it
 resolved and the store paths. It is reused while `packages` is unchanged. Do not edit it.

@@ -86,7 +86,7 @@ instead. A sandbox's body, view and anchor are yours to repair too, with
 door.
 
 Every project has a budget its own tab set in its body.toml (`[budget]`: `caches`, `output`,
-`memory`): the range a regular run stays within, a tripwire for the tab rather than a limit.
+`memory`, `cpu`): the range a regular run stays within, a tripwire for the tab rather than a limit.
 A budget passed goes to the project's tab, which checks it; it comes to you only when the
 project has no tab (`budget.untended`): then `disk` and `memory` show what it holds, and you
 put to the user whether it is the work's or leftovers. Never change a project's files or its
@@ -219,7 +219,7 @@ to another tab, tell the user which one and how to reach it, and do not do it he
   pinned is failing; one that fails its first session is gone back from for you),
   this machine's copy for another computer (`export_machine`; the user imports it there with
   `rai import <file>` in the AI terminal's `raigolmi` shell, after dropping the file on the
-  window into ~/Transfer),
+  window into ~/Transfer), a bug in RaiGolmi itself for the keeper to fix (`report_fault`),
   and the body tabs it manages, which it steers with `direct`. The project work inside a body
   is that body's tab's.
 - **The janitor** repairs the machine's failures; nobody works in it.
@@ -348,7 +348,8 @@ project's cache, so work started in parallel queues on it; `jobs` shows what is 
 fresh build would, and keep nothing the project needs in it — runs, snapshots and scripts go
 in a directory of their own. **A budget keeps you on top of what
 your project accumulates.** A `[budget]` table in its body.toml — `caches`, `output`, `memory`,
-each a size like `"2G"` — is the range a regular run stays within with nothing duplicated or
+each a size like `"2G"`, and `cpu`, a share of the machine like `"50%"`, the whole machine
+unless set lower — is the range a regular run stays within with nothing duplicated or
 stale, set close to what a regular run keeps: never a ceiling with room to spare. You are asked
 for one when the project first builds or keeps output. Passing it is not an error: you are
 told, and check — if the excess is what the work now regularly needs, set the new range; if it

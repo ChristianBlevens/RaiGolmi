@@ -11,7 +11,7 @@ belong to the host.
 
 ## The definition
 
-`faces/<id>/face.toml`. An unknown key is an error.
+`faces/<id>/face.toml`. An unknown key is an error. `description` and `author` (text) are accepted on every layer, and a `thumbnail.png` beside the file; the catalog shows them.
 
 ```toml
 id = "writing"
@@ -88,7 +88,10 @@ starts again. `open` is what `show_file` runs in the face; without it `show_file
 daemon fills in `{socket}` (a path the editor may listen on; if `open` names it and it is
 gone, the window is taken as closed), `{config}` (`/etc/face-editor`), `{glue}` (the nvim
 helper below), `{path}` and `{line}`, and `{request}`: a JSON file holding `path` and `line`,
-for an editor whose command quoting a path could break (nvim's keys). Any other `{…}` is text.
+for an editor whose command quoting a path could break (nvim's keys). `command` is given
+`{socket}`, `{glue}`, and `{config}` when `config_dir` is set; `open` is given `{path}`,
+`{line}`, `{socket}` and `{request}`. Any other `{word}` is a definition error; braces around
+anything but a plain word are text.
 
 A language server runs in the focused toolbelt, rooted at `/work`, when the editor starts it
 as `python3 -m rai lsp <server command>`. For nvim the glue does that and restarts servers when

@@ -11,7 +11,7 @@ body's tab.
 
 ## The definition
 
-`bodies/<id>/body.toml`. An unknown key is an error.
+`bodies/<id>/body.toml`. An unknown key is an error. `description` and `author` (text) are accepted on every layer, and a `thumbnail.png` beside the file; the catalog shows them.
 
 ```toml
 id = "myapi"
@@ -78,8 +78,8 @@ that names none is never asked.
 [principles]
 doc = "PRINCIPLES.md"
 ```
-A `dockerfile` is resolved against the working copy when one is set, otherwise against the
-definition directory.
+A `dockerfile` is resolved inside the build's `context` (default `.`), itself relative to the
+working copy when one is set, otherwise to the definition directory.
 
 The body runs as the owner of its working copy, not as its image's user, so what it writes
 in `/work` is the user's. An image whose program needs root at run time (a port under 1024, writes

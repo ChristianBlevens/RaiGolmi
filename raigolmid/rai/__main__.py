@@ -1408,7 +1408,7 @@ def _redacted_compose(text: str) -> str:
 def cmd_diagnose(args) -> int:
     """Bundle logs, state, generated Compose files and compositor state into one file the
     user can send back. Written to `~/Transfer/out` where there is one, so on Windows it
-    arrives in `Downloads\\RaiGolmi`."""
+    arrives in the RaiGolmi folder's `transfer`."""
     paths = Paths.from_env()
     name = f"raigolmi-diagnose-{int(time.time())}.tar.gz"
     outbox = Path.home() / "Transfer" / "out"

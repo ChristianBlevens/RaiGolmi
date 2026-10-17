@@ -564,7 +564,7 @@ def test_the_index_routes_to_the_documents_that_exist_and_every_layer(h, monkeyp
             assert row["directory"] is None or row["directory"].startswith(
                 ("/definitions/", "/work")), row
     listed = json.loads(asyncio.run(tools.call_tool("list_items", {"kind": "toolbelt"})).content[0].text)
-    assert list(listed) == ["toolbelts"]
+    assert list(listed) == ["toolbelts", "definition_errors"]
 
 
 def test_a_tool_refuses_an_argument_outside_what_it_accepts_by_name(h):

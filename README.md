@@ -33,7 +33,7 @@ hasn't met many others yet, so if something goes wrong, see
 
 You need 64-bit Windows 10 or 11 on an Intel or AMD (x86-64) PC, not an ARM one, with
 virtualization turned on in its BIOS/UEFI (most ship with it on, and setup tells you if yours
-doesn't), 16 GB of RAM (the VM takes 8; setup refuses below 12), a graphics card with
+doesn't), 16 GB of RAM (the VM takes 8; setup needs 12, and accepts a PC that reports at least 11), a graphics card with
 Direct3D 11, about 60 GB free for a disk that grows as you use it, and a paid Claude plan
 (Pro or Max; Team and Enterprise work too). It doesn't run inside another VM unless that VM
 passes virtualization through. Windows asks for administrator rights for each system part
@@ -60,9 +60,11 @@ Closing it shuts the machine down properly, and so does Windows restarting or sh
 Click the icon at the window's top left for **Settings** (all off until you choose them, kept in
 `state\settings.ini` in the RaiGolmi folder): *Start RaiGolmi when I sign in to Windows*, *Keep
 Windows awake while RaiGolmi runs* (the screen can still turn off), *Memory* for the machine (8,
-12, 16 or 24 GB, from its next start), *Venus (Vulkan)*, an experiment that needs a
-QEMU built for it, and *Phone alerts*, a box for an ntfy topic (below; from the machine's next
-start) with *Send a test alert* beside it. To leave it running unattended, also turn on Windows' automatic sign-in
+12, 16 or 24 GB, from its next start; a size that would leave Windows under 4 GB is greyed
+out), *Venus (Vulkan)* for the machine's GPU, from its next start (setup installs the QEMU
+build it needs), *Phone alerts*, a box for an ntfy topic (below; from the machine's next
+start) with *Send a test alert* beside it, *Heartbeat*, a box for a healthchecks.io ping URL
+(below), and *Keeper* with *Open the keeper's terminal* (below). To leave it running unattended, also turn on Windows' automatic sign-in
 (`netplwiz`, or Sysinternals Autologon) and your BIOS's "power on after AC loss".
 
 To update, get the newest scripts first (`git pull` in the folder, or download the ZIP
@@ -456,7 +458,10 @@ up to 64), type it in and press Enter, and subscribe to that topic in the ntfy a
 *Send a test alert* sends one from Windows straight away, so you can check the phone without
 the machine. From the machine's next start it sends a plain-words message, at most once a day per cause,
 only when nothing on it can carry on: no sign-in works, the disk is full even after cleaning
-up, or Claude has refused every tab for a day. It can't tell you when Windows itself is down.
+up, or Claude has refused every tab for a day. It can't tell you when Windows itself is down;
+the *Heartbeat* can: with a healthchecks.io ping URL set, the window pings it every five minutes
+while the machine runs, and healthchecks.io alerts your phone when the pings stop, whether the
+PC is off, nobody is signed in, or the window is gone.
 
 If the machine stops responding (QEMU silent for two minutes) or QEMU stops on its own after it
 was running, the window restarts the machine by itself, without an alert. After five restarts in a
@@ -475,7 +480,8 @@ it on, choose *Settings → Open the keeper's terminal* and run `gh auth login`;
 fixes go: to branch `machine/<your login>` on your own fork of RaiGolmi (and of
 `raigolmi-packages`), released from there as this machine's own channel, which its upgrades
 then install. Without a fork it pushes and releases nothing and keeps its fixes committed on
-that branch inside the container; it never makes a fork or opens a pull request for you. Claude needs no second sign-in: the keeper
+that branch in its own clone on the `raigolmi-keeper-home` volume (it never commits in your
+RaiGolmi folder); it never makes a fork or opens a pull request for you. Claude needs no second sign-in: the keeper
 copies the machine's own agent credential each time it looks, and keeps the last copy for when
 the machine does not answer. The keeper's key is let into the machine from its next start. What it did is in `keeper\outbox\` (`keeper.json`, its log `keeper.log`, and
 each repair's log and notes in `sessions\`); it can change a setting in `state\settings.ini` and
@@ -498,7 +504,8 @@ and the machine tab's direction, your layers and desktop files, and each project
 GitHub repository doesn't have. It never holds a sign-in. On the other computer, finish the
 first start's sign-ins first (a private project is cloned with your GitHub sign-in), then drop
 the file on the window and run `rai import ~/Transfer/<file>` in the `raigolmi` tab's shell: it
-stops RaiGolmi, puts everything in place, clones each project again and starts back up. Your
+stops the daemon, writes everything in place over what this machine has of the same things,
+clones each project again and starts the daemon back up. Your
 faces and toolbelts come with it and their images are built again when they first start; the
 machine tab carries on from its direction and memory, opening new tabs for the work. The
 machine tab can make the file for you too.
@@ -511,12 +518,16 @@ It checks for and offers to install:
 - the .NET 8 Desktop Runtime;
 - Windows' OpenSSH client, which the clipboard, `~/Transfer` and updates go through;
 - MSYS2;
-- a patched QEMU and virglrenderer, downloaded from
+- a patched QEMU and virglrenderer, with the Venus build beside them, downloaded from
   [raigolmi-packages](https://github.com/ChristianBlevens/raigolmi-packages), because the
   stock ones can't show the boot screen or give disk space back. Before installing them it
   brings MSYS2 itself up to date, since MSYS2 only supports updating everything at once.
 
-If you say no, it prints the commands to install each one yourself. The app and disk come
+.NET and MSYS2 are installed through winget; a PC without it (some Windows 10 ones) is told to
+install *App Installer* from the Microsoft Store first. Before offering anything, setup stops
+and says why on an ARM processor, virtualization turned off in the firmware, too little memory,
+Windows waiting on a restart, or a hypervisor that is installed but not running. If you say no,
+it prints the commands to install each one yourself. The app and disk come
 from [the `raigolmi` package](https://github.com/ChristianBlevens/RaiGolmi/pkgs/container/raigolmi)
 on GitHub's container registry. For a fresh disk, delete `disk\raigolmi.qcow2` and run it
 again. Keep the RaiGolmi folder out of OneDrive: the disk grows to 60 GB and changes all the
@@ -573,6 +584,10 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 - There's no XWayland, so X11-only programs don't run in a face. WebKit-based browsers don't
   work either. Firefox does, and so does Chromium with a few flags.
 - The clipboard between Windows and the machine carries text only.
+- The machine has sound only when Windows has both a default playback device and a default
+  recording device, since QEMU's Windows audio opens both. Without either (a PC with speakers
+  but no microphone, say) it starts with no sound card and says so. The agents' projects never
+  need it: a program's audio in a body goes into nothing, or into a WAV file it names.
 - The app isn't signed, and it watches the keyboard so keys like Super reach the machine.
   That combination can make antivirus software suspicious of it. It's built by the
   `publish` workflow from this repository's source, which you can read or build yourself.
@@ -625,20 +640,24 @@ What it doesn't protect you from, so you know what you're handing over:
 
 ### The `rai` command
 
-Run it from the `raigolmi` tab's shell.
+Run it from the `raigolmi` tab's shell. `--json` before a command prints its answer as JSON.
 
 | Command | What it does |
 |---|---|
 | `rai status [--follow]` | What's selected and running |
-| `rai list` | The layers, and whether each can be picked |
-| `rai select` / `rai deselect` | Change what's selected |
-| `rai terminal` | A shell in a sandbox's toolbelt |
-| `rai exec` | Run a command in a sandbox's toolbelt |
-| `rai rebuild` / `rai repair` | Rebuild a body, or tear a sandbox down and rebuild it |
-| `rai events [-f]` | The event log, read from disk if the daemon is down; `-f` follows it |
+| `rai list [face\|toolbelt\|body]` | The layers, and whether each can be picked |
+| `rai select face\|body <id>` / `rai deselect face\|body` | Change what's selected |
+| `rai terminal [<sandbox>]` | A shell in a sandbox's toolbelt (the focused one if none named) |
+| `rai exec <sandbox> <command> [--cwd DIR]` | Run a command in a sandbox's toolbelt |
+| `rai rebuild <sandbox>` / `rai repair <sandbox>` | Rebuild a sandbox's body, or tear the sandbox down and rebuild it |
+| `rai history <sandbox> [-n N]` | A sandbox's lifecycle and its body's builds |
+| `rai ask <words> [--tab <tab>]` | Your words to an agent tab: the one you're viewing, else the machine tab |
+| `rai search <query> [--limit N]` | Look a package name up in nixpkgs |
+| `rai events [-f] [-n N]` | The event log, read from disk if the daemon is down; `-f` follows it |
+| `rai ai [list]` | Attach to the AI terminal, or list its tabs |
 | `rai ai restart <tab>` / `rai ai kill <tab>` | Restart a tab's agent, or stop it |
 | `rai claude-update [--pinned]` | Move every agent to the newest Claude Code, or back to the one this release pins. Idle tabs restart on their conversations right away, and working ones as their turns end |
-| `rai diagnose` | Bundle the logs and state into one file you can send |
+| `rai diagnose [-o FILE]` | Bundle the logs and state into one file you can send |
 | `rai export [--out DIR]` / `rai import <file>` | This machine's own things in one file, and that file put in place on another |
 | `rai credential --set`, `rai registry-token --login`, `rai claude-login --login` | Redo the three first-start steps (`--api-key` with `--set` takes a Console API key instead, billed per token, and Remote Control doesn't work with one) |
 
