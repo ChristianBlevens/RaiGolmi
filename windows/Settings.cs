@@ -117,7 +117,7 @@ sealed class Settings
 
     public void Save()
     {
-        File.WriteAllText(path,
+        Durable.Write(path,
             "start-at-login=" + OnOff(StartAtLogin) + Environment.NewLine +
             "keep-awake=" + OnOff(KeepAwake) + Environment.NewLine +
             "memory=" + Memory + Environment.NewLine +

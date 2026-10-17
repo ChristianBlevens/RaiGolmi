@@ -250,6 +250,28 @@ class LauncherError : Exception
     public LauncherError(string message) : base(message) { }
 }
 
+// A file written whole or not at all, across a power cut too: the data is flushed to the disk
+// before the rename, because NTFS journals the rename and the size but not the data, and a PC
+// that stops between them leaves a file of NULs that the next start cannot read.
+static class Durable
+{
+    public static void Write(string path, byte[] data)
+    {
+        string partial = path + ".partial";
+        using (var file = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            file.Write(data, 0, data.Length);
+            file.Flush(true);
+        }
+        File.Move(partial, path, true);
+    }
+
+    public static void Write(string path, string text)
+    {
+        Write(path, new UTF8Encoding(false).GetBytes(text));
+    }
+}
+
 // Everything this machine's QEMU needs: its state in the project folder's state\, its log and
 // screen beside the exe.
 class Machine
@@ -398,7 +420,7 @@ class Machine
             pick.Filter = "RaiGolmi disk (*.qcow2)|*.qcow2";
             if (pick.ShowDialog() != DialogResult.OK)
                 return null;
-            File.WriteAllText(record, pick.FileName);
+            Durable.Write(record, pick.FileName);
             return pick.FileName;
         }
     }
@@ -1866,7 +1888,7 @@ class Window : Form
     void SavePlacement()
     {
         Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
-        File.WriteAllText(machine.Placement, b.X + " " + b.Y + " " + b.Width + " " + b.Height);
+        Durable.Write(machine.Placement, b.X + " " + b.Y + " " + b.Width + " " + b.Height);
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -2330,11 +2352,9 @@ sealed class Keeper
             }
             json.WriteEndObject();
         }
-        string partial = StateFile + ".partial";
         try
         {
-            File.WriteAllBytes(partial, buffer.ToArray());
-            File.Move(partial, StateFile, true);
+            Durable.Write(StateFile, buffer.ToArray());
         }
         catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
         {
@@ -2443,9 +2463,7 @@ sealed class Keeper
             byte[] carried = Carried(resource);
             if (File.Exists(target) && File.ReadAllBytes(target).AsSpan().SequenceEqual(carried))
                 continue;
-            string partial = target + ".partial";
-            File.WriteAllBytes(partial, carried);
-            File.Move(partial, target, true);
+            Durable.Write(target, carried);
             written.Add(name);
         }
         return written;
