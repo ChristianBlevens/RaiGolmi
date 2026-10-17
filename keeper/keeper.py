@@ -238,10 +238,14 @@ def parse_iso(text: str) -> float:
 
 
 def write_json(path: Path, data: Any) -> None:
-    """Written whole or not at all: a reader never sees half of it."""
+    """Written whole or not at all, across a power cut too: the data is synced before the rename,
+    or NTFS can keep the rename and the size while the data never reached the disk (a file of NULs)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(f".{path.name}.partial")
-    partial.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    with open(partial, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(data, indent=2) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(partial, path)
 
 
