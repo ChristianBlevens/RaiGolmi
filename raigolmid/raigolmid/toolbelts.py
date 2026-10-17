@@ -207,6 +207,13 @@ class NixeryRefused(RuntimeError_):
     failed on the way. Only this sends a toolbelt to the flake escape hatch (`flakes.py`)."""
 
 
+class NixeryLost(RuntimeError_):
+    """Nixery no longer holds the manifest a digest names. It keeps a built image for a
+    while, not for ever, and answers a digest it does not hold with HTTP 200 and an empty
+    body, which dockerd reports as an unsupported manifest media type. A lock pinned by such
+    a digest reproduces nothing any more."""
+
+
 def pull_from_nixery(runtime: ContainerRuntime, reference: str) -> ImageInfo:
     """Pulls a Nixery image; a refused pull carries Nixery's own answer.
 
@@ -217,9 +224,8 @@ def pull_from_nixery(runtime: ContainerRuntime, reference: str) -> ImageInfo:
     try:
         return runtime.pull(reference)
     except RuntimeError_ as exc:
-        said, refused = _nixery_answer(reference)
-        raise (NixeryRefused if refused else RuntimeError_)(
-            f"{exc}. Nixery says: {said}") from exc
+        said, kind = _nixery_answer(reference)
+        raise kind(f"{exc}. Nixery says: {said}") from exc
 
 
 def nixery_says(reference: str) -> str:
@@ -227,8 +233,9 @@ def nixery_says(reference: str) -> str:
     return _nixery_answer(reference)[0]
 
 
-def _nixery_answer(reference: str) -> tuple[str, bool]:
-    """Nixery's words for `reference`, and whether they are a refusal of the list."""
+def _nixery_answer(reference: str) -> tuple[str, type[RuntimeError_]]:
+    """Nixery's words for `reference`, and the failure they make of its pull: a refusal of
+    the list, a digest it no longer holds, or neither."""
     registry, _, rest = reference.partition("/")
     if "@" in rest:
         repository, _, tag = rest.partition("@")
@@ -241,18 +248,22 @@ def _nixery_answer(reference: str) -> tuple[str, bool]:
                                               "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
+            if "@sha256:" in reference and not response.read():
+                return (f"HTTP {response.status} with an empty body: it no longer holds the "
+                        "manifest by that digest"), NixeryLost
             return (f"it serves {reference} (HTTP {response.status}), so the pull failed on "
-                    "this side"), False
+                    "this side"), RuntimeError_
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace").strip()
         try:
-            return "; ".join(error["message"] for error in json.loads(body)["errors"]), True
+            return ("; ".join(error["message"] for error in json.loads(body)["errors"]),
+                    NixeryRefused)
         except (json.JSONDecodeError, KeyError, TypeError):
-            return f"HTTP {exc.code}: {body[:500]}", False
+            return f"HTTP {exc.code}: {body[:500]}", RuntimeError_
     except urllib.error.URLError as exc:
-        return f"nothing: it could not be reached ({exc.reason})", False
+        return f"nothing: it could not be reached ({exc.reason})", RuntimeError_
     except (TimeoutError, OSError) as exc:
-        return f"nothing: it could not be asked ({exc})", False
+        return f"nothing: it could not be asked ({exc})", RuntimeError_
 
 
 class ToolbeltResolver:
@@ -331,12 +342,25 @@ class ToolbeltResolver:
     def fetch(self, runtime: ContainerRuntime, events: EventLog, toolbelt: Toolbelt,
               closure: Closure, epoch: int) -> None:
         """`closure`'s image on the machine: pulled from Nixery, or — for a list Nixery
-        refuses, or a closure from a flake — built from a generated flake (`flakes.py`)."""
+        refuses, or a closure from a flake — built from a generated flake (`flakes.py`).
+
+        A lock whose image Nixery no longer holds is deleted and the package list resolved
+        again, Nixery's current closure of it: the lock's store paths are gone with the
+        manifest, and the view that works on the new closure locks it again."""
         if runtime.image(closure.image) is not None:
             return
         if closure.method != "flake":
             try:
                 pull_from_nixery(runtime, closure.image)
+                return
+            except NixeryLost as lost:
+                lock = self.read_lock(toolbelt)
+                if lock is None or lock.image != closure.image:
+                    raise
+                toolbelt.lock_path.unlink()
+                events.emit("toolbelt.lock_lost", toolbelt=toolbelt.id, image=lock.image,
+                            resolved_at=lock.resolved_at, reason=str(lost))
+                self.fetch(runtime, events, toolbelt, self.resolve(toolbelt), epoch)
                 return
             except NixeryRefused as refused:
                 events.emit("toolbelt.nixery_refused", toolbelt=toolbelt.id,

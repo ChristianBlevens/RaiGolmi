@@ -39,7 +39,7 @@ def built(tmp_path: Path):
     runtime.add_image("toolbelt:test")
     views.create(ViewPlan(instance=INSTANCE, body_container_id="body0",
                           anchor_ref=f"container:{anchor.id}",
-                          toolbelt_image="toolbelt:test",
+                          toolbelt_image="toolbelt:test", toolbelt_digest="sha256:test",
                           working_copy=work, generation=1))
     spec = runtime.spec_of(naming.view(INSTANCE))
     return paths, spec

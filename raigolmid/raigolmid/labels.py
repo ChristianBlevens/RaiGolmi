@@ -19,6 +19,8 @@ FACE = f"{PREFIX}.face"
 # The image id of a face's apps closure (`closures.py`), whose store paths it shows.
 FACE_CLOSURE = f"{PREFIX}.face_closure"
 VIEW_GENERATION = f"{PREFIX}.view_generation"
+# On a view: the package digest of the toolbelt its image is the closure of.
+TOOLBELT_DIGEST = f"{PREFIX}.toolbelt_digest"
 DEFINITION_DIGEST = f"{PREFIX}.definition_digest"
 # On an agent: the definition repositories' git protections it was made with (`agents.py`).
 GIT_PROTECTED = f"{PREFIX}.git_protected"

@@ -182,7 +182,8 @@ def instance(request, runtime, toolbelt_image, env, tmp_path):
     body = runtime.inspect(body_name)
     views.create(ViewPlan(instance=instance_id, body_container_id=body.id,
                           anchor_ref=anchors.namespace_ref(instance_id),
-                          toolbelt_image=toolbelt_image, working_copy=work,
+                          toolbelt_image=toolbelt_image, toolbelt_digest="sha256:test",
+                          working_copy=work,
                           generation=1))
     try:
         client = views.wait_until_usable(instance_id, timeout=90)
@@ -346,7 +347,8 @@ def test_removing_a_body_under_a_live_view_and_after_teardown(runtime, toolbelt_
     body = runtime.inspect(name)
     views.create(ViewPlan(instance=instance_id, body_container_id=body.id,
                           anchor_ref=anchors.namespace_ref(instance_id),
-                          toolbelt_image=toolbelt_image, working_copy=work,
+                          toolbelt_image=toolbelt_image, toolbelt_digest="sha256:test",
+                          working_copy=work,
                           generation=1))
     try:
         views.wait_until_usable(instance_id, timeout=90)

@@ -664,15 +664,14 @@ class Session:
     def check_toolbelt_swap(self, tab_id: str, toolbelt_id: str) -> bool:
         """What `toolbelt_swap` would refuse, asked before the user is: a permission for a
         swap that cannot happen would waste their answer. False when the sandbox already has
-        that toolbelt, so there is nothing to ask."""
+        that toolbelt as it is defined now, so there is nothing to ask."""
         with self._lock:
             tab = self._tab(tab_id)
             place = self._place(tab)
             if not self._holds(tab_id, place.sandbox):
                 raise SessionError(f"this tab has no sandbox open; open {place.sandbox} "
                                    "with `sandbox_open`")
-            self._toolbelt_for(tab, place, toolbelt_id)
-            return self.intent.instances[place.sandbox].toolbelt != toolbelt_id
+            return not self._runs(place.sandbox, self._toolbelt_for(tab, place, toolbelt_id))
 
     def toolbelt_swap(self, tab_id: str, toolbelt_id: str) -> None:
         """The toolbelt swapped in place: the body keeps running and the views
@@ -685,9 +684,8 @@ class Session:
             if not self._holds(tab_id, place.sandbox):
                 raise SessionError(f"this tab has no sandbox open; open {place.sandbox} "
                                    "with `sandbox_open`")
-            want = self.intent.instances[place.sandbox]
             toolbelt = self._toolbelt_for(tab, place, toolbelt_id)
-            if want.toolbelt == toolbelt.id:
+            if self._runs(place.sandbox, toolbelt):
                 return
         # Build first: the image is fetched while the old view still serves, and
         # only a fetched toolbelt becomes the sandbox's. The fetch touches no container of the
@@ -706,6 +704,12 @@ class Session:
                 self._show(place.sandbox)
             self.events.emit("toolbelt.swapped", tab=tab_id, instance=place.sandbox,
                              toolbelt=toolbelt.id)
+
+    def _runs(self, sandbox: str, toolbelt: Toolbelt) -> bool:
+        """Whether the sandbox's view is `toolbelt` as defined now. A changed package list is
+        a swap to the same toolbelt: the view is recreated on the list's new closure."""
+        return (self.intent.instances[sandbox].toolbelt == toolbelt.id
+                and self.views.toolbelt_digest_of(sandbox) == toolbelt.package_digest)
 
     def toolbelts_for(self, tab_id: str) -> dict[str, dict[str, Any]]:
         """Every toolbelt with whether this tab's sandbox may run it, and why not."""

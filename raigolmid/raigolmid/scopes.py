@@ -147,7 +147,7 @@ def _talking(session: Session, questions: Questions, channels: Channels,
         # be done at all, and otherwise done on their yes.
         if not session.check_toolbelt_swap(tab_id, toolbelt):
             return {"status": "unchanged",
-                    "next": f"The sandbox already runs toolbelt '{toolbelt}'."}
+                    "next": f"The sandbox already runs toolbelt '{toolbelt}' as it is defined now."}
         body, _ = naming.split(instance_of(session, tab_id))
         id, always = questions.ask_permission(
             tab_id, permissions.swap_message(toolbelt),

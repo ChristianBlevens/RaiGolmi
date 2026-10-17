@@ -351,6 +351,7 @@ class Instances:
                                if instance.body is not None else None),
             anchor_ref=self.anchors.namespace_ref(instance.instance_id),
             toolbelt_image=closure.image,
+            toolbelt_digest=closure.package_digest,
             working_copy=Path(instance.working_copy),
             generation=instance.view_generation,
         )
