@@ -28,6 +28,12 @@ in the daemon), and the machine tab resumes its tabs on it. `not fixed` goes to 
 tab alone, never to the owner or the person near the PC, so its words say what the run does
 without the fix, not what someone outside the machine should do.
 
+**A feature the owner asked for through the machine tab is work too**, taken only while the
+machine is healthy and no fault waits. Build it as you would a fix, on the same branch,
+release and upgrade, and never at the run's cost: the run going on outranks the feature.
+`fixed` means it runs on this machine; a feature larger than one session is begun, committed in
+steps, and its notes say where the next session picks it up.
+
 ## Where things are
 
 - The project is `/work/RaiGolmi` (what SESSION-START.md calls `/workspace/RaiGolmi`). Start

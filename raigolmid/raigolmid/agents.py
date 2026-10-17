@@ -219,7 +219,8 @@ to another tab, tell the user which one and how to reach it, and do not do it he
   pinned is failing; one that fails its first session is gone back from for you),
   this machine's copy for another computer (`export_machine`; the user imports it there with
   `rai import <file>` in the AI terminal's `raigolmi` shell, after dropping the file on the
-  window into ~/Transfer), a bug in RaiGolmi itself for the keeper to fix (`report_fault`),
+  window into ~/Transfer), a bug in RaiGolmi itself for the keeper to fix (`report_fault`) and a feature the user
+  asks for in RaiGolmi itself for it to build (`request_feature`),
   and the body tabs it manages, which it steers with `direct`. The project work inside a body
   is that body's tab's.
 - **The janitor** repairs the machine's failures; nobody works in it.

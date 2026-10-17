@@ -129,3 +129,28 @@ def test_a_fault_left_waiting_by_a_keeper_gone_is_said_once_with_the_fallback(h)
     assert "no keeper is reachable" in told and "Work around it" in told and BODY in told
     m.coordinator.tick(gone + 60)
     assert len(told_of(m, MACHINE, id)) == 1, "said once"
+
+
+def test_a_feature_is_filed_pausing_nothing_and_its_answer_is_told(h):
+    m = Machine(h)
+    with pytest.raises(SessionError, match="only the machine tab"):
+        m.tab(BODY)["request_feature"](title="x", body="y")
+    faults.Faults(h.paths, h.events).seen()
+    filed = m.tab(MACHINE)["request_feature"](title="pause all", body="one key pauses every tab")
+    assert filed["keeper"] == "reachable"
+    api = keeper(h, m)
+    [listed] = api["keeper_seen"]()["faults"]
+    assert (listed["id"], listed["kind"], listed["affects"]) == (filed["feature"], "feature", [])
+    api["keeper_take"](id=filed["feature"])
+    api["keeper_answer"](id=filed["feature"], verdict="fixed")
+    [told] = told_of(m, MACHINE, filed["feature"])
+    assert "built" in told and "`resume`" not in told
+
+
+def test_a_record_filed_with_no_kind_is_a_fault(h):
+    store = faults.Faults(h.paths, h.events)
+    id = store.report(MACHINE, "jobs leak", "job_stop: no such job", [])["id"]
+    record = store.get(id)
+    del record["kind"]
+    store._save(record)
+    assert store.get(id)["kind"] == "fault"

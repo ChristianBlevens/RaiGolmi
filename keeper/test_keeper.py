@@ -295,6 +295,29 @@ def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_never_aler
     assert world.pushes == [], "a fault is the machine tab's alone: the run goes on around it"
 
 
+FEATURE = {"id": "feature-1", "kind": "feature", "title": "a pause button for the run",
+           "body": "the owner wants to pause every tab at once", "affects": [], "status": "open"}
+
+
+def test_a_feature_waits_behind_a_fault_and_is_built_without_an_alert(world: World) -> None:
+    world.launcher("running")
+    world.vm = {**HEALTHY, "faults": [FAULT, FEATURE]}
+    world.verdict = k.FIXED
+    world.check()
+    assert world.told[0][:2] == ["take", "fault-1"], "the fault first"
+    world.told.clear()
+    world.verdict = "KEEPER: not fixed: needs a design call"
+    report = world.check(after=k.CHECK_SECONDS)
+    assert report["incident"]["reason"].startswith("the owner asked for a feature")
+    assert world.told[0][:2] == ["take", "feature-1"]
+    assert "pause every tab at once" in world.sessions[-1]
+    assert world.check(after=k.CHECK_SECONDS)["state"] == "building"
+    world.check(after=k.FAILING_SECONDS)
+    assert world.told[-1] == ["answer", "feature-1", "not_fixed", "needs a design call"]
+    assert world.pushes == [], "a feature not built is the owner's news, not the PC's"
+    assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy"
+
+
 def test_an_answer_the_vm_did_not_take_is_sent_again_and_its_fault_not_reworked(world: World) -> None:
     world.launcher("running")
     world.vm = {**HEALTHY, "faults": [FAULT]}

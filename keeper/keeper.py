@@ -11,6 +11,7 @@ ssh, and names the machine one of
     held      the account is on its usage limit (`account.limited` after any `account.resumed`
               in raigolmid's event log, `raigolmid/limits.py`): nothing to do until it lifts
     waiting   the launcher is starting, restarting or upgrading the machine: its turn
+    building  healthy, no fault waiting, and a feature the owner asked for waits
     failing   anything else, with the reason
 
 and acts on a failure by running one headless Claude Code session (KEEPER.md is its appended
@@ -43,6 +44,10 @@ system prompt) with the evidence it gathered. The rules:
   reads): a window on course past its allowance has it work narrower, never wait. Only the
   account's usage limit holds a fault, as it holds every agent: it is answered `deferred`, so it
   is not filed again, and taken up once the limit lifts;
+- a feature the owner asked for through the machine tab (`request_feature`, a record of kind
+  `feature` in the same list) is taken only when every check above passes and no fault waits,
+  and goes through a fault's incident, sessions and answer, but sends no alert: a feature not
+  built is the owner's news, never the person's by the PC;
 - any other failure is acted on once it has lasted `FAILING_SECONDS`, and again that long after
   each session, so what a session started (an upgrade, a restart) has time to take;
 - an incident is the stretch from the first failing check to the next healthy, closed or held
@@ -691,6 +696,12 @@ def pace(plan: dict[str, Any] | None) -> str:
             "but do the repair.\n\n")
 
 
+def is_feature(fault: dict[str, Any] | None) -> bool:
+    """A record the machine tab filed with `request_feature`; a daemon that files no kind files
+    only faults."""
+    return fault is not None and fault.get("kind", "fault") == "feature"
+
+
 def counted(incident: dict[str, Any]) -> int:
     """The incident's sessions that count toward SESSIONS_PER_INCIDENT: each one Claude answered
     without an API error. One kept from before `counted` was recorded counts."""
@@ -806,11 +817,18 @@ class Keeper:
             return Seen("failing", f"a run is in progress and raigolmid has written no event for "
                                    f"{round(last['age_s'] / 60)} minutes (the last: {last['type']})",
                         evidence)
-        faults = [f for f in vm["faults"] if f["id"] not in self.unanswered]
-        if faults:
-            fault = faults[0]
+        faults = [f for f in vm["faults"] if not is_feature(f)]
+        unanswered = [f for f in faults if f["id"] not in self.unanswered]
+        if unanswered:
+            fault = unanswered[0]
             return Seen("failing", f"the machine tab reported a fault in RaiGolmi: {fault['title']}",
                         {**evidence, "fault": fault}, act_now=True)
+        # A fault whose answer the VM has not taken yet still comes before a feature.
+        features = [f for f in vm["faults"] if is_feature(f) and f["id"] not in self.unanswered]
+        if features and not faults:
+            feature = features[0]
+            return Seen("building", f"the owner asked for a feature in RaiGolmi: {feature['title']}",
+                        {**evidence, "fault": feature}, act_now=True)
         return Seen("healthy")
 
     def _daemon_restarted(self, mono: float, restarts: int) -> int:
@@ -837,7 +855,7 @@ class Keeper:
         elif seen.kind == "waiting":
             self.state = "waiting"
         else:
-            self.state = "failing"
+            self.state = "building" if seen.kind == "building" else "failing"
             self._fail(seen, now)
         self.report(now)
 
@@ -856,7 +874,7 @@ class Keeper:
             self.last_incident = {**self.incident, "ended": iso(now), "ended_as": "superseded"}
             self.incident = None
         if self.incident is None:
-            logger.warning("failing: %s", seen.why)
+            logger.warning("%s: %s", seen.kind, seen.why)
             self.incident = {"since": now, "reason": seen.why, "evidence": seen.evidence,
                              "act_at": now + FAILING_SECONDS, "start_requested_at": None,
                              "sessions": [], "unreached_since": None, "line_out": None,
@@ -1001,12 +1019,27 @@ class Keeper:
                                fault_id, told["error"])
 
     def prompt(self, incident: dict[str, Any], session_id: str, notes: Path) -> str:
+        earlier = "".join(f"\n- session {s['id']} ({s['started']}): {s['verdict']}; its log is "
+                          f"{s['log']}, its notes {s['notes']}" for s in incident["sessions"])
+        if is_feature(incident["fault"]):
+            feature = incident["fault"]
+            return (
+                f"The owner asked, through the machine tab, for a feature in RaiGolmi "
+                f"({feature['id']}): {feature['title']}\n\n{feature['body']}\n\n"
+                "The machine is healthy and no fault waits. Build it as you would a fix: on this "
+                "machine's branch, released and upgraded to, without putting the run at risk. "
+                "Your verdict line is the machine tab's answer: `fixed` when it runs on this "
+                "machine; `not fixed: <words>` says why it was not built.\n\n"
+                + pace(((incident["evidence"] or {}).get("vm") or {}).get("plan"))
+                + self.targets()
+                + (f"Earlier keeper sessions on this feature did not finish it:{earlier}\n"
+                   "Read their logs and notes before acting.\n\n" if earlier else "")
+                + f"You are session {session_id}. Write what you find and do into {notes}. "
+                "End with the verdict line.")
         qemu_tail = ""
         if self.paths.qemu_log.exists():
             qemu_tail = "\n".join(self.paths.qemu_log.read_text(
                 encoding="utf-8", errors="replace").splitlines()[-40:])
-        earlier = "".join(f"\n- session {s['id']} ({s['started']}): {s['verdict']}; its log is "
-                          f"{s['log']}, its notes {s['notes']}" for s in incident["sessions"])
         return (
             f"The keeper found the machine failing since {iso(incident['since'])}: "
             f"{incident['reason']}.\n\nWhat the check gathered:\n"
