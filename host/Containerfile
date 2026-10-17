@@ -95,6 +95,7 @@ COPY host/systemd/raigolmi-trim.service   /usr/lib/systemd/system/raigolmi-trim.
 COPY host/systemd/fstrim-timer.conf      /usr/lib/systemd/system/fstrim.timer.d/raigolmi.conf
 COPY host/systemd/fstrim-service.conf    /usr/lib/systemd/system/fstrim.service.d/raigolmi.conf
 COPY host/systemd/journald.conf          /usr/lib/systemd/journald.conf.d/raigolmi.conf
+COPY host/systemd/coredump.conf          /usr/lib/systemd/coredump.conf.d/raigolmi.conf
 COPY host/systemd/runtime-watchdog.conf  /usr/lib/systemd/system.conf.d/raigolmi-watchdog.conf
 #  Docker's images unpacked only: containerd's image store, Docker 29's default, also keeps
 #  every layer compressed as the registry sent it, which nothing here reads.
