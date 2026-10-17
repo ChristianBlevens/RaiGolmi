@@ -495,10 +495,13 @@ drop there, and sends you a file by writing it to `/transfer/out`.
 `rai export` writes this machine's own things into one file in `~/Transfer/out`, so it lands
 in the RaiGolmi folder's `transfer`: your preferences, settings, history, the agents' lessons
 and the machine tab's direction, your layers and desktop files, and each project's work its
-GitHub repository doesn't have. It never holds a sign-in. On the other computer, drop the file
-on the window and run `rai import ~/Transfer/<file>` in the `raigolmi` tab's shell: it stops
-RaiGolmi, puts everything in place, clones each project again and starts back up. The machine
-tab can make the file for you too.
+GitHub repository doesn't have. It never holds a sign-in. On the other computer, finish the
+first start's sign-ins first (a private project is cloned with your GitHub sign-in), then drop
+the file on the window and run `rai import ~/Transfer/<file>` in the `raigolmi` tab's shell: it
+stops RaiGolmi, puts everything in place, clones each project again and starts back up. Your
+faces and toolbelts come with it and their images are built again when they first start; the
+machine tab carries on from its direction and memory, opening new tabs for the work. The
+machine tab can make the file for you too.
 
 ### What `setup.bat` installs
 
