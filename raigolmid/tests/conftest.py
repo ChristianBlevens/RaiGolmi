@@ -12,12 +12,12 @@ for path in (ROOT, ROOT.parent):
         sys.path.insert(0, str(path))
 
 
-import urllib.error
 import urllib.request
 
 import pytest
 
 from tests import facedisplay
+from tests.fakenixery import FakeNixery
 
 
 @pytest.fixture(autouse=True)
@@ -42,13 +42,12 @@ def runtime_dir(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_network(monkeypatch):
+def nixery_dev(monkeypatch):
     """The suite reaches no network, as an offline machine does not: an answer a test needs
-    from a registry is scripted."""
-    def refused(request, *args, **kwargs):
-        raise urllib.error.URLError("the test suite reaches no network")
-
-    monkeypatch.setattr(urllib.request, "urlopen", refused)
+    from a registry is scripted, nixery.dev's by `FakeNixery`."""
+    nixery = FakeNixery()
+    monkeypatch.setattr(urllib.request, "urlopen", nixery.urlopen)
+    return nixery
 
 
 @pytest.fixture(autouse=True)

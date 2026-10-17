@@ -18,6 +18,7 @@ authoring format.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import re
 import time
@@ -215,17 +216,31 @@ class NixeryLost(RuntimeError_):
 
 
 def pull_from_nixery(runtime: ContainerRuntime, reference: str) -> ImageInfo:
-    """Pulls a Nixery image; a refused pull carries Nixery's own answer.
+    """Pulls a Nixery image by its manifest's digest; a refused pull carries Nixery's answer.
+
+    nixery.dev serves a tag's manifest chunked, with no Content-Length, and Docker's resolver
+    refuses that (`missing or empty Content-Length header`), while a manifest asked for by its
+    digest comes with one. So a tag is resolved here, from the manifest Nixery serves for it,
+    and the image is pulled by that digest and tagged as `reference`, the name it is run by.
 
     Docker reports a name Nixery cannot build as `not found` and nothing more, while
     Nixery's registry names the package (`Could not find Nix packages: [name]`). That
-    answer is the name check, so it is asked for when the pull fails.
+    answer is the name check.
     """
-    try:
-        return runtime.pull(reference)
-    except RuntimeError_ as exc:
-        said, kind = _nixery_answer(reference)
-        raise kind(f"{exc}. Nixery says: {said}") from exc
+    if "@" in reference:
+        try:
+            return runtime.pull(reference)
+        except RuntimeError_ as exc:
+            said, kind, _ = _nixery_answer(reference)
+            raise kind(f"{exc}. Nixery says: {said}") from exc
+    said, kind, digest = _nixery_answer(reference)
+    if digest is None:
+        raise kind(f"could not pull '{reference}'. Nixery says: {said}")
+    repository, tag = _repository_and_tag(reference)
+    pinned = f"{repository}@{digest}"
+    runtime.pull(pinned)
+    runtime.tag(pinned, repository, tag)
+    return runtime.image(reference)
 
 
 def nixery_says(reference: str) -> str:
@@ -233,37 +248,46 @@ def nixery_says(reference: str) -> str:
     return _nixery_answer(reference)[0]
 
 
-def _nixery_answer(reference: str) -> tuple[str, type[RuntimeError_]]:
-    """Nixery's words for `reference`, and the failure they make of its pull: a refusal of
-    the list, a digest it no longer holds, or neither."""
+def _repository_and_tag(reference: str) -> tuple[str, str]:
+    if ":" in reference.rsplit("/", 1)[-1]:
+        repository, _, tag = reference.rpartition(":")
+        return repository, tag
+    return reference, "latest"
+
+
+def _nixery_answer(reference: str) -> tuple[str, type[RuntimeError_], str | None]:
+    """Nixery's words for `reference`, the failure they make of its pull (a refusal of the
+    list, a digest it no longer holds, or neither), and the digest of the manifest it serves,
+    None when it serves none."""
     registry, _, rest = reference.partition("/")
     if "@" in rest:
         repository, _, tag = rest.partition("@")
-    elif ":" in rest.rsplit("/", 1)[-1]:
-        repository, _, tag = rest.rpartition(":")
     else:
-        repository, tag = rest, "latest"
+        repository, tag = _repository_and_tag(rest)
     request = urllib.request.Request(f"https://{registry}/v2/{repository}/manifests/{tag}",
                                      headers={"Accept": MANIFEST_TYPES,
                                               "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
-            if "@sha256:" in reference and not response.read():
+            manifest = response.read()
+            if not manifest and "@" in reference:
                 return (f"HTTP {response.status} with an empty body: it no longer holds the "
-                        "manifest by that digest"), NixeryLost
+                        "manifest by that digest"), NixeryLost, None
+            if not manifest:
+                return f"HTTP {response.status} with an empty body", RuntimeError_, None
             return (f"it serves {reference} (HTTP {response.status}), so the pull failed on "
-                    "this side"), RuntimeError_
+                    "this side"), RuntimeError_, "sha256:" + hashlib.sha256(manifest).hexdigest()
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace").strip()
         try:
             return ("; ".join(error["message"] for error in json.loads(body)["errors"]),
-                    NixeryRefused)
+                    NixeryRefused, None)
         except (json.JSONDecodeError, KeyError, TypeError):
-            return f"HTTP {exc.code}: {body[:500]}", RuntimeError_
+            return f"HTTP {exc.code}: {body[:500]}", RuntimeError_, None
     except urllib.error.URLError as exc:
-        return f"nothing: it could not be reached ({exc.reason})", RuntimeError_
+        return f"nothing: it could not be reached ({exc.reason})", RuntimeError_, None
     except (TimeoutError, OSError) as exc:
-        return f"nothing: it could not be asked ({exc})", RuntimeError_
+        return f"nothing: it could not be asked ({exc})", RuntimeError_, None
 
 
 class ToolbeltResolver:

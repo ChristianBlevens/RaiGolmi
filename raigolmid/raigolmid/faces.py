@@ -41,7 +41,7 @@ from .definitions import Face, FaceDesktop, Toolbelt
 from .events import EventLog
 from .paths import APPS_READY, Paths
 from .runtime.base import ContainerRuntime, ContainerSpec, Mount, RuntimeError_
-from .toolbelts import ToolbeltResolver, nixery_reference
+from .toolbelts import ToolbeltResolver, nixery_reference, pull_from_nixery
 from ui import hostipc
 from ui.hostipc import HostIpcError
 
@@ -811,7 +811,7 @@ class Faces:
         runtime_dir = str(state.runtime_dir)
         result = self.runtime.run_to_completion(ContainerSpec(
             name=helper,
-            image=nixery_reference(("wtype",)),
+            image=self._helper_image("wtype"),
             command=args,
             labels={labels.MANAGED: "true", labels.ROLE: str(labels.Role.FACE_INPUT),
                     labels.EPOCH: str(self.epoch)},
@@ -827,6 +827,14 @@ class Faces:
         if result.exit_code != 0:
             raise FaceError(f"wtype exited {result.exit_code}: {result.output.strip()}")
 
+    def _helper_image(self, package: str) -> str:
+        """The Nixery image a helper runs from, pulled as `pull_from_nixery` pulls one: Docker
+        cannot pull it by its tag itself."""
+        reference = nixery_reference((package,))
+        if self.runtime.image(reference) is None:
+            pull_from_nixery(self.runtime, reference)
+        return reference
+
     def screenshot(self, into: Path, trial: bool = False) -> Path:
         """The face's own display as a PNG in `into`, for an agent to read. The
         nested display, so it is the face alone, never the AI terminal slid over it. `grim`
@@ -841,7 +849,7 @@ class Faces:
         runtime_dir = str(state.runtime_dir)
         result = self.runtime.run_to_completion(ContainerSpec(
             name=helper,
-            image=nixery_reference(("grim",)),
+            image=self._helper_image("grim"),
             command=("grim", f"/out/{name}"),
             labels={labels.MANAGED: "true", labels.ROLE: str(labels.Role.SCREENSHOT),
                     labels.EPOCH: str(self.epoch)},

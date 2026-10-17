@@ -63,7 +63,6 @@ class FakeRuntime(ContainerRuntime):
         self.registry_offline = False
         # Package names Nixery cannot build: a pull naming one is refused as Docker refuses
         # it, `not found` with no name.
-        self.unbuildable: set[str] = set()
         self.builds_pulled: list[bool] = []
         self.builds_buildargs: list[dict[str, str] | None] = []
         self._ids = itertools.count(1)
@@ -453,7 +452,7 @@ class FakeRuntime(ContainerRuntime):
 
     # --- images ----------------------------------------------------------------------
     def image(self, reference: str) -> ImageInfo | None:
-        found = self._images.get(reference)
+        found = self._images.get(reference) or self._images.get(reference.removesuffix(":latest"))
         if found is None and reference.startswith("sha256:"):
             found = next((i for i in self._images.values() if i.id == reference), None)
         if found is None and "@" in reference:
@@ -471,11 +470,6 @@ class FakeRuntime(ContainerRuntime):
                 f"could not pull '{reference}': pull access denied, repository does not "
                 "exist or may require authorisation. This image is built locally and "
                 "published nowhere, so it has to exist before anything runs it.")
-        if reference.startswith("nixery.dev/") and self.unbuildable & set(
-                reference.partition("@")[0].split("/")[2:]):
-            raise RuntimeError_(f"could not pull '{reference}': 404 Client Error: Not Found "
-                                f'("failed to resolve reference \\"{reference}:latest\\": '
-                                f'{reference}:latest: not found")')
         if self.registry_offline:
             raise RuntimeError_(f"could not pull '{reference}': dial tcp: lookup "
                                 "registry-1.docker.io: no such host")
@@ -490,6 +484,17 @@ class FakeRuntime(ContainerRuntime):
         info = dataclasses.replace(info, id=digest, repo_digests=(f"{repo}@{digest}",))
         self._images[reference] = info
         return info
+
+    def tag(self, reference: str, repository: str, tag: str) -> None:
+        info = self.image(reference)
+        if info is None:
+            raise RuntimeError_(f"could not tag '{reference}': No such image")
+        info = dataclasses.replace(info, tags=(f"{repository}:{tag}", *info.tags))
+        for name, held in list(self._images.items()):
+            if held.id == info.id:
+                self._images[name] = info
+        # As Docker reads a name: one with no tag is its `latest`.
+        self._images[repository if tag == "latest" else f"{repository}:{tag}"] = info
 
     def registry_digest(self, reference: str) -> str:
         if self.registry_offline:
@@ -589,7 +594,9 @@ class FakeRuntime(ContainerRuntime):
         info = self.image(reference)
         if info is None:
             return
-        reference = next(t for t, i in self._images.items() if i is info)
+        named = [t for t in (reference, reference.removesuffix(":latest"))
+                 if self._images.get(t) is info]
+        reference = named[0] if named else next(t for t, i in self._images.items() if i is info)
         # As Docker does: a container created from it holds it, stopped or not.
         users = [rec["name"] for rec in self._containers.values()
                  if rec["status"] != "removed" and rec["image_id"] == info.id]

@@ -7,8 +7,6 @@ import io
 import json
 import re
 import tarfile
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -25,10 +23,6 @@ REV = "f9bce96a417afbb9c64725f8727e42efafeafc21"
 
 @pytest.fixture
 def h(tmp_path, monkeypatch):
-    def urlopen(request, timeout):
-        raise urllib.error.HTTPError(request.full_url, 500, "Error", {}, io.BytesIO(
-            json.dumps({"errors": [{"message": "image build failure"}]}).encode()))
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     return Harness(tmp_path, monkeypatch)
 
 
@@ -58,14 +52,15 @@ def _nix(runs: list[str]):
     return run
 
 
-def test_a_refused_list_is_built_pinned_and_then_is_the_toolbelts(h, tmp_path):
+def test_a_refused_list_is_built_pinned_and_then_is_the_toolbelts(h, tmp_path,
+                                                                  nixery_dev):
     d = tmp_path / "tb"
     d.mkdir()
     (d / "toolbelt.toml").write_text(
         'id = "infra"\npackages = ["bash", "coreutils", "libcap", "python3", "util-linux", '
         '"terraform"]\n')
     toolbelt = load_toolbelt(d)
-    h.runtime.unbuildable.add("terraform")
+    nixery_dev.unbuildable.add("terraform")
     h.runtime.add_image(flakes.BUILDER)
     runs: list[str] = []
     h.runtime.one_shot[naming.flake_build()] = _nix(runs)
@@ -90,10 +85,11 @@ def test_nothing_a_toolbelt_names_is_nix_code(tmp_path):
         flakes.generate(load_toolbelt(d))
 
 
-def test_a_faces_apps_nixery_refuses_are_built_from_a_flake_and_kept(h, tmp_path, monkeypatch):
+def test_a_faces_apps_nixery_refuses_are_built_from_a_flake_and_kept(h, tmp_path, monkeypatch,
+                                                                     nixery_dev):
     monkeypatch.setattr(h.session.closures, "of_image_id", lambda image_id: tmp_path)
     face = h.session.catalogue.faces["minimal"]
-    h.runtime.unbuildable.add(Faces.apps(face).packages[-1])
+    nixery_dev.unbuildable.add(Faces.apps(face).packages[-1])
     h.runtime.add_image(flakes.BUILDER)
     runs: list[str] = []
     h.runtime.one_shot[naming.flake_build()] = _nix(runs)

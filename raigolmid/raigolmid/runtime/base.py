@@ -228,6 +228,10 @@ class ContainerRuntime(abc.ABC):
     def pull(self, reference: str) -> ImageInfo: ...
 
     @abc.abstractmethod
+    def tag(self, reference: str, repository: str, tag: str) -> None:
+        """Name the image `reference` names `repository:tag` as well."""
+
+    @abc.abstractmethod
     def registry_digest(self, reference: str) -> str:
         """The manifest digest the registry names `reference` by now. Raises `RuntimeError_`
         when the registry cannot answer."""

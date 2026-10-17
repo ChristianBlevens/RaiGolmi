@@ -332,7 +332,8 @@ class ClosureCopies:
     def packages(self, image_id: str) -> list[str]:
         for info in self.runtime.list_images():
             if info.id == image_id:
-                return ["bash", "coreutils", *info.tags[0].split("/shell/", 1)[1].split("/")]
+                return ["bash", "coreutils", *info.tags[0].split("/shell/", 1)[1]
+                        .split("@")[0].split(":")[0].split("/")]
         raise AssertionError(f"no image {image_id}")
 
     def __call__(self, spec: ContainerSpec) -> ExecResult:
