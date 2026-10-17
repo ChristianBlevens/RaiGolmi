@@ -100,7 +100,9 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
         "session": {**{k: v for k, v in full["session"].items() if k != "focused_instance"},
                     "instances": [i for i in full["session"]["instances"] if i == instance],
                     "on_face": instance is not None
-                    and full["session"]["focused_instance"] == instance},
+                    and full["session"]["focused_instance"] == instance,
+                    # Claimed and not yet up: its tools wait for it (`Session.await_open`).
+                    "opening": instance is not None and session.opening(instance)},
         "definition_errors": full.get("definition_errors", []),
         "builds": {key: build for key, build in full["builds"].items()
                    if own_copy is not None and key == str(own_copy)},

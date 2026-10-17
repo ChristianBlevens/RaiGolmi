@@ -62,6 +62,8 @@ from .views import Views
 # An agent's input waits for the user's pause this long; past it the agent is told they are
 # using the machine, so its turn never hangs on them.
 INPUT_PATIENCE = 30.0
+# A sandbox's open, its body built and its toolbelt fetched, is given this long.
+OPEN_TIMEOUT = 900.0
 
 
 def _run_name(run: Run) -> str:
@@ -160,6 +162,10 @@ class Session:
         self.reconciler = Reconciler(runtime, self.views, self.instances, events, epoch)
 
         self.queues = InstanceQueues()
+        # A sandbox claimed and not yet up, set once its open ends either way: a tab's agent
+        # may call its tools before a carried sandbox (`succeed_tab`) is up, and they wait
+        # for it rather than meet the intent holding a sandbox with no containers yet.
+        self._opening: dict[str, threading.Event] = {}
         self.builds = BuildLock()
         self.debouncer = Debouncer()
         self._lock = threading.RLock()
@@ -614,9 +620,25 @@ class Session:
         toolbelt it names — when it needs to run something. At most one per tab, held by the
         tab's reference until it closes. The face tab's is the active sandbox: the one the
         face shows and the only one whose ports reach the host."""
+        self._await_own(tab_id)
         with self._lock:
             bring_up = self._claim_sandbox(tab_id, toolbelt_id)
         bring_up()
+
+    def _await_own(self, tab_id: str) -> None:
+        with self._lock:
+            sandbox = self._place(self._tab(tab_id)).sandbox
+        self.await_open(sandbox)
+
+    def await_open(self, instance_id: str) -> None:
+        """Returns once `instance_id` is not being opened. Never under the session lock,
+        which the open takes to finish."""
+        opening = self._opening.get(instance_id)
+        if opening is not None and not opening.wait(OPEN_TIMEOUT):
+            raise SessionError(f"{instance_id} is still opening after {OPEN_TIMEOUT:.0f} s")
+
+    def opening(self, instance_id: str) -> bool:
+        return instance_id in self._opening
 
     def _claim_sandbox(self, tab_id: str, toolbelt_id: str) -> Callable[[], None]:
         """Under the session lock: the tab holds its sandbox in the intent, so a second open
@@ -637,34 +659,40 @@ class Session:
         before = self.intent.focused_instance
         ref = naming.tab_ref(tab_id)
         self.intent.add_ref(place.sandbox, ref)
+        self._opening[place.sandbox] = threading.Event()
         body = self.catalogue.bodies[place.body] if place.body is not None else None
         return lambda: self._bring_up_sandbox(tab_id, place, body, want, ref, before)
 
     def _bring_up_sandbox(self, tab_id: str, place: Place, body: Body | None,
                           want: InstanceIntent, ref: str, before: str | None) -> None:
         try:
-            self.queues.run(
-                place.sandbox, lambda: self._create(place.sandbox, body, want, [ref], tab_id),
-                "sandbox-open", timeout=900)
-        except BaseException:
-            # A sandbox that did not come up is not held: the tab may open it again.
+            try:
+                self.queues.run(
+                    place.sandbox,
+                    lambda: self._create(place.sandbox, body, want, [ref], tab_id),
+                    "sandbox-open", timeout=OPEN_TIMEOUT)
+            except BaseException:
+                # A sandbox that did not come up is not held: the tab may open it again.
+                with self._lock:
+                    released = self._release(place.sandbox, tab_id)
+                self._stop_released(released)
+                raise
             with self._lock:
-                released = self._release(place.sandbox, tab_id)
-            self._stop_released(released)
-            raise
-        with self._lock:
-            if not self._holds(tab_id, place.sandbox):
-                # Closed while it opened; the close's stop was queued behind this create.
-                raise SessionError(f"tab {tab_id} was closed while its sandbox opened")
-            self._refocus(before)
-            self.store.save(self.intent)
-            self.events.emit("sandbox.opened", tab=tab_id, instance=place.sandbox,
-                             toolbelt=want.toolbelt)
+                if not self._holds(tab_id, place.sandbox):
+                    # Closed while it opened; the close's stop was queued behind this create.
+                    raise SessionError(f"tab {tab_id} was closed while its sandbox opened")
+                self._refocus(before)
+                self.store.save(self.intent)
+                self.events.emit("sandbox.opened", tab=tab_id, instance=place.sandbox,
+                                 toolbelt=want.toolbelt)
+        finally:
+            self._opening.pop(place.sandbox).set()
 
     def check_toolbelt_swap(self, tab_id: str, toolbelt_id: str) -> bool:
         """What `toolbelt_swap` would refuse, asked before the user is: a permission for a
         swap that cannot happen would waste their answer. False when the sandbox already has
         that toolbelt as it is defined now, so there is nothing to ask."""
+        self._await_own(tab_id)
         with self._lock:
             tab = self._tab(tab_id)
             place = self._place(tab)
@@ -678,6 +706,7 @@ class Session:
         are recreated, which ends whatever ran in the toolbelt's container. The active
         sandbox is the one the user works in, so its swap waits on their permission, asked
         before this is called (`scopes.py`)."""
+        self._await_own(tab_id)
         with self._lock:
             tab = self._tab(tab_id)
             place = self._place(tab)
@@ -1658,6 +1687,7 @@ class Session:
         """A connection to `instance_id`'s launcher, for a caller that names the sandbox and
         is handed the pipe (`api.Handoff`). Any sandbox, not only the focused one: a face
         works with every body."""
+        self.await_open(instance_id)
         if self.instances.get(instance_id) is None:
             raise SessionError(f"no running sandbox {instance_id}; running: "
                                f"{', '.join(sorted(self.instances.all())) or 'none'}")
@@ -1669,6 +1699,7 @@ class Session:
     def exec(self, instance_id: str, cmd: list[str], cwd: str = "/work",
              timeout: float = 300.0) -> dict[str, Any]:
         """Reads do not queue behind writes, so this runs directly."""
+        self.await_open(instance_id)
         instance = self.instances.get(instance_id)
         if instance is None:
             raise SessionError(f"no running sandbox {instance_id}")
@@ -1871,6 +1902,7 @@ class Session:
     def restart_body(self, instance_id: str) -> dict[str, Any]:
         """The body started again from the image it runs, without a build, so an
         agent can close its own loop (`rebuild_body` is the one that builds)."""
+        self.await_open(instance_id)
         instance = self.instances.get(instance_id)
         if instance is None:
             raise SessionError(f"no running sandbox {instance_id}")

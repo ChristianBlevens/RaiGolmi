@@ -180,6 +180,7 @@ class Jobs:
                                                                                "OVERRUN"):
             raise JobError(f"job {name!r} is still running; wait on it, or give this one "
                            "another name")
+        self.session.await_open(instance_id)
         if self.session.views.get(instance_id) is None:
             raise JobError(f"{instance_id}'s toolbelt container is not running, so there is "
                            f"nowhere to run {cmd[0]!r}")
