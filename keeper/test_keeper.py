@@ -12,7 +12,7 @@ import keeper as k  # noqa: E402
 T0 = 1_800_000_000.0
 HEALTHY = {"reachable": True, "daemon": "active", "restarts": 0, "line_out": None,
            "held": False, "hold": None,
-           "run_active": True, "last_event": {"type": "agent.busy", "age_s": 30},
+           "run_working": True, "last_event": {"type": "agent.busy", "age_s": 30},
            "faults": [], "faults_error": None, "plan": None}
 FAULT = {"id": "fault-1", "title": "jobs of an earlier tab no tab can stop",
          "body": "job_stop: no such job", "affects": ["tab-2"], "status": "open"}
@@ -154,10 +154,31 @@ def test_failure_waits_its_grace_before_a_session(world: World) -> None:
 def test_silent_events_during_a_run_fail_but_not_outside_one(world: World) -> None:
     world.launcher("running")
     quiet = {"type": "agent.idle", "age_s": k.EVENTS_SILENT_SECONDS + 60}
-    world.vm = {**HEALTHY, "run_active": False, "last_event": quiet}
+    world.vm = {**HEALTHY, "run_working": False, "last_event": quiet}
     assert world.check()["state"] == "healthy"
-    world.vm = {**HEALTHY, "run_active": True, "last_event": quiet}
+    world.vm = {**HEALTHY, "run_working": True, "last_event": quiet}
     assert world.check()["state"] == "failing"
+
+
+def test_a_run_whose_every_tab_waits_on_the_user_is_not_working() -> None:
+    def intent(*tabs: dict, ended: float | None = None) -> dict:
+        return {"run": {"ended": ended},
+                "tabs": {"tab-1": {"managed": False, "status": "running", "held": None},
+                         **{f"tab-{n}": t for n, t in enumerate(tabs, 2)}}}
+    running = {"managed": True, "status": "running", "held": None}
+    paused = {"managed": True, "status": "paused", "held": None}
+    held = {"managed": True, "status": "running", "held": {"until": None}}
+    assert k.run_working(intent(running, paused))
+    assert not k.run_working(intent(paused))
+    assert not k.run_working(intent(paused, held))
+    assert not k.run_working(intent())
+    assert not k.run_working(intent(running, ended=T0))
+    assert not k.run_working({"run": None, "tabs": {}})
+    assert not k.run_working(None)
+
+
+def test_the_probe_script_compiles() -> None:
+    compile(k.PROBE_SCRIPT, "probe", "exec")
 
 
 def test_repeated_failure_alerts_once_then_daily_then_recovers(world: World) -> None:

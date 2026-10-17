@@ -27,7 +27,8 @@ system prompt) with the evidence it gathered. The rules:
 - a launcher stuck in one of its transitional states for `TRANSITION_SECONDS` is failing;
 - the VM unreachable by ssh, raigolmid not active or restarted by systemd `DAEMON_RESTARTS` times
   within `DAEMON_RESTART_WINDOW` (a crash loop `is-active` does not show), or a run in progress
-  whose event log has been silent for `EVENTS_SILENT_SECONDS`, while the launcher says `running`,
+  with a tab not paused or held for the user whose event log has been silent for
+  `EVENTS_SILENT_SECONDS`, while the launcher says `running`,
   is failing;
 - each probe also says the keeper looked (`rai keeper seen`, raigolmid's faults.py), which is how
   the machine tab knows a keeper is there, and is answered with the faults in RaiGolmi the machine
@@ -71,6 +72,7 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import inspect
 import json
 import logging
 import logging.handlers
@@ -113,7 +115,8 @@ TRANSITION_SECONDS = 2 * 3600
 FAILING_SECONDS = 15 * 60
 # The coordinator wakes a run that stops moving after 20 minutes (raigolmid coordinator.py
 # IDLE_SECONDS), which writes to the event log; three such stretches with nothing written is a
-# daemon no longer running the run.
+# daemon no longer running the run. It wakes only a run with a managed tab neither paused nor
+# held for the user (`run_working`), so a run whose every tab waits on them is quiet for hours.
 EVENTS_SILENT_SECONDS = 3 * 20 * 60
 # systemd restarting raigolmid once is its repair working; again within the half hour is that
 # repair not holding (StartLimitIntervalSec=0 restarts it forever, and `is-active` reads
@@ -321,8 +324,18 @@ def vm_run(client, command: str, timeout: float, stdin: str | None = None) -> tu
     return out.channel.recv_exit_status(), text, errors
 
 
+def run_working(intent: dict | None) -> bool:
+    """Whether raigolmid's intent.json holds a run the coordinator keeps moving: one not ended
+    with a managed tab that is neither paused nor held for the user (coordinator.py `tick`'s
+    `run_idle`). Its source is part of PROBE_SCRIPT, so it runs on the guest."""
+    if intent is None or intent.get("run") is None or intent["run"].get("ended") is not None:
+        return False
+    return any(tab["managed"] and tab["status"] != "paused" and tab["held"] is None
+               for tab in intent["tabs"].values())
+
+
 # Run on the guest by its own python3, so the ages are by the guest's clock, which wrote them.
-PROBE_SCRIPT = r'''
+PROBE_SCRIPT = inspect.getsource(run_working) + r'''
 import json, subprocess, time
 from pathlib import Path
 state = Path.home() / ".local/state/raigolmid"
@@ -352,7 +365,6 @@ if logs:
     for row in rows(found):
         hold = row
 intent = state / "intent.json"
-run = json.loads(intent.read_text()).get("run") if intent.exists() else None
 seen = subprocess.run(["rai", "keeper", "seen"], capture_output=True, text=True)
 print(json.dumps({
     "daemon": daemon,
@@ -364,7 +376,7 @@ print(json.dumps({
     "last_event": None if last is None else {"type": last["type"], "age_s": round(time.time() - last["ts"])},
     "held": hold is not None and hold["type"] == "account.limited",
     "hold": hold,
-    "run_active": run is not None and run.get("ended") is None,
+    "run_working": run_working(json.loads(intent.read_text()) if intent.exists() else None),
 }))
 '''
 
@@ -789,7 +801,7 @@ class Keeper:
                     self._defer(fault)
             return Seen("held", "the account is on its usage limit")
         last = vm["last_event"]
-        if vm["run_active"] and last is not None and last["age_s"] > EVENTS_SILENT_SECONDS:
+        if vm["run_working"] and last is not None and last["age_s"] > EVENTS_SILENT_SECONDS:
             return Seen("failing", f"a run is in progress and raigolmid has written no event for "
                                    f"{round(last['age_s'] / 60)} minutes (the last: {last['type']})",
                         evidence)
