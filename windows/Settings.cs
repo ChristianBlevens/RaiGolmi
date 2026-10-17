@@ -7,6 +7,8 @@
 //   start-at-login = on | off     the launcher in HKCU\...\Run, so Windows starts it at sign-in
 //   keep-awake     = on | off     Windows does not sleep while the launcher runs
 //   memory         = 8 | 12 | 16 | 24     the machine's RAM in GB, at its next start
+//   disk           = 128 | 200 | 256 | 512 | 1024   the machine's disk in GB, grown to it at its
+//                                 next start and never shrunk; empty is the size it was built
 //   venus          = on | off     the GPU offers Vulkan (Venus), at its next start
 //   ntfy-topic     = <topic>      the phone alerts' ntfy topic, at the machine's next start;
 //                                 empty is no alerts (raigolmid/raigolmid/lineout.py)
@@ -26,6 +28,8 @@ sealed class Settings
 {
     public bool StartAtLogin, KeepAwake, Venus, Keeper;
     public string Memory = DefaultMemory;
+    // Empty leaves the disk the size it was built.
+    public string Disk = "";
     public string NtfyTopic = "";
     // The outside dead-man's switch's ping URL (healthchecks.io); empty is none.
     public string HeartbeatUrl = "";
@@ -35,6 +39,10 @@ sealed class Settings
     public static readonly string[] MemoryChoices = { "8", "12", "16", "24" };
     // What Windows keeps for itself whatever the machine is given.
     const long HostReserveMiB = 4096;
+    public static readonly string[] DiskChoices = { "128", "200", "256", "512", "1024" };
+    // What the disk's drive keeps free were the machine to fill every byte it is grown to.
+    const long DriveReserveBytes = 32 * GiB;
+    const long GiB = 1L << 30;
 
     Settings(string path) { this.path = path; }
 
@@ -68,6 +76,12 @@ sealed class Settings
                         throw s.Bad(number, "gives memory as " + value + "; it is one of " +
                                             string.Join(", ", MemoryChoices));
                     s.Memory = value;
+                    break;
+                case "disk":
+                    if (value.Length > 0 && Array.IndexOf(DiskChoices, value) < 0)
+                        throw s.Bad(number, "gives disk as " + value + "; it is empty or one of " +
+                                            string.Join(", ", DiskChoices));
+                    s.Disk = value;
                     break;
                 case "ntfy-topic":
                     string refused = TopicRefusal(value);
@@ -107,6 +121,7 @@ sealed class Settings
             "start-at-login=" + OnOff(StartAtLogin) + Environment.NewLine +
             "keep-awake=" + OnOff(KeepAwake) + Environment.NewLine +
             "memory=" + Memory + Environment.NewLine +
+            "disk=" + Disk + Environment.NewLine +
             "venus=" + OnOff(Venus) + Environment.NewLine +
             "ntfy-topic=" + NtfyTopic + Environment.NewLine +
             "heartbeat-url=" + HeartbeatUrl + Environment.NewLine +
@@ -194,6 +209,49 @@ sealed class Settings
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX status);
+
+    // --- the disk ----------------------------------------------------------------------
+
+    // The disk's size as the guest sees it: the qcow2 header's big-endian size at byte 24
+    // (QEMU's docs/interop/qcow2.rst). Read beside a running QEMU, which holds the file open.
+    public static long DiskBytes(string disk)
+    {
+        var header = new byte[32];
+        using (var f = new FileStream(disk, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            if (f.Read(header, 0, header.Length) != header.Length || header[0] != 'Q' || header[1] != 'F' ||
+                header[2] != 'I' || header[3] != 0xfb)
+                throw new LauncherError(disk + " is not a qcow2 disk.");
+        }
+        long size = 0;
+        for (int i = 24; i < 32; i++)
+            size = size << 8 | header[i];
+        return size;
+    }
+
+    public static long ChoiceBytes(string choice) { return long.Parse(choice) * GiB; }
+
+    // Why `disk` cannot be grown to `choice`, or null when it can or is that size already. A
+    // disk is never made smaller, and it grows only as far as its drive could hold it full with
+    // the reserve still free: the file's length counts what the guest has discarded as held.
+    public static string DiskRefusal(string choice, string disk)
+    {
+        long now = DiskBytes(disk), wanted = ChoiceBytes(choice);
+        if (wanted < now)
+            return "The machine's disk is " + Gb(now / (1024 * 1024)) + " GB, more than the " + choice +
+                   " GB chosen, and a disk is never made smaller. Choose a larger size in the " +
+                   "settings menu, or set disk= (empty) in settings.ini.";
+        if (wanted == now)
+            return null;
+        var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(disk)));
+        long spare = drive.AvailableFreeSpace + new FileInfo(disk).Length - DriveReserveBytes;
+        if (wanted <= spare)
+            return null;
+        return "The machine's disk cannot grow to " + choice + " GB: drive " + drive.Name + " has " +
+               Gb(drive.AvailableFreeSpace / (1024 * 1024)) + " GB free and keeps " +
+               Gb(DriveReserveBytes / (1024 * 1024)) + " GB of it. Choose less in the settings " +
+               "menu, or set disk= (empty) in settings.ini.";
+    }
 
     // --- start at login ----------------------------------------------------------------
 

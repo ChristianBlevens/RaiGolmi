@@ -324,6 +324,7 @@ class Machine
         m.Disk = ChooseDisk(Path.Combine(home, "disk.txt"), door);
         if (m.Disk == null)
             return null;
+        GrowDisk(m.Disk, m.Settings.Disk);
         m.ControlPort = FreePort();
         m.WatchPort = FreePort();
         m.CommandLine = m.Arguments();
@@ -352,6 +353,28 @@ class Machine
                                     "MSYS2 from https://www.msys2.org, then in its UCRT64 window run " +
                                     "pacman -S --noconfirm mingw-w64-ucrt-x86_64-qemu");
         return path;
+    }
+
+    // The disk grown to the disk setting while no QEMU has it open. qemu-img lengthens the qcow2's
+    // virtual size, which allocates nothing, and the guest grows its root partition and
+    // filesystem into the space at boot (the bootc base's bootc-generic-growpart.service).
+    static void GrowDisk(string disk, string choice)
+    {
+        if (choice.Length == 0)
+            return;
+        string refused = Settings.DiskRefusal(choice, disk);
+        if (refused != null)
+            throw new LauncherError(refused);
+        long wanted = Settings.ChoiceBytes(choice);
+        if (Settings.DiskBytes(disk) == wanted)
+            return;
+        string tool = Require(Launcher.QemuPath(@"bin\qemu-img.exe"));
+        var p = Process.Start(Ssh.Info(tool, "resize -f qcow2 " + Ssh.Quote(Native.Ascii(disk)) + " " + wanted));
+        p.StandardInput.Close();
+        Ssh.Result r = Ssh.Finish(p);
+        if (r.Code != 0)
+            throw new LauncherError("The machine's disk could not grow to " + choice + " GB: qemu-img " +
+                                    "exited with code " + r.Code + ": " + (r.Err.Length > 0 ? r.Err : r.Out.Trim()));
     }
 
     // The disk is gigabytes, so it is used where the build left it and only its path is kept.
@@ -682,6 +705,7 @@ class Window : Form
     bool keeperChecking;
     ToolStripTextBox ntfyTopic, heartbeatUrl;
     readonly List<ToolStripMenuItem> memory = new List<ToolStripMenuItem>();
+    readonly List<ToolStripMenuItem> disk = new List<ToolStripMenuItem>();
 
     void AddSettingsMenu()
     {
@@ -717,6 +741,23 @@ class Window : Form
             memory.Add(item);
             memoryItem.DropDownItems.Add(item);
         }
+        var diskItem = new ToolStripMenuItem("Disk size, never made smaller (applies at next start)");
+        foreach (string choice in Settings.DiskChoices)
+        {
+            string chosen = choice;
+            string refused = Settings.DiskRefusal(choice, machine.Disk);
+            var item = new ToolStripMenuItem(choice + " GB" + (refused == null ? "" :
+                Settings.ChoiceBytes(choice) < Settings.DiskBytes(machine.Disk) ? " — smaller than the disk is"
+                                                                                 : " — more than this drive can spare"));
+            item.Enabled = refused == null;
+            item.Click += delegate
+            {
+                machine.Settings.Disk = chosen;
+                ApplySetting(null);
+            };
+            disk.Add(item);
+            diskItem.DropDownItems.Add(item);
+        }
         venus = Toggle("Venus (Vulkan), experimental (applies at next start)", delegate
         {
             machine.Settings.Venus = !machine.Settings.Venus;
@@ -748,11 +789,12 @@ class Window : Form
         };
         heartbeatUrl.LostFocus += delegate { CommitHeartbeat(); };
         settings.Items.AddRange(new ToolStripItem[] {
-            startAtLogin, keepAwake, memoryItem, venus, new ToolStripSeparator(), keeperItem, keeperTerminal,
+            startAtLogin, keepAwake, memoryItem, diskItem, venus, new ToolStripSeparator(), keeperItem, keeperTerminal,
             new ToolStripSeparator(), ntfyLabel, ntfyTopic, testAlert,
             new ToolStripSeparator(), heartbeatLabel, heartbeatUrl });
         settings.Closing += StayOpenOnClick;
         memoryItem.DropDown.Closing += StayOpenOnClick;
+        diskItem.DropDown.Closing += StayOpenOnClick;
         settings.Opening += delegate { keyboard.Release(); };
         // The window has the keyboard back unless the user went to another program.
         settings.Closed += (sender, e) =>
@@ -802,6 +844,8 @@ class Window : Form
         keeperTerminal.Enabled = s.Keeper && !keeperChecking;
         for (int i = 0; i < Settings.MemoryChoices.Length; i++)
             memory[i].Checked = s.Memory == Settings.MemoryChoices[i];
+        for (int i = 0; i < Settings.DiskChoices.Length; i++)
+            disk[i].Checked = s.Disk == Settings.DiskChoices[i];
         ntfyTopic.Text = s.NtfyTopic;
         heartbeatUrl.Text = s.HeartbeatUrl;
     }
@@ -886,7 +930,7 @@ class Window : Form
         }
         Settings s = machine.Settings;
         Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
-             ", memory " + s.Memory + ", venus " + s.Venus +
+             ", memory " + s.Memory + ", disk " + (s.Disk.Length > 0 ? s.Disk : "as built") + ", venus " + s.Venus +
              ", ntfy topic " + (s.NtfyTopic.Length > 0 ? "set" : "none") + ", keeper " + s.Keeper +
              ", heartbeat " + (s.HeartbeatUrl.Length > 0 ? "set" : "none"));
         CheckSettings();
@@ -2963,7 +3007,7 @@ class Ssh
         return Process.Start(Info(tar, arguments));
     }
 
-    static ProcessStartInfo Info(string exe, string arguments)
+    public static ProcessStartInfo Info(string exe, string arguments)
     {
         var info = new ProcessStartInfo(exe, arguments);
         info.UseShellExecute = false;

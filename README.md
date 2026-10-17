@@ -61,7 +61,8 @@ Click the icon at the window's top left for **Settings** (all off until you choo
 `state\settings.ini` in the RaiGolmi folder): *Start RaiGolmi when I sign in to Windows*, *Keep
 Windows awake while RaiGolmi runs* (the screen can still turn off), *Memory* for the machine (8,
 12, 16 or 24 GB, from its next start; a size that would leave Windows under 4 GB is greyed
-out), *Venus (Vulkan)* for the machine's GPU, from its next start (setup installs the QEMU
+out), *Disk size* (128, 200, 256, 512 or 1024 GB, grown at its next start and never made
+smaller; a size the drive could not hold full with 32 GB to spare is greyed out), *Venus (Vulkan)* for the machine's GPU, from its next start (setup installs the QEMU
 build it needs), *Phone alerts*, a box for an ntfy topic (below; from the machine's next
 start) with *Send a test alert* beside it, *Heartbeat*, a box for a healthchecks.io ping URL
 (below), and *Keeper* with *Open the keeper's terminal* (below). To leave it running unattended, also turn on Windows' automatic sign-in
