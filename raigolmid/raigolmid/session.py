@@ -25,6 +25,7 @@ import socket
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -614,22 +615,33 @@ class Session:
         tab's reference until it closes. The face tab's is the active sandbox: the one the
         face shows and the only one whose ports reach the host."""
         with self._lock:
-            tab = self._tab(tab_id)
-            place = self._place(tab)
-            if self._holds(tab_id, place.sandbox):
-                raise SessionError(
-                    f"this tab's sandbox {place.sandbox} is already open, with toolbelt "
-                    f"'{self.intent.instances[place.sandbox].toolbelt}'. Change its toolbelt "
-                    "with `toolbelt_swap`.")
-            toolbelt = self._toolbelt_for(tab, place, toolbelt_id)
-            want = InstanceIntent(
-                instance_id=place.sandbox, body=place.body, toolbelt=toolbelt.id,
-                working_copy=str(place.working_copy), branch=place.branch)
-            self.intent.instances[place.sandbox] = want
-            before = self.intent.focused_instance
-            ref = naming.tab_ref(tab_id)
-            self.intent.add_ref(place.sandbox, ref)
-            body = self.catalogue.bodies[place.body] if place.body is not None else None
+            bring_up = self._claim_sandbox(tab_id, toolbelt_id)
+        bring_up()
+
+    def _claim_sandbox(self, tab_id: str, toolbelt_id: str) -> Callable[[], None]:
+        """Under the session lock: the tab holds its sandbox in the intent, so a second open
+        is refused from here on. What brings it up is returned, to be called once the lock is
+        let go."""
+        tab = self._tab(tab_id)
+        place = self._place(tab)
+        if self._holds(tab_id, place.sandbox):
+            raise SessionError(
+                f"this tab's sandbox {place.sandbox} is already open, with toolbelt "
+                f"'{self.intent.instances[place.sandbox].toolbelt}'. Change its toolbelt "
+                "with `toolbelt_swap`.")
+        toolbelt = self._toolbelt_for(tab, place, toolbelt_id)
+        want = InstanceIntent(
+            instance_id=place.sandbox, body=place.body, toolbelt=toolbelt.id,
+            working_copy=str(place.working_copy), branch=place.branch)
+        self.intent.instances[place.sandbox] = want
+        before = self.intent.focused_instance
+        ref = naming.tab_ref(tab_id)
+        self.intent.add_ref(place.sandbox, ref)
+        body = self.catalogue.bodies[place.body] if place.body is not None else None
+        return lambda: self._bring_up_sandbox(tab_id, place, body, want, ref, before)
+
+    def _bring_up_sandbox(self, tab_id: str, place: Place, body: Body | None,
+                          want: InstanceIntent, ref: str, before: str | None) -> None:
         try:
             self.queues.run(
                 place.sandbox, lambda: self._create(place.sandbox, body, want, [ref], tab_id),
@@ -647,7 +659,7 @@ class Session:
             self._refocus(before)
             self.store.save(self.intent)
             self.events.emit("sandbox.opened", tab=tab_id, instance=place.sandbox,
-                             toolbelt=toolbelt.id)
+                             toolbelt=want.toolbelt)
 
     def check_toolbelt_swap(self, tab_id: str, toolbelt_id: str) -> bool:
         """What `toolbelt_swap` would refuse, asked before the user is: a permission for a
@@ -1448,7 +1460,12 @@ class Session:
         run is never seen to end between them. `by` is who handed the work on: "machine", or
         "self" for a tab that ended its own conversation. A successor whose agent does not
         start is still the work's tab: crashed, and the janitor's as an unfixable restart is,
-        while what is on its way to it waits in its channel."""
+        while what is on its way to it waits in its channel.
+
+        A sandbox the tab had open is the successor's from the start, with the same toolbelt:
+        the work's sandbox stays open across the hand-on, so the face's `/body` is gone only
+        while the old one stops and the new one starts, not until the new agent first needs
+        to run something."""
         with self._lock:
             tab = self._closable(tab_id)
             if tab.held is not None:
@@ -1459,7 +1476,17 @@ class Session:
             self.intent.tabs[successor.tab_id] = successor
             if successor.managed and self.intent.run is not None:
                 self.intent.run.tabs.setdefault(successor.tab_id, successor.body)
+            held = self.intent.sandbox_of(tab_id)
+            toolbelt = self.intent.instances[held].toolbelt if held is not None else None
             closed, released = self._close(tab, successor=successor.tab_id)
+            bring_up = None
+            if toolbelt is not None:
+                try:
+                    bring_up = self._claim_sandbox(successor.tab_id, toolbelt)
+                except SessionError as exc:
+                    # Its own `sandbox_open` meets the same refusal, so the agent is told then.
+                    self.events.emit("sandbox.carry_failed", tab=successor.tab_id,
+                                     continues=tab_id, toolbelt=toolbelt, error=str(exc))
             self.store.save(self.intent)
             self.events.emit("tab.closed", **closed, reason="continued",
                              continued_by=successor.tab_id, by=by)
@@ -1480,7 +1507,23 @@ class Session:
             finally:
                 self.store.save(self.intent)
         self._stop_released(released)
+        if bring_up is not None:
+            # Off the caller's thread: the coordinator hands the successor its first message
+            # once this returns, and a body's start can take minutes.
+            threading.Thread(target=self._carry_sandbox,
+                             args=(bring_up, successor.tab_id, tab_id, toolbelt),
+                             name=f"carry-{successor.tab_id}", daemon=True).start()
         return successor
+
+    def _carry_sandbox(self, bring_up: Callable[[], None], tab_id: str, continues: str,
+                       toolbelt: str) -> None:
+        try:
+            bring_up()
+        except Exception as exc:                       # noqa: BLE001 - said, and the tab opens it
+            # The hand-on is done whether or not the sandbox came up: the successor's own
+            # `sandbox_open` builds it again and meets whatever stopped this one.
+            self.events.emit("sandbox.carry_failed", tab=tab_id, continues=continues,
+                             toolbelt=toolbelt, error=str(exc))
 
     def _closable(self, tab_id: str) -> TabIntent:
         tab = self.intent.tabs.get(tab_id)
