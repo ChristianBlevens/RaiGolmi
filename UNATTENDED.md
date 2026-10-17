@@ -41,6 +41,9 @@ the only thing anyone should need to do is turn the PC back on if it goes off.
      longer). Under Integrations add ntfy with your topic. Paste the check's ping URL here.
 9. **Settings → Open the keeper's terminal**, and in it `gh auth login` (GitHub.com, HTTPS,
    log in with a browser). Claude needs no sign-in there: the keeper uses the machine's own.
+   On an account other than `ChristianBlevens`, fork `ChristianBlevens/RaiGolmi` (and
+   `raigolmi-packages`) first if the keeper is to publish its fixes; without a fork it keeps
+   them in the container.
 10. Close the RaiGolmi window and open it again, so the machine lets the keeper in.
 11. Check, a few minutes later: `keeper\outbox\keeper.json` says `healthy`, and
     `keeper\outbox\keeper.log` shows its checks passing.

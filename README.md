@@ -465,13 +465,17 @@ row, each within half an hour of the last, it stops, says why, and only then sen
 **The keeper**, for long runs with nobody there. Turn on *Settings → Keeper* (it needs Docker
 Desktop installed, running, and set to *Start when you sign in*). RaiGolmi then starts the
 keeper: a Claude Code agent in the `raigolmi-keeper` container, outside the machine, that
-notices when the machine cannot recover itself, fixes and publishes RaiGolmi, and asks the
-window to start, restart or upgrade it. A scheduled task, *RaiGolmi keeper door*, checks every
+notices when the machine cannot recover itself, fixes RaiGolmi, and asks the window to start,
+restart or upgrade it. A scheduled task, *RaiGolmi keeper door*, checks every
 five minutes while you are signed in and reopens RaiGolmi if it should be running and is not.
 With the keeper on, failures nobody is there to see are not shown in boxes, and the keeper, not
 the window, sends the phone alert, only when it could not fix the machine. Once, after turning
 it on, choose *Settings → Open the keeper's terminal* and run `gh auth login`; it lives on the
-`raigolmi-keeper-home` volume and survives a rebuild. Claude needs no second sign-in: the keeper
+`raigolmi-keeper-home` volume and survives a rebuild. That sign-in decides where the keeper's
+fixes go: to branch `machine/<your login>` on your own fork of RaiGolmi (and of
+`raigolmi-packages`), released from there as this machine's own channel, which its upgrades
+then install. Without a fork it pushes and releases nothing and keeps its fixes committed on
+that branch inside the container; it never makes a fork or opens a pull request for you. Claude needs no second sign-in: the keeper
 copies the machine's own agent credential each time it looks, and keeps the last copy for when
 the machine does not answer. The keeper's key is let into the machine from its next start. What it did is in `keeper\outbox\` (`keeper.json`, its log `keeper.log`, and
 each repair's log and notes in `sessions\`); it can change a setting in `state\settings.ini` and
