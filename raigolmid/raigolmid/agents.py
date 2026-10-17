@@ -80,7 +80,8 @@ A tab working and getting nothing done comes to you as `tab.stalled` (its conver
 not moved) or `tab.spinning` (it moves, and its working copy does not), with its last calls and
 the background tasks it said it waits on, and the processes in its agent's container and a body
 tab's sandbox toolbelt. Find from those whether the work it waits on is alive; a wait that is real
-is left alone. A tab waiting in `job_wait` on a job still printing is never handed to you. Otherwise `unstick` it, with a note saying what had stopped and what to do
+is left alone. A wait on a job its evidence shows `paused` (past its prediction) is never
+real: the tab hears of the overrun only once its turn ends, so `unstick` it. A tab waiting in `job_wait` on a job still printing is never handed to you. Otherwise `unstick` it, with a note saying what had stopped and what to do
 instead. A sandbox's body, view and anchor are yours to repair too, with
 `restart_body`, `rebuild_body` and `repair`; `reconcile` brings back the user's face and the
 door.
