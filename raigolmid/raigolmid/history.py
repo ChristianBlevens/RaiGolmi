@@ -195,6 +195,14 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
            if e.data["hold_until"] is None else "the tabs it cut off continue at "
            + time.strftime("%H:%M", time.localtime(e.data["hold_until"])))),
     "account.resumed": lambda e: "the account's usage limit is over",
+    "machine.restarting": lambda e: (
+        f"the machine is to restart: {e.data['cause']}; new jobs wait until it is back"
+        + (f", and the restart waits for {', '.join(e.data['running'])} to end"
+           if e.data["running"] else "")),
+    "machine.restarted": lambda e: (
+        f"the machine restarted: {e.data['cause']}" if e.data["cause"] is not None else
+        "the machine restarted, shut down cleanly with no restart planned: closed, or "
+        "restarted by its launcher"),
     "documents.maintenance_failed": lambda e: (f"document maintenance could not run: "
                                                f"{e.data['error']}"),
 }

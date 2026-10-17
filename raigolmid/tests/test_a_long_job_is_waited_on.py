@@ -209,3 +209,24 @@ def test_a_jobs_end_is_a_ledger_row_handed_to_the_next_start(h):
     [row] = started["history"]
     assert (row["expect"], row["ended"], row["exit_code"], row["under"]) == (900, "exited", 0,
                                                                             True)
+
+
+def test_a_planned_restart_holds_new_jobs_and_names_those_it_waits_on(h, monkeypatch):
+    tab, instance = h.tab("myapi"), _instance(h)
+    h.session.jobs.start(tab, instance, "build", ["cargo", "build"], 600, "a guess")
+
+    said = h.session.jobs.restarting("the keeper asked for an upgrade")
+    assert [(j["tab"], j["name"], j["state"]) for j in said["running"]] == [
+        (tab, "build", "running")]
+    with pytest.raises(JobError, match="restarts within minutes"):
+        h.session.jobs.start(tab, instance, "suite", ["pytest"], 600, "a guess")
+
+    h.launchers.end_job(instance, 1, 0)
+    assert h.session.jobs.restarting("the keeper asked for an upgrade")["running"] == []
+    [restarting] = h.events_of("machine.restarting")
+    assert restarting.data["running"] == [f"{tab} build"], "said once, as the hold began"
+
+    monkeypatch.setattr(jobs, "HOLD_SECONDS", -1.0)
+    h.session.jobs.restarting("the keeper asked for an upgrade")
+    assert h.session.jobs.restart_cause() is None
+    h.session.jobs.start(tab, instance, "suite", ["pytest"], 600, "a guess")

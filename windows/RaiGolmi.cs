@@ -1597,12 +1597,96 @@ class Window : Form
                     keeper.Record("upgrade", "nothing to do: setup is already upgrading the machine");
                     break;
                 }
+                if (draining)
+                {
+                    Keeper.Take(request);
+                    keeper.Record("upgrade", "nothing to do: the upgrade already waits for the machine's jobs");
+                    break;
+                }
                 if (stopping)
                     break;
                 Keeper.Take(request);
-                StartUpgrade();
+                DrainForUpgrade("the keeper asked for an upgrade" +
+                                (request.Why != null ? ": " + request.Why : ""));
                 break;
         }
+    }
+
+    // The upgrade restarts the machine, which ends every tab's job, so setup starts only once
+    // none runs, or after DrainMost. Each ask holds new jobs for a while (raigolmid's
+    // `rai keeper restarting`, jobs.py), so none starts between the last and setup's shutdown,
+    // and the guest records the cause for the history it writes on the next boot. A guest that
+    // cannot be asked has no job it can be known to run: said, and the upgrade goes on, since
+    // it may be the repair of what did not answer.
+    static readonly TimeSpan DrainMost = TimeSpan.FromMinutes(60);
+    static readonly TimeSpan DrainPoll = TimeSpan.FromSeconds(30);
+    const string Restarting = "rai keeper restarting \"$1\"\n";
+    volatile bool draining;
+
+    void DrainForUpgrade(string cause)
+    {
+        Keeper keeper = machine.Keeper;
+        if (machine.Ssh == null)
+        {
+            keeper.Record("upgrade", "the machine's jobs could not be asked about (the launcher has no ssh), " +
+                          "so setup starts without waiting for them");
+            StartUpgrade();
+            return;
+        }
+        draining = true;
+        new Thread(() =>
+        {
+            DateTime deadline = DateTime.UtcNow + DrainMost;
+            string outcome;
+            while (true)
+            {
+                Ssh.Result r = machine.Ssh.Run(Restarting, cause);
+                if (r.Code != 0)
+                {
+                    outcome = "the machine did not say which jobs run (ssh exited " + r.Code + ": " +
+                           (r.Err + r.Out).Trim() + "), so setup starts without waiting for them";
+                    break;
+                }
+                var jobs = new List<string>();
+                try
+                {
+                    using (JsonDocument said = JsonDocument.Parse(r.Out))
+                        foreach (JsonElement j in said.RootElement.GetProperty("running").EnumerateArray())
+                            jobs.Add(j.GetProperty("tab").GetString() + " " + j.GetProperty("name").GetString() +
+                                     " (" + j.GetProperty("state").GetString() + ")");
+                }
+                catch (Exception e) when (e is JsonException || e is KeyNotFoundException || e is InvalidOperationException)
+                {
+                    outcome = "the machine's answer about its jobs could not be read (" + e.Message + ": " +
+                              r.Out.Trim() + "), so setup starts without waiting for them";
+                    break;
+                }
+                string running = string.Join(", ", jobs);
+                if (running.Length == 0)
+                {
+                    outcome = "no job runs on the machine, and new ones wait for the restart";
+                    break;
+                }
+                if (DateTime.UtcNow >= deadline)
+                {
+                    outcome = "jobs still run after " + DrainMost.TotalMinutes + " minutes (" + running +
+                           "), and setup starts anyway: the restart ends them";
+                    break;
+                }
+                string waiting = "waiting for the machine's jobs to end before setup restarts it: " + running;
+                BeginInvoke(new Action(() => keeper.Record("upgrade", waiting)));
+                Thread.Sleep(DrainPoll);
+            }
+            BeginInvoke(new Action(() =>
+            {
+                draining = false;
+                if (exited)
+                    return;
+                Note("keeper: " + outcome);
+                keeper.Record("upgrade", outcome);
+                StartUpgrade();
+            }));
+        }) { IsBackground = true, Name = "drain" }.Start();
     }
 
     // setup.ps1 upgrades the machine in place while it runs, then closes this window

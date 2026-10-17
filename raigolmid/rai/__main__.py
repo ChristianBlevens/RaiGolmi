@@ -1469,6 +1469,8 @@ def cmd_keeper(args) -> int:
         result = client.call("keeper_seen", busy_seconds=args.busy)
     elif args.verb == "take":
         result = client.call("keeper_take", id=args.id, busy_seconds=args.busy)
+    elif args.verb == "restarting":
+        result = client.call("keeper_restarting", cause=args.cause)
     else:
         result = client.call("keeper_answer", id=args.id, verdict=args.verdict, words=args.words)
     print(json.dumps(result, default=str))
@@ -1632,6 +1634,9 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("id")
     v.add_argument("verdict", choices=["fixed", "not_fixed", "deferred"])
     v.add_argument("words", nargs="?", default="")
+    v = verbs.add_parser("restarting", help="the launcher's, before an upgrade restarts the "
+                         "machine: holds new jobs, and says which still run")
+    v.add_argument("cause")
     p.set_defaults(fn=cmd_keeper)
 
     p = sub.add_parser("diagnose")

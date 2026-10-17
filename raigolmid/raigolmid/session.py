@@ -2237,6 +2237,9 @@ class Session:
                 self.intent, self.catalogue, recreate=self._recreate_from_intent,
                 on_queue=lambda iid, fn: self.queues.run(iid, fn, "reconcile", timeout=900))
             self._archive_orphaned_homes()
+            stopped = self.intent.stopped
+            if stopped is not None and stopped.boot != boot.current():
+                self.events.emit("machine.restarted", cause=stopped.restart)
             self.intent.stopped = None
             # The rest of the start goes on past a tab that does not come back.
             reopening = [*report.resumable_tabs, *report.crashed_tabs]
@@ -2402,7 +2405,7 @@ class Session:
             self.intent.stopped = StopRecord(boot=boot.current(), running_tabs=[
                 tab_id for tab_id in self.intent.tabs
                 if (c := self.runtime.inspect(naming.agent(tab_id))) is not None
-                and c.running])
+                and c.running], restart=self.jobs.restart_cause())
             self.store.save(self.intent)
         self.debouncer.cancel_all()
         self.queues.close_all()
