@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from . import compose, flakes, naming, superseded
+from . import compose, naming, superseded
 from .git import ProtectionWatch
 from .anchors import Anchors
 from .definitions import Body, Toolbelt
@@ -23,8 +23,7 @@ from .intent import load_json, save_json
 from .paths import Paths
 from .queues import BuildOutcome
 from .runtime import ContainerRuntime, RuntimeError_
-from .toolbelts import (Closure, NixeryRefused, ToolbeltError, ToolbeltResolver,
-                        pull_from_nixery)
+from .toolbelts import Closure, ToolbeltError, ToolbeltResolver
 from .launcher import LauncherError, LauncherUnreachable
 from .views import ViewError, ViewPlan, Views
 
@@ -337,33 +336,10 @@ class Instances:
         return cid
 
     def fetch_toolbelt(self, toolbelt: Toolbelt) -> None:
-        """The toolbelt's image on the machine, so a view can start from it at once: pulled
-        from Nixery, or — for a list Nixery refuses, or a lock from a flake — built from a
-        generated flake (`flakes.py`)."""
-        closure = self.resolver.resolve(toolbelt)
-        if self.runtime.image(closure.image) is not None:
-            return
-        if closure.method != "flake":
-            try:
-                pull_from_nixery(self.runtime, closure.image)
-                return
-            except NixeryRefused as refused:
-                self.events.emit("toolbelt.nixery_refused", toolbelt=toolbelt.id,
-                                 reason=str(refused))
-                nixery = str(refused)
-        else:
-            nixery = None
-        self.events.emit("toolbelt.flake_building", toolbelt=toolbelt.id,
-                         nixpkgs=closure.nixpkgs)
-        try:
-            built = flakes.build(self.runtime, self.resolver.flakes, toolbelt,
-                                 closure.nixpkgs, self.epoch)
-        except (flakes.FlakeError, RuntimeError_) as exc:
-            self.events.emit("toolbelt.flake_failed", toolbelt=toolbelt.id, reason=str(exc))
-            raise ToolbeltError(f"{nixery + '. ' if nixery else ''}Built from a flake "
-                                f"instead, it failed: {exc}") from exc
-        self.events.emit("toolbelt.flake_built", toolbelt=toolbelt.id, image=built.image,
-                         nixpkgs=built.nixpkgs)
+        """The toolbelt's image on the machine, so a view can start from it at once
+        (`ToolbeltResolver.fetch`)."""
+        self.resolver.fetch(self.runtime, self.events, toolbelt,
+                            self.resolver.resolve(toolbelt), self.epoch)
 
     def start_view(self, instance: Instance, toolbelt: Toolbelt) -> None:
         """The session view is the toolbelt's container."""

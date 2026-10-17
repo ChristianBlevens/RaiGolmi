@@ -45,6 +45,8 @@ def test_a_refused_pull_carries_nixerys_answer_naming_the_package(nixery):
     assert "Nixery says: Could not find Nix packages: [notapackagexyz]" in str(refused.value)
     [request] = nixery
     assert request.full_url == "https://nixery.dev/v2/shell/python3/notapackagexyz/manifests/latest"
+    # Cloudflare in front of nixery.dev refuses urllib's own User-Agent (its error 1010).
+    assert request.get_header("User-agent") == "raigolmid"
 
 
 def test_a_locked_reference_is_asked_by_its_digest(nixery):

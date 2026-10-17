@@ -37,11 +37,11 @@ from typing import Any
 
 from . import hostimages, keyboard, labels, localtime, naming, settings
 from .closures import Closures
-from .definitions import Face, FaceDesktop
+from .definitions import Face, FaceDesktop, Toolbelt
 from .events import EventLog
 from .paths import APPS_READY, Paths
 from .runtime.base import ContainerRuntime, ContainerSpec, Mount, RuntimeError_
-from .toolbelts import nixery_reference
+from .toolbelts import ToolbeltResolver, nixery_reference
 from ui import hostipc
 from ui.hostipc import HostIpcError
 
@@ -324,6 +324,10 @@ class Faces:
         self.epoch = epoch
         # The machine's one, shared with the views' (`Session`): its copies are serialised.
         self.closures = closures or Closures(runtime, paths, events, epoch)
+        # A face's apps are a package list like a toolbelt's, and one Nixery refuses is built
+        # from a flake as a toolbelt's is; kept apart from the toolbelts', whose ids a face
+        # shares.
+        self.apps_resolver = ToolbeltResolver(flakes=paths.state / "face-flakes")
 
     # --- packaging ---------------------------------------------------------------------
     def image_for(self, face: Face, desktop: FaceDesktop) -> str:
@@ -377,19 +381,27 @@ class Faces:
         return state
 
     @staticmethod
-    def apps_reference(face: Face) -> str:
-        """The image carrying the face's apps: its editor, its `apps`, and what `rai`
-        needs."""
+    def apps(face: Face) -> Toolbelt:
+        """The face's apps as a package list: its editor, its `apps`, and what `rai` needs."""
         packages = [*REQUIRED_FACE_PACKAGES]
         if face.editor is not None:
             packages.append(face.editor.package)
         if face.desktop is not None:
             packages.extend(face.desktop.apps)
-        return nixery_reference(tuple(dict.fromkeys(packages)))
+        return Toolbelt(id=f"face-{face.id}", name=face.name, directory=face.directory,
+                        supports=(), capabilities=(), packages=tuple(dict.fromkeys(packages)))
+
+    def apps_reference(self, face: Face) -> str:
+        """The image carrying the face's apps: Nixery's, or the flake build made for a list
+        Nixery refused."""
+        return self.apps_resolver.unlocked(self.apps(face)).image
 
     def apps_closure(self, face: Face) -> tuple[str, Path]:
         """The face's apps as one Nix closure. Returns the image id and the host directory it
         was copied to."""
+        apps = self.apps(face)
+        self.apps_resolver.fetch(self.runtime, self.events, apps,
+                                 self.apps_resolver.unlocked(apps), self.epoch)
         return self.closures.of_image(self.apps_reference(face))
 
     # --- lifecycle ---------------------------------------------------------------------

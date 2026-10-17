@@ -29,6 +29,7 @@ from typing import Any
 
 from . import flakes
 from .definitions import Toolbelt
+from .events import EventLog
 from .runtime.base import ContainerRuntime, ImageInfo, RuntimeError_
 
 NIXERY = "nixery.dev"
@@ -43,6 +44,9 @@ INDEX_URL = "https://channels.nixos.org/nixpkgs-unstable/packages.json.br"
 INDEX_MAX_AGE = 14 * 24 * 3600
 MANIFEST_TYPES = ("application/vnd.docker.distribution.manifest.v2+json, "
                   "application/vnd.oci.image.manifest.v1+json")
+# nixery.dev is behind Cloudflare, which answers urllib's own `Python-urllib/3.x` with its
+# error 1010 rather than Nixery's answer.
+USER_AGENT = "raigolmid"
 
 
 class ToolbeltError(Exception):
@@ -233,7 +237,8 @@ def _nixery_answer(reference: str) -> tuple[str, bool]:
     else:
         repository, tag = rest, "latest"
     request = urllib.request.Request(f"https://{registry}/v2/{repository}/manifests/{tag}",
-                                     headers={"Accept": MANIFEST_TYPES})
+                                     headers={"Accept": MANIFEST_TYPES,
+                                              "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             return (f"it serves {reference} (HTTP {response.status}), so the pull failed on "
@@ -307,6 +312,10 @@ class ToolbeltResolver:
                            packages=tuple(lock.packages),
                            package_digest=lock.package_digest,
                            store_paths=tuple(lock.store_paths), nixpkgs=lock.nixpkgs)
+        return self.unlocked(toolbelt)
+
+    def unlocked(self, toolbelt: Toolbelt) -> Closure:
+        """The package list's image with no lock: the flake build made for it, or Nixery's."""
         built = flakes.record_of(self.flakes, toolbelt) if self.flakes is not None else None
         if built is not None:
             return Closure(image=built.image, method="flake", packages=toolbelt.packages,
@@ -318,3 +327,29 @@ class ToolbeltResolver:
             packages=toolbelt.packages,
             package_digest=toolbelt.package_digest,
         )
+
+    def fetch(self, runtime: ContainerRuntime, events: EventLog, toolbelt: Toolbelt,
+              closure: Closure, epoch: int) -> None:
+        """`closure`'s image on the machine: pulled from Nixery, or — for a list Nixery
+        refuses, or a closure from a flake — built from a generated flake (`flakes.py`)."""
+        if runtime.image(closure.image) is not None:
+            return
+        if closure.method != "flake":
+            try:
+                pull_from_nixery(runtime, closure.image)
+                return
+            except NixeryRefused as refused:
+                events.emit("toolbelt.nixery_refused", toolbelt=toolbelt.id,
+                            reason=str(refused))
+                nixery = str(refused)
+        else:
+            nixery = None
+        events.emit("toolbelt.flake_building", toolbelt=toolbelt.id, nixpkgs=closure.nixpkgs)
+        try:
+            built = flakes.build(runtime, self.flakes, toolbelt, closure.nixpkgs, epoch)
+        except (flakes.FlakeError, RuntimeError_) as exc:
+            events.emit("toolbelt.flake_failed", toolbelt=toolbelt.id, reason=str(exc))
+            raise ToolbeltError(f"{nixery + '. ' if nixery else ''}Built from a flake "
+                                f"instead, it failed: {exc}") from exc
+        events.emit("toolbelt.flake_built", toolbelt=toolbelt.id, image=built.image,
+                    nixpkgs=built.nixpkgs)

@@ -1,9 +1,11 @@
-"""The flake escape hatch: a toolbelt Nixery refuses, built on the machine by a nix
-builder container from a flake generated from its package list — never written by a person or
-an agent.
+"""The flake escape hatch: a toolbelt, or a face's apps, that Nixery refuses, built on the
+machine by a nix builder container from a flake generated from its package list — never
+written by a person or an agent.
 
-Its whole domain is unfree packages: Nixery never builds one, and a name nixpkgs does not have
-fails here as it does there. Unfree is allowed; whether a toolbelt uses one is the user's
+Its domain is what Nixery refuses: every unfree package, which Nixery never builds, and a
+list it fails to build (`image build failure`), which can be a large list of packages it
+builds in any smaller set. A name nixpkgs does not
+have fails here as it does there. Unfree is allowed; whether a toolbelt uses one is the user's
 choice. Nothing unfree is in
 NixOS's binary cache, so such a package is compiled here, which can take many minutes.
 
