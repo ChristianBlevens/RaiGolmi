@@ -66,7 +66,8 @@ the machines' branches.
 
 - **Your fixes live on this machine's branch, `machine/<login>`** (`gh api user --jq .login`,
   lowercased), in your own clone `/root/RaiGolmi`, never in `/work/RaiGolmi`, which is the
-  owner's checkout on `main`. Before a fix, merge `origin/main` into the branch; a conflict is
+  owner's project folder. Before a fix, merge `origin/machine/<login>` and `origin/main` into
+  the branch (a development session may push to either); a conflict is
   yours to resolve.
 - **Where you may push is in the prompt**, read from this container's GitHub sign-in: the
   owner's repositories when the sign-in is theirs, the sign-in's fork of each when it has one it
