@@ -942,6 +942,19 @@ def methods(session: "Session", questions: Questions, channels: Channels,
             f"Filed, but no keeper is reachable ({when}): work around it. A keeper that "
             "comes back takes it, and you are told its answer.")}
 
+    def request_feature(title: str, body: str) -> dict[str, Any]:
+        """A feature the owner wants in RaiGolmi itself, filed for the keeper (`faults.py`)."""
+        store = Faults(session.paths, session.events)
+        feature = store.request(caller, title, body)
+        reachable, when = store.keeper_reachable(time.time())
+        if reachable:
+            return {"feature": feature["id"], "keeper": "reachable", "next": (
+                f"Filed; {when}, and builds it once no fault waits. You are told its answer.")}
+        store.told_stranded(feature["id"], caller)    # this answer is the telling
+        return {"feature": feature["id"], "keeper": "unreachable", "next": (
+            f"Filed, but no keeper is reachable ({when}): tell the owner. A keeper that comes "
+            "back takes it, and you are told its answer.")}
+
     def document_save(id: str, text: str, version: str | None = None) -> dict[str, Any]:
         """Every tab reads the catalog (`library.served_to_tabs`); the machine's documents are
         the machine tab's to change, through the same checks as the user's own save."""
@@ -958,6 +971,7 @@ def methods(session: "Session", questions: Questions, channels: Channels,
                                            "pause", "resume")),
         ("report_run", report_run),
         ("report_fault", report_fault),
+        ("request_feature", request_feature),
         # `rai claude-update`'s; the caller is mid-turn, so it moves as that turn ends.
         ("update_claude_code", lambda pinned=False: session.update_claude_code(pinned)),
         ("export_machine", lambda: export_machine(session)),

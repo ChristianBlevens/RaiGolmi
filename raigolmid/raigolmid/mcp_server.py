@@ -556,6 +556,14 @@ def build_server(client: ApiClient):
     def report_fault(title: str, body: str, affects: list[str] | None = None) -> dict[str, Any]:
         return call("report_fault", title=title, body=body, affects=affects)
 
+    @tool(server, description="Machine tab only: a feature the owner asked for in RaiGolmi "
+                             "itself, for the keeper to build and release on this machine. "
+                             "`title` is one line, `body` what they asked for in their words "
+                             "and what it is for. Nothing is paused; the keeper takes it once no "
+                             "fault waits, and you are told its answer.")
+    def request_feature(title: str, body: str) -> dict[str, Any]:
+        return call("request_feature", title=title, body=body)
+
     @tool(server, description="Declare your commits against your project's principles doc "
                              "(`[principles] doc` in its body.toml), as the end of your turn "
                              "asks once HEAD has moved. `commits` is a list of {commit, for, "

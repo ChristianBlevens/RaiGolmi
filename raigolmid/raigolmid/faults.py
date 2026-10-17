@@ -1,18 +1,21 @@
-"""Faults in RaiGolmi itself, handed by the machine tab to the keeper that repairs RaiGolmi.
+"""Faults in RaiGolmi itself, and features the owner wants in it, handed by the machine tab to
+the keeper that repairs RaiGolmi.
 
 The keeper (`keeper/keeper.py`) is a Claude Code agent outside the VM. The machine tab, meeting
-a RaiGolmi bug during a run, pauses the tabs it affects and files it with `report_fault`; each
-fault is one JSON file under `Paths.faults`, named by its id, whose `status` is
+a RaiGolmi bug during a run, pauses the tabs it affects and files it with `report_fault`; asked
+by the owner for a feature in RaiGolmi, it files that with `request_feature`, which pauses
+nothing. Each is one JSON file under `Paths.faults`, named by its id, whose `kind` is `fault`
+or `feature` and whose `status` is
 
     open       filed, not yet taken
     taken      a keeper session is working on it
-    fixed      the keeper says the fix is in
+    fixed      the keeper says the fix, or the feature, is in
     deferred   the keeper will take it up itself later, and says when and why in `answer`
     not_fixed  the keeper tried and could not fix it, and says why in `answer`
 
 The keeper reaches the daemon over ssh through `rai keeper`: every probe of its loop says it
 looked (`seen`, kept in `Paths.keeper`) and is answered with the faults open or taken; it
-`take`s one before a session on it and `answer`s it with that session's verdict. A fault
+`take`s one before a session on it, a feature only when no fault waits, and `answer`s it with that session's verdict. A fault
 waiting out the account's usage limit, which holds every agent (`keeper.py`), is answered
 `deferred` and stays waiting, so nobody files it again. An answer is `fault.answered`, which the coordinator delivers to the
 machine tab, or to whichever machine tab opens next when none is open; one handed over is
@@ -64,6 +67,8 @@ class Faults:
         fault = load_json(self._path(id), f"fault {id}")
         if fault is None:
             raise SessionError(f"no fault {id!r}")
+        # A record with no kind was filed by `report_fault` on a daemon that knew no other.
+        fault.setdefault("kind", "fault")
         return fault
 
     def all(self) -> list[dict[str, Any]]:
@@ -80,17 +85,27 @@ class Faults:
         if not title.strip() or not body.strip():
             raise SessionError("a fault needs a `title` and a `body`: what failed, the error "
                                "as it was seen, and what it stops")
+        return self._file(tab, "fault", title, body, affects)
+
+    def request(self, tab: str, title: str, body: str) -> dict[str, Any]:
+        if not title.strip() or not body.strip():
+            raise SessionError("a feature needs a `title` and a `body`: what the owner asked "
+                               "for, in their words, and what it is for")
+        return self._file(tab, "feature", title, body, [])
+
+    def _file(self, tab: str, kind: str, title: str, body: str,
+              affects: list[str]) -> dict[str, Any]:
         now = time.time()
-        fault = {"id": f"fault-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(now))}-"
-                       f"{uuid.uuid4().hex[:6]}",
+        fault = {"id": f"{kind}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(now))}-"
+                       f"{uuid.uuid4().hex[:6]}", "kind": kind,
                  "title": title.strip(), "body": body.strip(), "affects": list(affects),
                  "reported_by": tab, "reported_at": now, "status": "open", "taken_at": None,
                  "answered_at": None, "answer": None, "told": None, "stranded": None}
         with _lock:
             self._save(fault)
-        self.events.emit("fault.reported", tab=tab, id=fault["id"], title=fault["title"],
-                         affects=fault["affects"])
-        logger.info("fault %s filed by %s: %s", fault["id"], tab, fault["title"])
+        self.events.emit("fault.reported", tab=tab, id=fault["id"], kind=kind,
+                         title=fault["title"], affects=fault["affects"])
+        logger.info("%s %s filed by %s: %s", kind, fault["id"], tab, fault["title"])
         return fault
 
     def keeper_reachable(self, now: float) -> tuple[bool, str]:
@@ -181,6 +196,8 @@ def _around(tabs: str) -> str:
 
 def answer_message(fault: dict[str, Any]) -> str:
     """The keeper's answer as the machine tab is told it."""
+    if fault["kind"] == "feature":
+        return _feature_answer(fault)
     tabs = ", ".join(fault["affects"]) or "none named"
     if fault["status"] == "fixed":
         return (f"The keeper fixed fault {fault['id']} ({fault['title']}): the fix is in. "
@@ -193,8 +210,24 @@ def answer_message(fault: dict[str, Any]) -> str:
             f"{fault['answer']}\n\n" + _around(tabs))
 
 
+def _feature_answer(fault: dict[str, Any]) -> str:
+    what = f"feature {fault['id']} ({fault['title']})"
+    if fault["status"] == "fixed":
+        return (f"The keeper built {what}: it is in, on this machine's release. Tell the owner "
+                f"what it said, and record it in your faults log.")
+    if fault["status"] == "deferred":
+        return (f"The keeper deferred {what}: {fault['answer']}\n\nIt stays filed and the keeper "
+                f"takes it up itself; do not file it again. You are told its answer.")
+    return (f"The keeper could not build {what}: {fault['answer']}\n\nTell the owner, and file "
+            f"it again only with something new about it.")
+
+
 def stranded_message(fault: dict[str, Any], when: str) -> str:
     """A fault still waiting with no keeper reachable, as the machine tab is told it."""
+    if fault["kind"] == "feature":
+        return (f"From the daemon: no keeper is reachable for feature {fault['id']} "
+                f"({fault['title']}) — {when} — so it is not being built. A keeper that comes "
+                f"back takes it, and you are told its answer.")
     tabs = ", ".join(fault["affects"]) or "none named"
     return (f"From the daemon: no keeper is reachable for fault {fault['id']} "
             f"({fault['title']}) — {when} — so it is not being fixed. " + _around(tabs)

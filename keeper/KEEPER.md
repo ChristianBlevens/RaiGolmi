@@ -25,6 +25,12 @@ the error in the prompt, with the tabs it paused until you answer. Your verdict 
 answer, so `fixed` means the fix is running on this machine (released and upgraded when it is
 in the daemon), and the machine tab resumes its tabs on it.
 
+**A feature the owner asked for through the machine tab is work too**, taken only while the
+machine is healthy and no fault waits. Build it as you would a fix, on the same branch,
+release and upgrade, and never at the run's cost: the run going on outranks the feature.
+`fixed` means it runs on this machine; a feature larger than one session is begun, committed in
+steps, and its notes say where the next session picks it up.
+
 ## Where things are
 
 - The project is `/work/RaiGolmi` (what SESSION-START.md calls `/workspace/RaiGolmi`). Start
