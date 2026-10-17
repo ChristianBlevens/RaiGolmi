@@ -100,7 +100,9 @@ def tab_status(session: Session, questions: Questions, channels: Channels,
         "session": {**{k: v for k, v in full["session"].items() if k != "focused_instance"},
                     "instances": [i for i in full["session"]["instances"] if i == instance],
                     "on_face": instance is not None
-                    and full["session"]["focused_instance"] == instance},
+                    and full["session"]["focused_instance"] == instance,
+                    # Claimed and not yet up: its tools wait for it (`Session.await_open`).
+                    "opening": instance is not None and session.opening(instance)},
         "definition_errors": full.get("definition_errors", []),
         "builds": {key: build for key, build in full["builds"].items()
                    if own_copy is not None and key == str(own_copy)},
@@ -147,7 +149,7 @@ def _talking(session: Session, questions: Questions, channels: Channels,
         # be done at all, and otherwise done on their yes.
         if not session.check_toolbelt_swap(tab_id, toolbelt):
             return {"status": "unchanged",
-                    "next": f"The sandbox already runs toolbelt '{toolbelt}'."}
+                    "next": f"The sandbox already runs toolbelt '{toolbelt}' as it is defined now."}
         body, _ = naming.split(instance_of(session, tab_id))
         id, always = questions.ask_permission(
             tab_id, permissions.swap_message(toolbelt),

@@ -10,6 +10,7 @@ import pytest
 
 from raigolmid import naming
 from raigolmid.channel import Channels
+from raigolmid.events import Event
 from raigolmid.intent import JANITOR
 from raigolmid.janitor import TAKEN
 from raigolmid.stalls import SPIN_SECONDS, STALL_SECONDS, Stalls, unstick
@@ -82,6 +83,26 @@ def test_a_busy_tab_whose_conversation_stands_still_is_said_once_with_its_eviden
     _write(transcript, {"type": "user", "message": {"content": "more"}})
     s.tick(STALL_SECONDS + 90)
     s.tick(2 * STALL_SECONDS + 90)
+    assert len(h.events_of("tab.stalled")) == 2
+
+
+def test_a_job_paused_past_its_prediction_starts_a_new_episode(h, s):
+    """A wait the janitor's look judged real is on nothing once the job is paused, and the
+    overrun's message waits for a turn that never ends: the stall is said again."""
+    transcript = _transcript(h)
+    _call(transcript, "t1", "until grep -q exit head.txt; do sleep 20; done")
+    h.session.agent_activity(TAB, True)
+    s.tick(0.0)
+    s.tick(STALL_SECONDS)
+    assert len(h.events_of("tab.stalled")) == 1
+    s.tick(3 * STALL_SECONDS)
+    assert len(h.events_of("tab.stalled")) == 1, "once per episode"
+
+    s.on_event(Event(type="job.overrun", ts=4 * STALL_SECONDS, epoch=0, tab=TAB,
+                     data={"name": "longplay"}))
+    s.tick(5 * STALL_SECONDS - 1)
+    assert len(h.events_of("tab.stalled")) == 1
+    s.tick(5 * STALL_SECONDS)
     assert len(h.events_of("tab.stalled")) == 2
 
 

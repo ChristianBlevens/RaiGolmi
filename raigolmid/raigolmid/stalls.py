@@ -14,7 +14,9 @@ Each is said once per episode as `tab.stalled` or `tab.spinning`, which the jani
 named as waited on (`agent_stop.py`), and the processes in its agent's container and a body
 tab's sandbox toolbelt — read from the host, since the janitor has no shell in a sandbox. A wait that is real — a long test the tab is rightly
 waiting on — is said too, and the janitor's look leaves it alone: one look is the price of
-never missing a hang. The janitor's own stall has nobody to take it, so it is unstuck here.
+never missing a hang. A job of the tab's paused past its prediction (`job.overrun`) ends what
+that look judged, so it starts a new episode: the message saying so waits for the turn to end,
+and a turn waiting on the paused job never ends by itself. The janitor's own stall has nobody to take it, so it is unstuck here.
 
 `unstick` is the janitor's repair: the tab restarted on its conversation, which ends its turn
 and every background task in its container, and a note queued on its channel (`channel.py`),
@@ -165,6 +167,11 @@ class Stalls:
             # A job the tab runs printing is its work moving, whatever its working copy does.
             watch = self._watches[event.tab]
             watch.changed_at, watch.spinning = event.ts, False
+        elif event.type == "job.overrun" and event.tab in self._watches:
+            # The job is paused, so a wait on it that was real when looked at now waits on
+            # nothing: its stall is a new episode, said again if the tab still does not move.
+            watch = self._watches[event.tab]
+            watch.moved_at, watch.stalled = event.ts, False
 
     def tick(self, now: float) -> None:
         if self._limited:

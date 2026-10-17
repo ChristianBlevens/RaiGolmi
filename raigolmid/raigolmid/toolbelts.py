@@ -18,6 +18,7 @@ authoring format.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import re
 import time
@@ -29,6 +30,7 @@ from typing import Any
 
 from . import flakes
 from .definitions import Toolbelt
+from .events import EventLog
 from .runtime.base import ContainerRuntime, ImageInfo, RuntimeError_
 
 NIXERY = "nixery.dev"
@@ -43,6 +45,9 @@ INDEX_URL = "https://channels.nixos.org/nixpkgs-unstable/packages.json.br"
 INDEX_MAX_AGE = 14 * 24 * 3600
 MANIFEST_TYPES = ("application/vnd.docker.distribution.manifest.v2+json, "
                   "application/vnd.oci.image.manifest.v1+json")
+# nixery.dev is behind Cloudflare, which answers urllib's own `Python-urllib/3.x` with its
+# error 1010 rather than Nixery's answer.
+USER_AGENT = "raigolmid"
 
 
 class ToolbeltError(Exception):
@@ -203,19 +208,39 @@ class NixeryRefused(RuntimeError_):
     failed on the way. Only this sends a toolbelt to the flake escape hatch (`flakes.py`)."""
 
 
+class NixeryLost(RuntimeError_):
+    """Nixery no longer holds the manifest a digest names. It keeps a built image for a
+    while, not for ever, and answers a digest it does not hold with HTTP 200 and an empty
+    body, which dockerd reports as an unsupported manifest media type. A lock pinned by such
+    a digest reproduces nothing any more."""
+
+
 def pull_from_nixery(runtime: ContainerRuntime, reference: str) -> ImageInfo:
-    """Pulls a Nixery image; a refused pull carries Nixery's own answer.
+    """Pulls a Nixery image by its manifest's digest; a refused pull carries Nixery's answer.
+
+    nixery.dev serves a tag's manifest chunked, with no Content-Length, and Docker's resolver
+    refuses that (`missing or empty Content-Length header`), while a manifest asked for by its
+    digest comes with one. So a tag is resolved here, from the manifest Nixery serves for it,
+    and the image is pulled by that digest and tagged as `reference`, the name it is run by.
 
     Docker reports a name Nixery cannot build as `not found` and nothing more, while
     Nixery's registry names the package (`Could not find Nix packages: [name]`). That
-    answer is the name check, so it is asked for when the pull fails.
+    answer is the name check.
     """
-    try:
-        return runtime.pull(reference)
-    except RuntimeError_ as exc:
-        said, refused = _nixery_answer(reference)
-        raise (NixeryRefused if refused else RuntimeError_)(
-            f"{exc}. Nixery says: {said}") from exc
+    if "@" in reference:
+        try:
+            return runtime.pull(reference)
+        except RuntimeError_ as exc:
+            said, kind, _ = _nixery_answer(reference)
+            raise kind(f"{exc}. Nixery says: {said}") from exc
+    said, kind, digest = _nixery_answer(reference)
+    if digest is None:
+        raise kind(f"could not pull '{reference}'. Nixery says: {said}")
+    repository, tag = _repository_and_tag(reference)
+    pinned = f"{repository}@{digest}"
+    runtime.pull(pinned)
+    runtime.tag(pinned, repository, tag)
+    return runtime.image(reference)
 
 
 def nixery_says(reference: str) -> str:
@@ -223,31 +248,46 @@ def nixery_says(reference: str) -> str:
     return _nixery_answer(reference)[0]
 
 
-def _nixery_answer(reference: str) -> tuple[str, bool]:
-    """Nixery's words for `reference`, and whether they are a refusal of the list."""
+def _repository_and_tag(reference: str) -> tuple[str, str]:
+    if ":" in reference.rsplit("/", 1)[-1]:
+        repository, _, tag = reference.rpartition(":")
+        return repository, tag
+    return reference, "latest"
+
+
+def _nixery_answer(reference: str) -> tuple[str, type[RuntimeError_], str | None]:
+    """Nixery's words for `reference`, the failure they make of its pull (a refusal of the
+    list, a digest it no longer holds, or neither), and the digest of the manifest it serves,
+    None when it serves none."""
     registry, _, rest = reference.partition("/")
     if "@" in rest:
         repository, _, tag = rest.partition("@")
-    elif ":" in rest.rsplit("/", 1)[-1]:
-        repository, _, tag = rest.rpartition(":")
     else:
-        repository, tag = rest, "latest"
+        repository, tag = _repository_and_tag(rest)
     request = urllib.request.Request(f"https://{registry}/v2/{repository}/manifests/{tag}",
-                                     headers={"Accept": MANIFEST_TYPES})
+                                     headers={"Accept": MANIFEST_TYPES,
+                                              "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
+            manifest = response.read()
+            if not manifest and "@" in reference:
+                return (f"HTTP {response.status} with an empty body: it no longer holds the "
+                        "manifest by that digest"), NixeryLost, None
+            if not manifest:
+                return f"HTTP {response.status} with an empty body", RuntimeError_, None
             return (f"it serves {reference} (HTTP {response.status}), so the pull failed on "
-                    "this side"), False
+                    "this side"), RuntimeError_, "sha256:" + hashlib.sha256(manifest).hexdigest()
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace").strip()
         try:
-            return "; ".join(error["message"] for error in json.loads(body)["errors"]), True
+            return ("; ".join(error["message"] for error in json.loads(body)["errors"]),
+                    NixeryRefused, None)
         except (json.JSONDecodeError, KeyError, TypeError):
-            return f"HTTP {exc.code}: {body[:500]}", False
+            return f"HTTP {exc.code}: {body[:500]}", RuntimeError_, None
     except urllib.error.URLError as exc:
-        return f"nothing: it could not be reached ({exc.reason})", False
+        return f"nothing: it could not be reached ({exc.reason})", RuntimeError_, None
     except (TimeoutError, OSError) as exc:
-        return f"nothing: it could not be asked ({exc})", False
+        return f"nothing: it could not be asked ({exc})", RuntimeError_, None
 
 
 class ToolbeltResolver:
@@ -307,6 +347,10 @@ class ToolbeltResolver:
                            packages=tuple(lock.packages),
                            package_digest=lock.package_digest,
                            store_paths=tuple(lock.store_paths), nixpkgs=lock.nixpkgs)
+        return self.unlocked(toolbelt)
+
+    def unlocked(self, toolbelt: Toolbelt) -> Closure:
+        """The package list's image with no lock: the flake build made for it, or Nixery's."""
         built = flakes.record_of(self.flakes, toolbelt) if self.flakes is not None else None
         if built is not None:
             return Closure(image=built.image, method="flake", packages=toolbelt.packages,
@@ -318,3 +362,42 @@ class ToolbeltResolver:
             packages=toolbelt.packages,
             package_digest=toolbelt.package_digest,
         )
+
+    def fetch(self, runtime: ContainerRuntime, events: EventLog, toolbelt: Toolbelt,
+              closure: Closure, epoch: int) -> None:
+        """`closure`'s image on the machine: pulled from Nixery, or — for a list Nixery
+        refuses, or a closure from a flake — built from a generated flake (`flakes.py`).
+
+        A lock whose image Nixery no longer holds is deleted and the package list resolved
+        again, Nixery's current closure of it: the lock's store paths are gone with the
+        manifest, and the view that works on the new closure locks it again."""
+        if runtime.image(closure.image) is not None:
+            return
+        if closure.method != "flake":
+            try:
+                pull_from_nixery(runtime, closure.image)
+                return
+            except NixeryLost as lost:
+                lock = self.read_lock(toolbelt)
+                if lock is None or lock.image != closure.image:
+                    raise
+                toolbelt.lock_path.unlink()
+                events.emit("toolbelt.lock_lost", toolbelt=toolbelt.id, image=lock.image,
+                            resolved_at=lock.resolved_at, reason=str(lost))
+                self.fetch(runtime, events, toolbelt, self.resolve(toolbelt), epoch)
+                return
+            except NixeryRefused as refused:
+                events.emit("toolbelt.nixery_refused", toolbelt=toolbelt.id,
+                            reason=str(refused))
+                nixery = str(refused)
+        else:
+            nixery = None
+        events.emit("toolbelt.flake_building", toolbelt=toolbelt.id, nixpkgs=closure.nixpkgs)
+        try:
+            built = flakes.build(runtime, self.flakes, toolbelt, closure.nixpkgs, epoch)
+        except (flakes.FlakeError, RuntimeError_) as exc:
+            events.emit("toolbelt.flake_failed", toolbelt=toolbelt.id, reason=str(exc))
+            raise ToolbeltError(f"{nixery + '. ' if nixery else ''}Built from a flake "
+                                f"instead, it failed: {exc}") from exc
+        events.emit("toolbelt.flake_built", toolbelt=toolbelt.id, image=built.image,
+                    nixpkgs=built.nixpkgs)

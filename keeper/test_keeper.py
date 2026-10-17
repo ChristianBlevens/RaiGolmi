@@ -1,5 +1,6 @@
 """The keeper's decisions (keeper.py's module docstring), against doubles for the clock, the
 VM, Claude Code and ntfy."""
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -12,7 +13,7 @@ import keeper as k  # noqa: E402
 T0 = 1_800_000_000.0
 HEALTHY = {"reachable": True, "daemon": "active", "restarts": 0, "line_out": None,
            "held": False, "hold": None,
-           "run_active": True, "last_event": {"type": "agent.busy", "age_s": 30},
+           "run_working": True, "last_event": {"type": "agent.busy", "age_s": 30},
            "faults": [], "faults_error": None, "plan": None}
 FAULT = {"id": "fault-1", "title": "jobs of an earlier tab no tab can stop",
          "body": "job_stop: no such job", "affects": ["tab-2"], "status": "open"}
@@ -103,6 +104,12 @@ def test_healthy_does_nothing(world: World) -> None:
     assert world.sessions == [] and world.pushes == [] and world.inbox() == []
 
 
+def test_keeper_json_names_the_keeper_py_it_runs(world: World) -> None:
+    world.launcher("running")
+    source = hashlib.sha256(Path(k.__file__).read_bytes()).hexdigest()
+    assert world.check()["source"] == source
+
+
 def test_closed_is_respected_even_when_stale(world: World) -> None:
     world.launcher("closed", written=T0 - 3 * 86400)
     world.vm = {"reachable": False, "error": "refused"}
@@ -154,10 +161,31 @@ def test_failure_waits_its_grace_before_a_session(world: World) -> None:
 def test_silent_events_during_a_run_fail_but_not_outside_one(world: World) -> None:
     world.launcher("running")
     quiet = {"type": "agent.idle", "age_s": k.EVENTS_SILENT_SECONDS + 60}
-    world.vm = {**HEALTHY, "run_active": False, "last_event": quiet}
+    world.vm = {**HEALTHY, "run_working": False, "last_event": quiet}
     assert world.check()["state"] == "healthy"
-    world.vm = {**HEALTHY, "run_active": True, "last_event": quiet}
+    world.vm = {**HEALTHY, "run_working": True, "last_event": quiet}
     assert world.check()["state"] == "failing"
+
+
+def test_a_run_whose_every_tab_waits_on_the_user_is_not_working() -> None:
+    def intent(*tabs: dict, ended: float | None = None) -> dict:
+        return {"run": {"ended": ended},
+                "tabs": {"tab-1": {"managed": False, "status": "running", "held": None},
+                         **{f"tab-{n}": t for n, t in enumerate(tabs, 2)}}}
+    running = {"managed": True, "status": "running", "held": None}
+    paused = {"managed": True, "status": "paused", "held": None}
+    held = {"managed": True, "status": "running", "held": {"until": None}}
+    assert k.run_working(intent(running, paused))
+    assert not k.run_working(intent(paused))
+    assert not k.run_working(intent(paused, held))
+    assert not k.run_working(intent())
+    assert not k.run_working(intent(running, ended=T0))
+    assert not k.run_working({"run": None, "tabs": {}})
+    assert not k.run_working(None)
+
+
+def test_the_probe_script_compiles() -> None:
+    compile(k.PROBE_SCRIPT, "probe", "exec")
 
 
 def test_repeated_failure_alerts_once_then_daily_then_recovers(world: World) -> None:
@@ -250,7 +278,7 @@ def test_a_fault_from_the_machine_tab_is_taken_worked_and_answered_fixed(world: 
     assert world.pushes == []
 
 
-def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_alerted_once(world: World) -> None:
+def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_never_alerted(world: World) -> None:
     world.launcher("running")
     world.vm = {**HEALTHY, "faults": [FAULT]}
     world.check()
@@ -262,10 +290,9 @@ def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_alerted_on
     assert len(world.sessions) == k.SESSIONS_PER_INCIDENT
     assert "Earlier keeper sessions" in world.sessions[1]
     assert world.told[-1] == ["answer", "fault-1", "not_fixed", "still down"]
-    assert [p[1] for p in world.pushes] == [k.ALERT_FAULT[0]]
     for _ in range(3):
         assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy"
-    assert len(world.pushes) == 1, "an answered fault is the machine tab's: no recovery alert"
+    assert world.pushes == [], "a fault is the machine tab's alone: the run goes on around it"
 
 
 FEATURE = {"id": "feature-1", "kind": "feature", "title": "a pause button for the run",
@@ -317,7 +344,7 @@ def test_a_fault_while_claude_code_cannot_run_is_answered_not_fixed(world: World
     world.check()
     assert world.sessions == []
     assert world.told[-1][:3] == ["answer", "fault-1", "not_fixed"]
-    assert "no sign-in" in world.told[-1][3] and len(world.pushes) == 1
+    assert "no sign-in" in world.told[-1][3] and world.pushes == []
 
 
 def spend_sessions(world: World) -> None:

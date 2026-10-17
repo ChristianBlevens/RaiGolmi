@@ -34,6 +34,11 @@ A job ends with its tab (`close`): the tab's sandbox is its own and stops with i
 passes to the tab that takes its work over. One still running is ended, each end not
 yet seen is a ledger row saying why, and the successor is told how each ended.
 
+A machine restart ends every job, so one the keeper plans for an upgrade waits on them: the
+launcher asks `restarting` until none runs, and each ask holds new starts for `HOLD_SECONDS`,
+long enough for the upgrade to reach its shutdown. The cause is kept for the stop record
+(`Session.close`), so the history says why the machine restarted.
+
 A job printing while it is waited on is said as `job.progressed`, at most once a
 `PROGRESS_SECONDS`, which the stall watch reads as the tab's work moving (`stalls.py`); a
 defence is not, so a tab defending a job that does nothing is still taken for spinning. The
@@ -74,6 +79,8 @@ NO_CAUSE = re.compile(r"(it'?s |it is )?(still )?(running|building|compiling|wor
                       r"progressing|in progress|going|busy|not done|not finished)"
                       r"( fine| normally| as expected| along)?[.! ]*", re.IGNORECASE)
 SHELLS = frozenset({"sh", "bash", "zsh", "dash"})
+# How long one `restarting` holds new jobs: past the upgrade's download, staging and shutdown.
+HOLD_SECONDS = 20 * 60.0
 
 
 class JobError(Exception):
@@ -106,6 +113,8 @@ class Jobs:
         self.path = session.paths.jobs
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, dict[str, Any]]] = load_json(self.path, "jobs") or {}
+        # The planned restart's cause and when its hold on new jobs ends (`restarting`).
+        self._restart: tuple[str, float] | None = None
         # A job started with no prediction cannot be timed, and one with no body has no ledger
         # to end in (both written by an earlier daemon); its tab is told it is forgotten.
         for tab, named in self._jobs.items():
@@ -174,12 +183,17 @@ class Jobs:
         if not basis.strip():
             raise JobError("a job starts with `basis`: one line on why it takes `expect` — "
                            "its ledger rows, or what it runs")
+        cause = self.restart_cause()
+        if cause is not None:
+            raise JobError(f"the machine restarts within minutes ({cause}), which would end "
+                           f"{name!r}: start it once the machine is back")
         with self._lock:
             known = self._jobs.get(tab_id, {}).get(name)
         if known is not None and self._state(tab_id, name, known)["state"] in ("running",
                                                                                "OVERRUN"):
             raise JobError(f"job {name!r} is still running; wait on it, or give this one "
                            "another name")
+        self.session.await_open(instance_id)
         if self.session.views.get(instance_id) is None:
             raise JobError(f"{instance_id}'s toolbelt container is not running, so there is "
                            f"nowhere to run {cmd[0]!r}")
@@ -196,6 +210,37 @@ class Jobs:
         self.events.emit("job.started", tab=tab_id, instance=instance_id, name=name, cmd=cmd,
                          expect=expect, basis=basis)
         return {"name": name, "state": "running", "expect": expect, "history": similar}
+
+    # --- a planned restart ---------------------------------------------------------------
+
+    def restarting(self, cause: str) -> dict[str, Any]:
+        """The keeper's upgrade is about to restart the machine: new jobs are held for
+        `HOLD_SECONDS` from now, and the jobs still running, which the restart would end, are
+        handed back so the caller waits on them."""
+        if not cause.strip():
+            raise JobError("a restart is planned with its cause")
+        with self._lock:
+            first = self.restart_cause() is None
+            self._restart = (cause, time.time() + HOLD_SECONDS)
+            mine = [(tab, name, job) for tab, named in self._jobs.items()
+                    for name, job in named.items()]
+        running = []
+        for tab_id, name, job in mine:
+            state = self._state(tab_id, name, job)["state"]
+            if state in ("running", "OVERRUN"):
+                running.append({"tab": tab_id, "name": name, "state": state,
+                                "seconds": self._seconds(job), "expect": job["expect"]})
+        if first:
+            self.events.emit("machine.restarting", cause=cause,
+                             running=[f"{j['tab']} {j['name']}" for j in running])
+        return {"running": running, "held_until": self._restart[1]}
+
+    def restart_cause(self) -> str | None:
+        """The cause of a planned restart whose hold has not run out."""
+        with self._lock:
+            if self._restart is None or self._restart[1] < time.time():
+                return None
+            return self._restart[0]
 
     def _job(self, tab_id: str, name: str) -> dict[str, Any]:
         with self._lock:

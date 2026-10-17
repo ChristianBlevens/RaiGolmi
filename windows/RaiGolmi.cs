@@ -346,6 +346,7 @@ class Machine
         m.Disk = ChooseDisk(Path.Combine(home, "disk.txt"), door);
         if (m.Disk == null)
             return null;
+        GrowDisk(m.Disk, m.Settings.Disk);
         m.ControlPort = FreePort();
         m.WatchPort = FreePort();
         m.CommandLine = m.Arguments();
@@ -374,6 +375,28 @@ class Machine
                                     "MSYS2 from https://www.msys2.org, then in its UCRT64 window run " +
                                     "pacman -S --noconfirm mingw-w64-ucrt-x86_64-qemu");
         return path;
+    }
+
+    // The disk grown to the disk setting while no QEMU has it open. qemu-img lengthens the qcow2's
+    // virtual size, which allocates nothing, and the guest grows its root partition and
+    // filesystem into the space at boot (the bootc base's bootc-generic-growpart.service).
+    static void GrowDisk(string disk, string choice)
+    {
+        if (choice.Length == 0)
+            return;
+        string refused = Settings.DiskRefusal(choice, disk);
+        if (refused != null)
+            throw new LauncherError(refused);
+        long wanted = Settings.ChoiceBytes(choice);
+        if (Settings.DiskBytes(disk) == wanted)
+            return;
+        string tool = Require(Launcher.QemuPath(@"bin\qemu-img.exe"));
+        var p = Process.Start(Ssh.Info(tool, "resize -f qcow2 " + Ssh.Quote(Native.Ascii(disk)) + " " + wanted));
+        p.StandardInput.Close();
+        Ssh.Result r = Ssh.Finish(p);
+        if (r.Code != 0)
+            throw new LauncherError("The machine's disk could not grow to " + choice + " GB: qemu-img " +
+                                    "exited with code " + r.Code + ": " + (r.Err.Length > 0 ? r.Err : r.Out.Trim()));
     }
 
     // The disk is gigabytes, so it is used where the build left it and only its path is kept.
@@ -704,6 +727,7 @@ class Window : Form
     bool keeperChecking;
     ToolStripTextBox ntfyTopic, heartbeatUrl;
     readonly List<ToolStripMenuItem> memory = new List<ToolStripMenuItem>();
+    readonly List<ToolStripMenuItem> disk = new List<ToolStripMenuItem>();
 
     void AddSettingsMenu()
     {
@@ -739,6 +763,23 @@ class Window : Form
             memory.Add(item);
             memoryItem.DropDownItems.Add(item);
         }
+        var diskItem = new ToolStripMenuItem("Disk size, never made smaller (applies at next start)");
+        foreach (string choice in Settings.DiskChoices)
+        {
+            string chosen = choice;
+            string refused = Settings.DiskRefusal(choice, machine.Disk);
+            var item = new ToolStripMenuItem(choice + " GB" + (refused == null ? "" :
+                Settings.ChoiceBytes(choice) < Settings.DiskBytes(machine.Disk) ? " — smaller than the disk is"
+                                                                                 : " — more than this drive can spare"));
+            item.Enabled = refused == null;
+            item.Click += delegate
+            {
+                machine.Settings.Disk = chosen;
+                ApplySetting(null);
+            };
+            disk.Add(item);
+            diskItem.DropDownItems.Add(item);
+        }
         venus = Toggle("Venus (Vulkan), experimental (applies at next start)", delegate
         {
             machine.Settings.Venus = !machine.Settings.Venus;
@@ -770,11 +811,12 @@ class Window : Form
         };
         heartbeatUrl.LostFocus += delegate { CommitHeartbeat(); };
         settings.Items.AddRange(new ToolStripItem[] {
-            startAtLogin, keepAwake, memoryItem, venus, new ToolStripSeparator(), keeperItem, keeperTerminal,
+            startAtLogin, keepAwake, memoryItem, diskItem, venus, new ToolStripSeparator(), keeperItem, keeperTerminal,
             new ToolStripSeparator(), ntfyLabel, ntfyTopic, testAlert,
             new ToolStripSeparator(), heartbeatLabel, heartbeatUrl });
         settings.Closing += StayOpenOnClick;
         memoryItem.DropDown.Closing += StayOpenOnClick;
+        diskItem.DropDown.Closing += StayOpenOnClick;
         settings.Opening += delegate { keyboard.Release(); };
         // The window has the keyboard back unless the user went to another program.
         settings.Closed += (sender, e) =>
@@ -824,6 +866,8 @@ class Window : Form
         keeperTerminal.Enabled = s.Keeper && !keeperChecking;
         for (int i = 0; i < Settings.MemoryChoices.Length; i++)
             memory[i].Checked = s.Memory == Settings.MemoryChoices[i];
+        for (int i = 0; i < Settings.DiskChoices.Length; i++)
+            disk[i].Checked = s.Disk == Settings.DiskChoices[i];
         ntfyTopic.Text = s.NtfyTopic;
         heartbeatUrl.Text = s.HeartbeatUrl;
     }
@@ -908,7 +952,7 @@ class Window : Form
         }
         Settings s = machine.Settings;
         Note("settings: start-at-login " + s.StartAtLogin + ", keep-awake " + s.KeepAwake +
-             ", memory " + s.Memory + ", venus " + s.Venus +
+             ", memory " + s.Memory + ", disk " + (s.Disk.Length > 0 ? s.Disk : "as built") + ", venus " + s.Venus +
              ", ntfy topic " + (s.NtfyTopic.Length > 0 ? "set" : "none") + ", keeper " + s.Keeper +
              ", heartbeat " + (s.HeartbeatUrl.Length > 0 ? "set" : "none"));
         CheckSettings();
@@ -1466,6 +1510,8 @@ class Window : Form
     {
         if (machine.Keeper == null || exited || keeperAlerting)
             return;
+        if (!Keeper.Checkout())
+            DeliverKeeper();
         string absence = Keeper.Absence();
         try
         {
@@ -1502,6 +1548,30 @@ class Window : Form
         Note("keeper: not there (" + absence + "), so it is started again");
         keeperRetried = true;
         Keeper.Compose("up -d", Note);
+    }
+
+    // The keeper's files from this launcher's release, written over the folder's that differ, and
+    // the container recreated once its loop is between sessions (Keeper.Deliver). A write that
+    // fails is said and tried again at the next tick.
+    void DeliverKeeper()
+    {
+        string outdated;
+        try
+        {
+            foreach (string name in Keeper.Deliver())
+                Note("keeper: " + name + " written from this launcher's release");
+            outdated = Keeper.Outdated();
+        }
+        catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is JsonException ||
+                                  e is KeyNotFoundException || e is InvalidOperationException)
+        {
+            Note("keeper: its files could not be brought up to this launcher's release: " + e.Message);
+            return;
+        }
+        if (outdated == null || Keeper.ComposedWithin(KeeperRetry))
+            return;
+        Note("keeper: " + outdated + ", so its container is recreated");
+        Keeper.Compose("up -d --build --force-recreate", Note);
     }
 
     // Each Watch tick: the state is written, and the oldest request is acted on, on the window's
@@ -1593,12 +1663,96 @@ class Window : Form
                     keeper.Record("upgrade", "nothing to do: setup is already upgrading the machine");
                     break;
                 }
+                if (draining)
+                {
+                    Keeper.Take(request);
+                    keeper.Record("upgrade", "nothing to do: the upgrade already waits for the machine's jobs");
+                    break;
+                }
                 if (stopping)
                     break;
                 Keeper.Take(request);
-                StartUpgrade();
+                DrainForUpgrade("the keeper asked for an upgrade" +
+                                (request.Why != null ? ": " + request.Why : ""));
                 break;
         }
+    }
+
+    // The upgrade restarts the machine, which ends every tab's job, so setup starts only once
+    // none runs, or after DrainMost. Each ask holds new jobs for a while (raigolmid's
+    // `rai keeper restarting`, jobs.py), so none starts between the last and setup's shutdown,
+    // and the guest records the cause for the history it writes on the next boot. A guest that
+    // cannot be asked has no job it can be known to run: said, and the upgrade goes on, since
+    // it may be the repair of what did not answer.
+    static readonly TimeSpan DrainMost = TimeSpan.FromMinutes(60);
+    static readonly TimeSpan DrainPoll = TimeSpan.FromSeconds(30);
+    const string Restarting = "rai keeper restarting \"$1\"\n";
+    volatile bool draining;
+
+    void DrainForUpgrade(string cause)
+    {
+        Keeper keeper = machine.Keeper;
+        if (machine.Ssh == null)
+        {
+            keeper.Record("upgrade", "the machine's jobs could not be asked about (the launcher has no ssh), " +
+                          "so setup starts without waiting for them");
+            StartUpgrade();
+            return;
+        }
+        draining = true;
+        new Thread(() =>
+        {
+            DateTime deadline = DateTime.UtcNow + DrainMost;
+            string outcome;
+            while (true)
+            {
+                Ssh.Result r = machine.Ssh.Run(Restarting, cause);
+                if (r.Code != 0)
+                {
+                    outcome = "the machine did not say which jobs run (ssh exited " + r.Code + ": " +
+                           (r.Err + r.Out).Trim() + "), so setup starts without waiting for them";
+                    break;
+                }
+                var jobs = new List<string>();
+                try
+                {
+                    using (JsonDocument said = JsonDocument.Parse(r.Out))
+                        foreach (JsonElement j in said.RootElement.GetProperty("running").EnumerateArray())
+                            jobs.Add(j.GetProperty("tab").GetString() + " " + j.GetProperty("name").GetString() +
+                                     " (" + j.GetProperty("state").GetString() + ")");
+                }
+                catch (Exception e) when (e is JsonException || e is KeyNotFoundException || e is InvalidOperationException)
+                {
+                    outcome = "the machine's answer about its jobs could not be read (" + e.Message + ": " +
+                              r.Out.Trim() + "), so setup starts without waiting for them";
+                    break;
+                }
+                string running = string.Join(", ", jobs);
+                if (running.Length == 0)
+                {
+                    outcome = "no job runs on the machine, and new ones wait for the restart";
+                    break;
+                }
+                if (DateTime.UtcNow >= deadline)
+                {
+                    outcome = "jobs still run after " + DrainMost.TotalMinutes + " minutes (" + running +
+                           "), and setup starts anyway: the restart ends them";
+                    break;
+                }
+                string waiting = "waiting for the machine's jobs to end before setup restarts it: " + running;
+                BeginInvoke(new Action(() => keeper.Record("upgrade", waiting)));
+                Thread.Sleep(DrainPoll);
+            }
+            BeginInvoke(new Action(() =>
+            {
+                draining = false;
+                if (exited)
+                    return;
+                Note("keeper: " + outcome);
+                keeper.Record("upgrade", outcome);
+                StartUpgrade();
+            }));
+        }) { IsBackground = true, Name = "drain" }.Start();
     }
 
     // setup.ps1 upgrades the machine in place while it runs, then closes this window
@@ -1647,8 +1801,8 @@ class Window : Form
         Tell(message, MessageBoxIcon.Warning);
     }
 
-    // With the keeper on, a box is shown from a thread of its own, which has no active window
-    // to own it (WinForms MessageBox takes GetActiveWindow's): it never disables this window,
+    // With the keeper on, a box is shown from a thread of its own, owned by a hidden window
+    // there rather than by this one: it never disables this window,
     // which setup closes to upgrade and Process.CloseMainWindow refuses when disabled, and it
     // never keeps this process alive.
     void Tell(string message, MessageBoxIcon icon)
@@ -1658,8 +1812,23 @@ class Window : Form
             BeginInvoke(new Action(() => MessageBox.Show(this, message, "RaiGolmi", MessageBoxButtons.OK, icon)));
             return;
         }
-        var shown = new Thread(() => MessageBox.Show(message, "RaiGolmi", MessageBoxButtons.OK, icon))
-            { IsBackground = true, Name = "box" };
+        // Owned by a window of its own thread that is never shown: an unowned box is a candidate
+        // for Process.MainWindowHandle, the first visible unowned top-level window in Z order, and
+        // setup's CloseMainWindow then closes the box, the no-sound warning every start shows,
+        // instead of this window, and waits five minutes for a machine that never shuts down.
+        var shown = new Thread(() =>
+        {
+            var owner = new NativeWindow();
+            owner.CreateHandle(new CreateParams());
+            try
+            {
+                MessageBox.Show(owner, message, "RaiGolmi", MessageBoxButtons.OK, icon);
+            }
+            finally
+            {
+                owner.DestroyHandle();
+            }
+        }) { IsBackground = true, Name = "box" };
         shown.SetApartmentState(ApartmentState.STA);
         shown.Start();
     }
@@ -2242,6 +2411,90 @@ sealed class Keeper
         return KeeperFile + " was last written " + (int)age.TotalMinutes + " minutes ago (" + state + ")";
     }
 
+    // --- the keeper's files ----------------------------------------------------------------------
+
+    // A release replaces this program and the disk, and nothing else in the project folder, so it
+    // carries the keeper's files (RaiGolmi.csproj embeds them as keeper/<name>). On a folder that
+    // is not a git checkout they are written over the folder's keeper\ and the container is
+    // recreated, between sessions, while its loop runs another keeper.py: the loop keeps the code
+    // it loaded, and `compose up -d` leaves a running container as it is. A checkout is the
+    // developer's, whose keeper\ is the one they mean to run.
+    const string CarriedPrefix = "keeper/";
+
+    public static bool Checkout()
+    {
+        string git = Path.Combine(Launcher.Project, ".git");
+        return Directory.Exists(git) || File.Exists(git);
+    }
+
+    static byte[] Carried(string resource)
+    {
+        using (Stream s = typeof(Keeper).Assembly.GetManifestResourceStream(resource))
+        {
+            if (s == null)
+                throw new LauncherError("this launcher was built without " + resource);
+            var bytes = new MemoryStream();
+            s.CopyTo(bytes);
+            return bytes.ToArray();
+        }
+    }
+
+    static IEnumerable<string> CarriedNames()
+    {
+        bool any = false;
+        foreach (string resource in typeof(Keeper).Assembly.GetManifestResourceNames())
+            if (resource.StartsWith(CarriedPrefix, StringComparison.Ordinal))
+            {
+                any = true;
+                yield return resource;
+            }
+        if (!any)
+            throw new LauncherError("this launcher was built without the keeper's files (RaiGolmi.csproj)");
+    }
+
+    // The carried files that differ from the folder's, written whole; their names.
+    public static List<string> Deliver()
+    {
+        var written = new List<string>();
+        foreach (string resource in CarriedNames())
+        {
+            string name = resource.Substring(CarriedPrefix.Length);
+            string target = Path.Combine(Folder, name);
+            byte[] carried = Carried(resource);
+            if (File.Exists(target) && File.ReadAllBytes(target).AsSpan().SequenceEqual(carried))
+                continue;
+            Durable.Write(target, carried);
+            written.Add(name);
+        }
+        return written;
+    }
+
+    // Why the keeper's container is to be recreated now, or null: it is there, between sessions
+    // (a session is cut off by a recreate), and its loop runs a keeper.py other than the one this
+    // launcher carries and has written. A keeper.py from before keeper.json named its own writes
+    // no `source`.
+    public static string Outdated()
+    {
+        if (Absence() != null)
+            return null;
+        byte[] carried = Carried(CarriedPrefix + "keeper.py");
+        if (!File.ReadAllBytes(Path.Combine(Folder, "keeper.py")).AsSpan().SequenceEqual(carried))
+            return null;
+        string state, source;
+        using (var doc = JsonDocument.Parse(File.ReadAllText(KeeperFile)))
+        {
+            state = doc.RootElement.GetProperty("state").GetString();
+            source = doc.RootElement.TryGetProperty("source", out JsonElement s) ? s.GetString() : null;
+        }
+        if (state == "repairing")
+            return null;
+        string sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(carried)).ToLowerInvariant();
+        if (source == sha)
+            return null;
+        return "its loop runs keeper.py " + (source ?? "from before keeper.json named it") +
+               ", and this launcher carries " + sha;
+    }
+
     // The alert that the keeper is gone was sent, and it has not been back since: kept beside the
     // settings, so the launchers that follow this one do not send it again.
     static readonly string AbsentAlerted = Path.Combine(Machine.Home, "keeper-gone-alerted");
@@ -2772,7 +3025,7 @@ class Ssh
         return Process.Start(Info(tar, arguments));
     }
 
-    static ProcessStartInfo Info(string exe, string arguments)
+    public static ProcessStartInfo Info(string exe, string arguments)
     {
         var info = new ProcessStartInfo(exe, arguments);
         info.UseShellExecute = false;

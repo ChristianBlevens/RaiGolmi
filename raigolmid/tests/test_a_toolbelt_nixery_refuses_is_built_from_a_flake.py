@@ -1,20 +1,19 @@
 """A toolbelt Nixery refuses — an unfree package is the case — is built on
 the machine from a generated flake, pinned to the nixpkgs commit it was built from, and its
-image is the toolbelt's from then on."""
+image is the toolbelt's from then on. A face's apps Nixery refuses are built so too."""
 from __future__ import annotations
 
 import io
 import json
 import re
 import tarfile
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
 
 from raigolmid import flakes, naming
 from raigolmid.definitions import load_toolbelt
+from raigolmid.faces import Faces
 from raigolmid.runtime.base import ExecResult
 
 from tests.harness import Harness
@@ -24,10 +23,6 @@ REV = "f9bce96a417afbb9c64725f8727e42efafeafc21"
 
 @pytest.fixture
 def h(tmp_path, monkeypatch):
-    def urlopen(request, timeout):
-        raise urllib.error.HTTPError(request.full_url, 500, "Error", {}, io.BytesIO(
-            json.dumps({"errors": [{"message": "image build failure"}]}).encode()))
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     return Harness(tmp_path, monkeypatch)
 
 
@@ -57,14 +52,15 @@ def _nix(runs: list[str]):
     return run
 
 
-def test_a_refused_list_is_built_pinned_and_then_is_the_toolbelts(h, tmp_path):
+def test_a_refused_list_is_built_pinned_and_then_is_the_toolbelts(h, tmp_path,
+                                                                  nixery_dev):
     d = tmp_path / "tb"
     d.mkdir()
     (d / "toolbelt.toml").write_text(
         'id = "infra"\npackages = ["bash", "coreutils", "libcap", "python3", "util-linux", '
         '"terraform"]\n')
     toolbelt = load_toolbelt(d)
-    h.runtime.unbuildable.add("terraform")
+    nixery_dev.unbuildable.add("terraform")
     h.runtime.add_image(flakes.BUILDER)
     runs: list[str] = []
     h.runtime.one_shot[naming.flake_build()] = _nix(runs)
@@ -87,3 +83,21 @@ def test_nothing_a_toolbelt_names_is_nix_code(tmp_path):
     (d / "toolbelt.toml").write_text('id = "x"\npackages = ["hello\\"; evil = \\"x"]\n')
     with pytest.raises(flakes.FlakeError, match="not a nixpkgs attribute path"):
         flakes.generate(load_toolbelt(d))
+
+
+def test_a_faces_apps_nixery_refuses_are_built_from_a_flake_and_kept(h, tmp_path, monkeypatch,
+                                                                     nixery_dev):
+    monkeypatch.setattr(h.session.closures, "of_image_id", lambda image_id: tmp_path)
+    face = h.session.catalogue.faces["minimal"]
+    nixery_dev.unbuildable.add(Faces.apps(face).packages[-1])
+    h.runtime.add_image(flakes.BUILDER)
+    runs: list[str] = []
+    h.runtime.one_shot[naming.flake_build()] = _nix(runs)
+
+    image_id, _ = h.session.faces.apps_closure(face)
+
+    (built,) = h.events_of("toolbelt.flake_built")
+    assert h.session.faces.apps_reference(face) == built.data["image"]
+    assert h.runtime.image(built.data["image"]).id == image_id
+    h.session.collect_garbage()
+    assert h.runtime.image(built.data["image"]) is not None, "a face's flake build is its apps"

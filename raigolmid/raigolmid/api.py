@@ -115,6 +115,8 @@ def build_methods(session: Session, events: EventLog, questions: Questions,
         "keeper_seen": lambda busy_seconds=0: faults.seen(busy_seconds),
         "keeper_take": lambda id, busy_seconds=0: faults.take(id, busy_seconds),
         "keeper_answer": lambda id, verdict, words="": faults.answer(id, verdict, words),
+        # The launcher's, before the keeper's upgrade restarts the machine (`jobs.py`).
+        "keeper_restarting": lambda cause: session.jobs.restarting(cause),
         "version": lambda: {"protocol": PROTOCOL_VERSION, "epoch": session.epoch},
         "terminal_viewing": viewing.report,
         # The catalog window's whole vocabulary.

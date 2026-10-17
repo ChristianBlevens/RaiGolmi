@@ -327,6 +327,18 @@ def test_an_agent_the_machine_shut_down_resumes_rather_than_crashing(h, monkeypa
     assert agent is not None and agent.running
     assert h.events_of("agent.restarted")
     assert h.session.intent.stopped is None, "a stop record is evidence for one start only"
+    [restarted] = h.events_of("machine.restarted")
+    assert restarted.data["cause"] is None
+
+
+def test_a_restart_the_keeper_planned_is_recorded_with_its_cause(h, monkeypatch):
+    h.session.jobs.restarting("the keeper asked for an upgrade: a fix")
+    _machine_restarted(h, monkeypatch, reboot=True)
+
+    h.session.reconcile()
+
+    [restarted] = h.events_of("machine.restarted")
+    assert restarted.data["cause"] == "the keeper asked for an upgrade: a fix"
 
 
 def test_an_agent_the_machine_lost_without_a_shutdown_resumes(h, monkeypatch):

@@ -96,6 +96,8 @@ class ViewPlan:
     body_container_id: str | None
     anchor_ref: str
     toolbelt_image: str
+    # The package list the image resolves (`Toolbelt.package_digest`).
+    toolbelt_digest: str
     working_copy: Path
     generation: int
     tab: str | None = None
@@ -132,6 +134,14 @@ class Views:
             raise ViewError(f"view of {instance} has an unreadable generation label "
                             f"{raw!r}") from exc
 
+    def toolbelt_digest_of(self, instance: str) -> str | None:
+        """The package digest of the toolbelt the running view was made from; None with no
+        view, or one made before views carried it."""
+        info = self.get(instance)
+        if info is None or not info.running:
+            return None
+        return info.labels.get(labels.TOOLBELT_DIGEST)
+
     # --- lifecycle ---------------------------------------------------------------------
     def create(self, plan: ViewPlan) -> ContainerInfo:
         name = naming.view(plan.instance)
@@ -149,6 +159,7 @@ class Views:
             labels.ROLE: str(labels.Role.VIEW),
             labels.INSTANCE: plan.instance,
             labels.VIEW_GENERATION: str(plan.generation),
+            labels.TOOLBELT_DIGEST: plan.toolbelt_digest,
             labels.EPOCH: str(self.epoch),
         }
         if plan.body_container_id is not None:

@@ -94,9 +94,11 @@ class InstanceIntent:
 class StopRecord:
     """The agents running when the daemon last stopped, and the boot they ran in. One
     recorded here and not running in a later boot was ended by the machine going down, not
-    by a crash."""
+    by a crash. `restart` is the cause of the restart the keeper planned (`Jobs.restarting`),
+    None when nobody said one was coming."""
     boot: str
     running_tabs: list[str] = field(default_factory=list)
+    restart: str | None = None
 
 
 @dataclass(slots=True)

@@ -377,7 +377,10 @@ def test_a_toolbelt_swap_fetches_the_new_image_while_the_old_view_serves(h, monk
         raise RuntimeError_(f"could not pull '{ref}': registry unreachable")
 
     monkeypatch.setattr(h.runtime, "pull", unreachable)
-    h.runtime.remove_image(image_of("python-dev"))
+    # Pulled by its digest and tagged by its list (`pull_from_nixery`): gone under both names.
+    pinned = image_of("python-dev")
+    h.runtime.remove_image(pinned)
+    h.runtime.remove_image(pinned.partition("@")[0])
     view = h.session.views.get(SANDBOX).id
     with pytest.raises(RuntimeError_, match="registry unreachable"):
         h.session.toolbelt_swap(TAB, "python-dev")

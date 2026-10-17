@@ -195,6 +195,14 @@ SAYS: dict[str, Callable[[Event], str | None]] = {
            if e.data["hold_until"] is None else "the tabs it cut off continue at "
            + time.strftime("%H:%M", time.localtime(e.data["hold_until"])))),
     "account.resumed": lambda e: "the account's usage limit is over",
+    "machine.restarting": lambda e: (
+        f"the machine is to restart: {e.data['cause']}; new jobs wait until it is back"
+        + (f", and the restart waits for {', '.join(e.data['running'])} to end"
+           if e.data["running"] else "")),
+    "machine.restarted": lambda e: (
+        f"the machine restarted: {e.data['cause']}" if e.data["cause"] is not None else
+        "the machine restarted, shut down cleanly with no restart planned: closed, or "
+        "restarted by its launcher"),
     "documents.maintenance_failed": lambda e: (f"document maintenance could not run: "
                                                f"{e.data['error']}"),
 }
@@ -360,6 +368,22 @@ class History:
                 del self._entries[id]
             self._save()
         self.events.emit("history.added", id=entry.id, new=not entry.born_seen)
+
+    def forget_lost_questions(self, known: set[str]) -> None:
+        """At the daemon's start: an entry whose question `questions.py` does not hold has
+        nothing to show, and is removed and said rather than failing every read of the
+        history."""
+        with self._lock:
+            lost = {id: e.question for id, e in self._entries.items()
+                    if e.question and e.question not in known}
+            for id in lost:
+                del self._entries[id]
+            self._questions -= set(lost.values())
+            if lost:
+                self._save()
+        if lost:
+            self.events.emit("history.questions_lost", entries=sorted(lost),
+                             questions=sorted(set(lost.values())))
 
     def _over(self, event: Event) -> None:
         with self._lock:

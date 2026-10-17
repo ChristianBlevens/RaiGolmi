@@ -293,6 +293,13 @@ class DockerRuntime(ContainerRuntime):
         except APIError as exc:
             raise RuntimeError_(f"could not pull '{reference}': {exc}") from exc
 
+    def tag(self, reference: str, repository: str, tag: str) -> None:
+        try:
+            self._client.images.get(reference).tag(repository, tag)
+        except APIError as exc:
+            raise RuntimeError_(f"could not tag '{reference}' as {repository}:{tag}: "
+                                f"{exc}") from exc
+
     def registry_digest(self, reference: str) -> str:
         try:
             return self._client.images.get_registry_data(reference).id

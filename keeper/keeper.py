@@ -28,16 +28,18 @@ system prompt) with the evidence it gathered. The rules:
 - a launcher stuck in one of its transitional states for `TRANSITION_SECONDS` is failing;
 - the VM unreachable by ssh, raigolmid not active or restarted by systemd `DAEMON_RESTARTS` times
   within `DAEMON_RESTART_WINDOW` (a crash loop `is-active` does not show), or a run in progress
-  whose event log has been silent for `EVENTS_SILENT_SECONDS`, while the launcher says `running`,
+  with a tab not paused or held for the user whose event log has been silent for
+  `EVENTS_SILENT_SECONDS`, while the launcher says `running`,
   is failing;
 - each probe also says the keeper looked (`rai keeper seen`, raigolmid's faults.py), which is how
   the machine tab knows a keeper is there, and is answered with the faults in RaiGolmi the machine
   tab filed for it, having paused the tabs each affects. An open fault is failing at once and is
   its own incident: the keeper takes it (`rai keeper take`), hands the session its text, and
   answers it (`rai keeper answer`) with the verdict, so the machine tab resumes its tabs:
-  `fixed`; or `not_fixed` with the verdict's words once the incident's sessions are spent (with
-  the alert below) or Claude Code cannot run. The answer ends the incident; one the VM did not
-  take is sent again at each check until it is;
+  `fixed`; or `not_fixed` with the verdict's words once the incident's sessions are spent or
+  Claude Code cannot run. The answer ends the incident; one the VM did not take is sent again at
+  each check until it is. A fault never alerts the person near the machine: the run goes on
+  around it, so the answer is the machine tab's alone;
 - a session is paced as every tab is (`pace`, from the plan raigolmid's `limits.plan_view`
   reads): a window on course past its allowance has it work narrower, never wait. Only the
   account's usage limit holds a fault, as it holds every agent: it is answered `deferred`, so it
@@ -58,12 +60,12 @@ system prompt) with the evidence it gathered. The rules:
 - Claude Code runs on the machine's own agent credential (`MACHINE_CREDENTIAL`), copied to
   `Paths.credential` at each probe that reaches the VM, so it follows the owner's sign-in there
   and outlasts a VM that does not answer; the keeper has no sign-in of its own;
-- the person near the machine gets an ntfy alert when sessions cannot fix it (spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
+- the person near the machine gets an ntfy alert when sessions cannot fix a machine that is down (spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
   alert title at most once in `REALERT_SECONDS` across incidents, and "working again" once the
   machine is healthy after one. None is sent while raigolmid's line out has already told them
   a cause (`line-out.json`) during the incident: theirs is the word that stands.
 
-keeper/outbox/keeper.json is written each check: the state, the open incident with its sessions
+keeper/outbox/keeper.json is written each check: the state, the keeper.py it runs (`SOURCE`), the open incident with its sessions
 (each resumable from the keeper's terminal by the `resume` command it records), the sessions of
 and the alerts. It is also the keeper's memory across a restart of its container.
 The loop's log goes to keeper/outbox/keeper.log as well as stderr.
@@ -76,6 +78,7 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import inspect
 import json
 import logging
 import logging.handlers
@@ -118,7 +121,8 @@ TRANSITION_SECONDS = 2 * 3600
 FAILING_SECONDS = 15 * 60
 # The coordinator wakes a run that stops moving after 20 minutes (raigolmid coordinator.py
 # IDLE_SECONDS), which writes to the event log; three such stretches with nothing written is a
-# daemon no longer running the run.
+# daemon no longer running the run. It wakes only a run with a managed tab neither paused nor
+# held for the user (`run_working`), so a run whose every tab waits on them is quiet for hours.
 EVENTS_SILENT_SECONDS = 3 * 20 * 60
 # systemd restarting raigolmid once is its repair working; again within the half hour is that
 # repair not holding (StartLimitIntervalSec=0 restarts it forever, and `is-active` reads
@@ -162,6 +166,10 @@ VM_HOST, VM_USER = "host.docker.internal", "agent"
 MACHINE_CREDENTIAL = "${XDG_CONFIG_HOME:-$HOME/.config}/raigolmi/agent-credentials"
 CREDENTIAL_KEYS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 NTFY = "https://ntfy.sh/"
+# The sha256 of this file as the loop loaded it, written to keeper.json: the launcher carries
+# the keeper's files to a project folder that is not a git checkout and recreates the container
+# while this differs from the keeper.py it carries (RaiGolmi.cs Keeper.Deliver).
+SOURCE = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -330,8 +338,18 @@ def vm_run(client, command: str, timeout: float, stdin: str | None = None) -> tu
     return out.channel.recv_exit_status(), text, errors
 
 
+def run_working(intent: dict | None) -> bool:
+    """Whether raigolmid's intent.json holds a run the coordinator keeps moving: one not ended
+    with a managed tab that is neither paused nor held for the user (coordinator.py `tick`'s
+    `run_idle`). Its source is part of PROBE_SCRIPT, so it runs on the guest."""
+    if intent is None or intent.get("run") is None or intent["run"].get("ended") is not None:
+        return False
+    return any(tab["managed"] and tab["status"] != "paused" and tab["held"] is None
+               for tab in intent["tabs"].values())
+
+
 # Run on the guest by its own python3, so the ages are by the guest's clock, which wrote them.
-PROBE_SCRIPT = r'''
+PROBE_SCRIPT = inspect.getsource(run_working) + r'''
 import json, subprocess, time
 from pathlib import Path
 state = Path.home() / ".local/state/raigolmid"
@@ -361,7 +379,6 @@ if logs:
     for row in rows(found):
         hold = row
 intent = state / "intent.json"
-run = json.loads(intent.read_text()).get("run") if intent.exists() else None
 seen = subprocess.run(["rai", "keeper", "seen"], capture_output=True, text=True)
 print(json.dumps({
     "daemon": daemon,
@@ -373,7 +390,7 @@ print(json.dumps({
     "last_event": None if last is None else {"type": last["type"], "age_s": round(time.time() - last["ts"])},
     "held": hold is not None and hold["type"] == "account.limited",
     "hold": hold,
-    "run_active": run is not None and run.get("ended") is None,
+    "run_working": run_working(json.loads(intent.read_text()) if intent.exists() else None),
 }))
 '''
 
@@ -664,10 +681,6 @@ ALERT_UNREACHED = (
     "RaiGolmi helper cannot reach Claude",
     "RaiGolmi's repair helper has not been able to reach Claude for a day, so it cannot fix "
     "what went wrong. " + NOTHING_TO_DO)
-ALERT_FAULT = (
-    "RaiGolmi paused some of its work",
-    "RaiGolmi found a problem in its own program that its repair helper could not fix, and "
-    "paused the work it affects. " + NOTHING_TO_DO)
 ALERT_RECOVERED = ("RaiGolmi is working again", "RaiGolmi is working again. Nothing to do.")
 
 
@@ -804,7 +817,7 @@ class Keeper:
                     self._defer(fault)
             return Seen("held", "the account is on its usage limit")
         last = vm["last_event"]
-        if vm["run_active"] and last is not None and last["age_s"] > EVENTS_SILENT_SECONDS:
+        if vm["run_working"] and last is not None and last["age_s"] > EVENTS_SILENT_SECONDS:
             return Seen("failing", f"a run is in progress and raigolmid has written no event for "
                                    f"{round(last['age_s'] / 60)} minutes (the last: {last['type']})",
                         evidence)
@@ -898,15 +911,13 @@ class Keeper:
 
     def _cannot_fix(self, incident: dict[str, Any], seen: Seen, alert: tuple[str, str], words: str,
                     now: float) -> None:
-        """No session can run on the incident: the person is told, a fault is answered so the
-        machine tab resumes its tabs, and a launcher that is down is asked to start."""
+        """No session can run on the incident: a fault is answered so the machine tab resumes its
+        tabs; a machine that is down is told to the person, and its launcher asked to start."""
         fault = incident["fault"]
-        if not is_feature(fault):
-            self._alert(*(ALERT_FAULT if fault is not None and alert is not ALERT_SIGNED_OUT else alert),
-                        now)
         if fault is not None:
             self._answer(fault["id"], "not_fixed", words, now)
         else:
+            self._alert(*alert, now)
             self._retry_start(incident, seen, now)
 
     def _request_start(self, incident: dict[str, Any], why: str, now: float) -> None:
@@ -974,8 +985,6 @@ class Keeper:
             return
         fixed = outcome["verdict"] == FIXED
         if fixed or counted(incident) >= SESSIONS_PER_INCIDENT:
-            if not fixed and not is_feature(fault):
-                self._alert(*ALERT_FAULT, ended)
             words = (outcome["verdict"].removeprefix(VERDICT).strip()
                      .removeprefix("not fixed:").strip() or outcome["verdict"])
             self._answer(fault["id"], "fixed" if fixed else "not_fixed", "" if fixed else words,
@@ -1078,14 +1087,12 @@ class Keeper:
         logger.warning("alert '%s': %s", title, outcome)
         self.last_alert = {"at": iso(now), "title": title, "message": message, "outcome": outcome}
         self.alerted[title] = now
-        if recovery:
-            self.owed_recovery = False
-        elif title != ALERT_FAULT[0]:
-            self.owed_recovery = True
+        self.owed_recovery = not recovery
 
     def report(self, now: float) -> None:
         write_json(self.paths.keeper_json, {
-            "at": iso(now), "state": self.state, "why": self.why, "incident": self.incident,
+            "at": iso(now), "state": self.state, "why": self.why, "source": SOURCE,
+            "incident": self.incident,
             "last_incident": self.last_incident, "last_alert": self.last_alert,
             "alerted": self.alerted, "owed_recovery": self.owed_recovery,
             "refused_token": self.refused_token,
