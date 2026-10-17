@@ -101,7 +101,7 @@ function Launcher-Prerequisites {
               ((& dotnet --list-sdks 2>$null) -match '^8\.'))) {
         $missing += @{ What = '.NET 8 SDK (builds the launcher)'
                        How  = 'winget install Microsoft.DotNet.SDK.8'
-                       Do   = { Winget 'Microsoft.DotNet.SDK.8' } }
+                       Do   = { Install-WithWinget 'Microsoft.DotNet.SDK.8' } }
     }
     return $missing
 }

@@ -43,12 +43,13 @@ function Fail([string]$text) {
     exit 1
 }
 
-function Winget([string]$id) {
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+# Not named `winget`: a function shadows the program of its name, and would call itself.
+function Install-WithWinget([string]$id) {
+    if (-not (Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue)) {
         Fail ("winget is not installed, and $id is downloaded through it. Install 'App " +
               "Installer' from the Microsoft Store, then run this again.")
     }
-    winget install -e --id $id --accept-source-agreements --accept-package-agreements
+    winget.exe install -e --id $id --accept-source-agreements --accept-package-agreements
     # A declined prompt or a failed install is said here; whether it is there is asked again.
     if ($LASTEXITCODE -ne 0) {
         Write-Host "winget exited $LASTEXITCODE installing $id." -ForegroundColor Yellow
@@ -341,7 +342,7 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
         $missing += @{ What = '.NET 8 Desktop Runtime (the launcher runs on it)'
                        How  = 'winget install Microsoft.DotNet.DesktopRuntime.8'
                        Runtime = $true
-                       Do   = { Winget 'Microsoft.DotNet.DesktopRuntime.8' } }
+                       Do   = { Install-WithWinget 'Microsoft.DotNet.DesktopRuntime.8' } }
     }
 
     # An upgrade reaches the machine over ssh (Apply-Upgrade), and so do the launcher's
@@ -356,7 +357,7 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     if (-not (Test-Path "$msys2\usr\bin\bash.exe")) {
         $missing += @{ What = "MSYS2 at $msys2 (QEMU comes from it)"
                        How  = 'winget install MSYS2.MSYS2'
-                       Do   = { Winget 'MSYS2.MSYS2' } }
+                       Do   = { Install-WithWinget 'MSYS2.MSYS2' } }
     }
 
     # The stock virglrenderer cannot show the boot console, and the stock QEMU has no discard
