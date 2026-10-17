@@ -271,7 +271,7 @@ def test_a_fault_from_the_machine_tab_is_taken_worked_and_answered_fixed(world: 
     assert world.pushes == []
 
 
-def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_alerted_once(world: World) -> None:
+def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_never_alerted(world: World) -> None:
     world.launcher("running")
     world.vm = {**HEALTHY, "faults": [FAULT]}
     world.check()
@@ -283,10 +283,9 @@ def test_a_fault_not_fixed_by_its_sessions_is_answered_with_words_and_alerted_on
     assert len(world.sessions) == k.SESSIONS_PER_INCIDENT
     assert "Earlier keeper sessions" in world.sessions[1]
     assert world.told[-1] == ["answer", "fault-1", "not_fixed", "still down"]
-    assert [p[1] for p in world.pushes] == [k.ALERT_FAULT[0]]
     for _ in range(3):
         assert world.check(after=k.CHECK_SECONDS)["state"] == "healthy"
-    assert len(world.pushes) == 1, "an answered fault is the machine tab's: no recovery alert"
+    assert world.pushes == [], "a fault is the machine tab's alone: the run goes on around it"
 
 
 def test_an_answer_the_vm_did_not_take_is_sent_again_and_its_fault_not_reworked(world: World) -> None:
@@ -315,7 +314,7 @@ def test_a_fault_while_claude_code_cannot_run_is_answered_not_fixed(world: World
     world.check()
     assert world.sessions == []
     assert world.told[-1][:3] == ["answer", "fault-1", "not_fixed"]
-    assert "no sign-in" in world.told[-1][3] and len(world.pushes) == 1
+    assert "no sign-in" in world.told[-1][3] and world.pushes == []
 
 
 def spend_sessions(world: World) -> None:

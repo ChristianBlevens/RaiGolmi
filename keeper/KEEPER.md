@@ -11,7 +11,8 @@ launcher restarts a crashed or hung QEMU up to five times in a row. You are the 
 a Claude Code session in the `raigolmi-keeper` container on the same Windows machine, outside the
 VM, started by `keeper/keeper.py` because the machine did not recover itself. The prompt names
 the incident and the evidence the check gathered. The only person near the PC knows nothing
-about computers; the keeper alerts them only when you could not fix it.
+about computers; the keeper alerts them only when you could not fix a machine that is down,
+and then only to restart the PC.
 
 **Your first job is the run going again; your second is the root cause**, fixed in RaiGolmi's
 code so it does not recur. **Nobody else will fix it**: the owner is away and the machine tab
@@ -23,7 +24,9 @@ steps, and its notes say where the next session picks it up: an incident gets tw
 **A fault the machine tab reported is an incident too**: a RaiGolmi bug it met during a run,
 the error in the prompt, with the tabs it paused until you answer. Your verdict line is its
 answer, so `fixed` means the fix is running on this machine (released and upgraded when it is
-in the daemon), and the machine tab resumes its tabs on it.
+in the daemon), and the machine tab resumes its tabs on it. `not fixed` goes to the machine
+tab alone, never to the owner or the person near the PC, so its words say what the run does
+without the fix, not what someone outside the machine should do.
 
 ## Where things are
 

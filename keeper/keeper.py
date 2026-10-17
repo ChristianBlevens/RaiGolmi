@@ -35,9 +35,10 @@ system prompt) with the evidence it gathered. The rules:
   tab filed for it, having paused the tabs each affects. An open fault is failing at once and is
   its own incident: the keeper takes it (`rai keeper take`), hands the session its text, and
   answers it (`rai keeper answer`) with the verdict, so the machine tab resumes its tabs:
-  `fixed`; or `not_fixed` with the verdict's words once the incident's sessions are spent (with
-  the alert below) or Claude Code cannot run. The answer ends the incident; one the VM did not
-  take is sent again at each check until it is;
+  `fixed`; or `not_fixed` with the verdict's words once the incident's sessions are spent or
+  Claude Code cannot run. The answer ends the incident; one the VM did not take is sent again at
+  each check until it is. A fault never alerts the person near the machine: the run goes on
+  around it, so the answer is the machine tab's alone;
 - a session is paced as every tab is (`pace`, from the plan raigolmid's `limits.plan_view`
   reads): a window on course past its allowance has it work narrower, never wait. Only the
   account's usage limit holds a fault, as it holds every agent: it is answered `deferred`, so it
@@ -54,7 +55,7 @@ system prompt) with the evidence it gathered. The rules:
 - Claude Code runs on the machine's own agent credential (`MACHINE_CREDENTIAL`), copied to
   `Paths.credential` at each probe that reaches the VM, so it follows the owner's sign-in there
   and outlasts a VM that does not answer; the keeper has no sign-in of its own;
-- the person near the machine gets an ntfy alert when sessions cannot fix it (spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
+- the person near the machine gets an ntfy alert when sessions cannot fix a machine that is down (spent, the sign-in ran out, Claude Code cannot run, or Claude unreachable for a day), each
   alert title at most once in `REALERT_SECONDS` across incidents, and "working again" once the
   machine is healthy after one. None is sent while raigolmid's line out has already told them
   a cause (`line-out.json`) during the incident: theirs is the word that stands.
@@ -667,10 +668,6 @@ ALERT_UNREACHED = (
     "RaiGolmi helper cannot reach Claude",
     "RaiGolmi's repair helper has not been able to reach Claude for a day, so it cannot fix "
     "what went wrong. " + NOTHING_TO_DO)
-ALERT_FAULT = (
-    "RaiGolmi paused some of its work",
-    "RaiGolmi found a problem in its own program that its repair helper could not fix, and "
-    "paused the work it affects. " + NOTHING_TO_DO)
 ALERT_RECOVERED = ("RaiGolmi is working again", "RaiGolmi is working again. Nothing to do.")
 
 
@@ -888,13 +885,13 @@ class Keeper:
 
     def _cannot_fix(self, incident: dict[str, Any], seen: Seen, alert: tuple[str, str], words: str,
                     now: float) -> None:
-        """No session can run on the incident: the person is told, a fault is answered so the
-        machine tab resumes its tabs, and a launcher that is down is asked to start."""
+        """No session can run on the incident: a fault is answered so the machine tab resumes its
+        tabs; a machine that is down is told to the person, and its launcher asked to start."""
         fault = incident["fault"]
-        self._alert(*(ALERT_FAULT if fault is not None and alert is not ALERT_SIGNED_OUT else alert), now)
         if fault is not None:
             self._answer(fault["id"], "not_fixed", words, now)
         else:
+            self._alert(*alert, now)
             self._retry_start(incident, seen, now)
 
     def _request_start(self, incident: dict[str, Any], why: str, now: float) -> None:
@@ -962,8 +959,6 @@ class Keeper:
             return
         fixed = outcome["verdict"] == FIXED
         if fixed or counted(incident) >= SESSIONS_PER_INCIDENT:
-            if not fixed:
-                self._alert(*ALERT_FAULT, ended)
             words = (outcome["verdict"].removeprefix(VERDICT).strip()
                      .removeprefix("not fixed:").strip() or outcome["verdict"])
             self._answer(fault["id"], "fixed" if fixed else "not_fixed", "" if fixed else words,
@@ -1051,10 +1046,7 @@ class Keeper:
         logger.warning("alert '%s': %s", title, outcome)
         self.last_alert = {"at": iso(now), "title": title, "message": message, "outcome": outcome}
         self.alerted[title] = now
-        if recovery:
-            self.owed_recovery = False
-        elif title != ALERT_FAULT[0]:
-            self.owed_recovery = True
+        self.owed_recovery = not recovery
 
     def report(self, now: float) -> None:
         write_json(self.paths.keeper_json, {
