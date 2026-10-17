@@ -1,0 +1,8 @@
+# The root filesystem, which holds /var and with it every body's working tree, allocates a
+# file's blocks as it is written (ext4 `nodelalloc`) rather than at writeback. With ext4's
+# delayed allocation, a file rewritten by unlink and create (what `git checkout` does) has its
+# new, empty inode in the journal's next commit (5 s) while its data waits for writeback (30 s):
+# the PC reset in that window leaves the file at 0 bytes, and an appended log with a tail of
+# zeros. Allocated at the write, the data is flushed before the commit that records it, so an
+# unclean end loses only the last seconds' writes, never what the file held before them.
+kargs = ["rootflags=nodelalloc"]
