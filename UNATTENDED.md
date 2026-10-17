@@ -1,7 +1,7 @@
 <!-- purpose: the owner's checklist for setting RaiGolmi up on a PC that must run it unattended for weeks, keeper included
 not-here: installing for everyday use (README.md § Install it); what each setting does (README.md § Install it, § Phone alerts, whose last paragraphs are the keeper)
 shape: bounded
-audited: 0 2026-10-15
+audited: 4430 2026-10-16
 -->
 # Running RaiGolmi unattended
 

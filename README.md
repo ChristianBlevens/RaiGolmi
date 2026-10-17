@@ -65,7 +65,8 @@ out), *Venus (Vulkan)* for the machine's GPU, from its next start (setup install
 build it needs), *Phone alerts*, a box for an ntfy topic (below; from the machine's next
 start) with *Send a test alert* beside it, *Heartbeat*, a box for a healthchecks.io ping URL
 (below), and *Keeper* with *Open the keeper's terminal* (below). To leave it running unattended, also turn on Windows' automatic sign-in
-(`netplwiz`, or Sysinternals Autologon) and your BIOS's "power on after AC loss".
+(`netplwiz`, or Sysinternals Autologon) and your BIOS's "power on after AC loss". For a run of weeks with nobody there,
+[UNATTENDED.md](UNATTENDED.md) is the whole checklist.
 
 To update, get the newest scripts first (`git pull` in the folder, or download the ZIP
 again), then run `setup.bat`. It downloads the new app, and your machine downloads its
@@ -148,6 +149,7 @@ for you, and since every tab is a Remote Control session (Claude's way of carryi
 session from the Claude app), if you're up you can answer it from your phone. Otherwise
 it's there in the morning. At the 4-hour mark the rest wrap up, and the machine
 tab writes its report on the run. You read it in the catalog, under Documents, Runs.
+For a run of days or weeks with nobody at the PC, set it up with [UNATTENDED.md](UNATTENDED.md).
 
 ### Testing on a real screen
 
