@@ -51,7 +51,7 @@ system prompt) with the evidence it gathered. The rules:
 - any other failure is acted on once it has lasted `FAILING_SECONDS`, and again that long after
   each session, so what a session started (an upgrade, a restart) has time to take;
 - an incident is the stretch from the first failing check to the next healthy, closed or held
-  one. It gets at most `SESSIONS_PER_INCIDENT` sessions, each after the first handed the logs of
+  one, or to a keeper away (its container not running) for longer than `FAILING_SECONDS`. It gets at most `SESSIONS_PER_INCIDENT` sessions, each after the first handed the logs of
   those before. A session that never had an answer from Claude (an API error, the network) does not count; one
   that the API refused for its sign-in stops sessions until the sign-in changes;
 - a session's prompt says where it may push (`push_targets`, from the container's GitHub
@@ -761,6 +761,15 @@ class Keeper:
             if self.incident is not None:
                 self.incident.setdefault("unreached_since", None)
                 self.incident.setdefault("line_out", None)
+                # A keeper away longer than a failure is given (the PC off, Docker stopped) saw
+                # nothing of that stretch, and the machine it comes back to is one it has not
+                # seen failing: a launcher started with Windows is booting the VM afresh.
+                away = clock() - parse_iso(kept["at"])
+                if away > FAILING_SECONDS:
+                    logger.info("the incident since %s ends unwatched: the keeper was away %d minutes",
+                                iso(self.incident["since"]), away // 60)
+                    self.last_incident = {**self.incident, "ended": kept["at"], "ended_as": "unwatched"}
+                    self.incident = None
 
     # --- seeing ---------------------------------------------------------------------------
     def observe(self, now: float) -> Seen:

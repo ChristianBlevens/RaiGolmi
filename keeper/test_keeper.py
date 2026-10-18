@@ -228,6 +228,19 @@ def test_incident_survives_a_keeper_restart(world: World) -> None:
     assert len(world.sessions) == k.SESSIONS_PER_INCIDENT and len(world.pushes) == 1
 
 
+def test_an_incident_ends_while_the_keeper_is_away(world: World) -> None:
+    world.launcher("running")
+    world.vm = {**HEALTHY, "daemon": "inactive"}
+    world.check()
+    world.now += 16 * 3600
+    world.keeper = world.make()
+    report = world.check()
+    assert report["state"] == "failing" and report["last_incident"]["ended_as"] == "unwatched"
+    assert world.sessions == [], "a VM booting after the PC was off is given a failure's time"
+    world.check(after=k.FAILING_SECONDS)
+    assert len(world.sessions) == 1
+
+
 def test_verdict_read_from_stream_json(tmp_path: Path) -> None:
     log = tmp_path / "s.log"
     log.write_text("\n".join([
