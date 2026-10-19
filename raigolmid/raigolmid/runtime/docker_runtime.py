@@ -35,6 +35,9 @@ from .base import (
     require_bind_sources,
 )
 
+# Where cgroup v2 is mounted; each container's group is under it by Docker's cgroup driver.
+CGROUP = Path("/sys/fs/cgroup")
+
 
 def _info(c: Container) -> ContainerInfo:
     attrs = c.attrs
@@ -367,17 +370,18 @@ class DockerRuntime(ContainerRuntime):
                 self._cgroup_driver = self._client.info()["CgroupDriver"]
             except APIError as exc:
                 raise RuntimeError_(f"could not ask Docker its cgroup driver: {exc}") from exc
-        group = (Path(f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope")
+        group = (CGROUP / f"system.slice/docker-{container_id}.scope"
                  if self._cgroup_driver == "systemd"
-                 else Path(f"/sys/fs/cgroup/docker/{container_id}"))
+                 else CGROUP / f"docker/{container_id}")
         try:
             stat = dict(line.split() for line in (group / "memory.stat").read_text().splitlines())
+            swapped = int((group / "memory.swap.current").read_text())
             events = dict(line.split() for line in
                           (group / "memory.events").read_text().splitlines())
             cpu = dict(line.split() for line in (group / "cpu.stat").read_text().splitlines())
         except OSError as exc:
             raise RuntimeError_(f"could not read {group}'s memory and CPU: {exc}") from exc
-        return CgroupUse(working=int(stat["anon"]), oom_kills=int(events["oom_kill"]),
+        return CgroupUse(working=int(stat["anon"]) + swapped, oom_kills=int(events["oom_kill"]),
                          cpu_usec=int(cpu["usage_usec"]))
 
     def disk_usage(self) -> DiskUsage:

@@ -1,10 +1,10 @@
 """The machine's memory and CPU, by project, held to what each project's tab said it needs.
 
-The VM has a fixed memory and no swap, so two heavy builds at once can stall the machine or
-have the kernel kill one. Every `SAMPLE_SECONDS` each sandbox's working memory — its toolbelt
-and its body, anonymous pages only, never the page cache a build reads through — is read from
-its containers' cgroups (`ContainerRuntime.use`), with the machine's available memory and the
-CPU time each has used. Over each `WINDOW_SAMPLES` the peak per project is held to its tab's
+The VM has a fixed memory and a compressed swap in it (zram), so two heavy builds at once can
+stall the machine or have the kernel kill one. Every `SAMPLE_SECONDS` each sandbox's working
+memory — its toolbelt and its body, anonymous pages resident or swapped, never the page cache a
+build reads through — is read from its containers' cgroups (`ContainerRuntime.use`), with the
+machine's available memory and the CPU time each has used. Over each `WINDOW_SAMPLES` the peak per project is held to its tab's
 `[budget] memory`, and its share of the machine's CPU over the window to `[budget] cpu`
 (`budgets.py`): passed is `budget.exceeded`, once per episode of each. A process the kernel killed for
 want of memory is `memory.oom_killed`, each time; the machine's available memory under

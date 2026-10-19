@@ -48,3 +48,19 @@ def test_an_image_removed_while_the_images_are_listed_is_not_listed():
         images=SimpleNamespace(get=get)))
 
     assert [i.id for i in runtime.list_images()] == ["sha256:kept"]
+
+
+def test_a_containers_working_memory_counts_what_it_has_swapped(tmp_path, monkeypatch):
+    """Measured on the VM: a build and its tests held 6.7 GB in zram beside 4.7 GB resident,
+    and a reading of resident pages alone never passed the project's 6.2 GB budget."""
+    from raigolmid.runtime import docker_runtime
+    group = tmp_path / "system.slice/docker-c1.scope"
+    group.mkdir(parents=True)
+    (group / "memory.stat").write_text("anon 4700\nfile 900\n")
+    (group / "memory.swap.current").write_text("6700\n")
+    (group / "memory.events").write_text("low 0\noom_kill 1\n")
+    (group / "cpu.stat").write_text("usage_usec 42\n")
+    monkeypatch.setattr(docker_runtime, "CGROUP", tmp_path)
+    runtime = DockerRuntime(client=SimpleNamespace(info=lambda: {"CgroupDriver": "systemd"}))
+    use = runtime.use("c1")
+    assert (use.working, use.oom_kills, use.cpu_usec) == (11400, 1, 42)

@@ -117,10 +117,10 @@ class DiskUsage:
 
 @dataclass(frozen=True, slots=True)
 class CgroupUse:
-    """A running container's use, from its cgroup: its working memory now (anonymous pages —
-    what it has allocated, never the page cache it reads through), how many of its processes
-    the kernel has killed for want of memory since it started, and the CPU time it has used
-    since it started, in microseconds."""
+    """A running container's use, from its cgroup: its working memory now (anonymous pages,
+    resident or swapped — what it has allocated, never the page cache it reads through), how
+    many of its processes the kernel has killed for want of memory since it started, and the
+    CPU time it has used since it started, in microseconds."""
     working: int
     oom_kills: int
     cpu_usec: int
