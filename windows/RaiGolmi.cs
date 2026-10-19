@@ -1392,12 +1392,12 @@ class Window : Form
                 if (paused == "running")
                     Heartbeat();
                 else if (paused == "watchdog")
-                    BeginInvoke(new Action(() => Recover("the guest's watchdog fired")));
+                    BeginInvoke(new Action(() => Stopped("the guest's watchdog fired")));
                 else if (paused == "io-error")
-                    BeginInvoke(new Action(() => Recover("QEMU paused the guest on a disk write that failed " +
+                    BeginInvoke(new Action(() => Stopped("QEMU paused the guest on a disk write that failed " +
                                                          "(io-error; a full Windows disk is one cause)")));
                 else if (paused == "internal-error")
-                    BeginInvoke(new Action(() => Recover("QEMU paused the guest on an internal error " +
+                    BeginInvoke(new Action(() => Stopped("QEMU paused the guest on an internal error " +
                                                          "(internal-error)")));
             }
         }
@@ -2113,6 +2113,23 @@ class Window : Form
 
     // On the UI thread: QEMU is killed, and OnQemuExited restarts the machine. A guest already
     // asked to shut down is left to finish, unless `overShutdown` (the keeper's restart, Act).
+    // A guest QEMU has stopped cannot finish a shutdown. Setup closes this window to upgrade and
+    // waits for it with nobody to answer, so then it is powered off, as when the request itself
+    // fails; otherwise the machine is recovered.
+    void Stopped(string why)
+    {
+        if (shutdownSent && upgrading)
+        {
+            if (poweredOff || exited)
+                return;
+            Note("powered off without asking: " + why + " while setup was upgrading the machine");
+            poweredOff = true;
+            qemu.Kill();
+            return;
+        }
+        Recover(why);
+    }
+
     void Recover(string why, bool overShutdown = false)
     {
         if (recovering != null || exited || (shutdownSent && !overShutdown))
