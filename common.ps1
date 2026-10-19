@@ -216,21 +216,21 @@ function Install-Closed([hashtable[]]$closed) {
 
 # Published by ChristianBlevens/raigolmi-packages' workflow, one release per version.
 $packages = 'https://github.com/ChristianBlevens/raigolmi-packages/releases'
-$qemuVersion = '11.1.1-3.2'
+$qemuVersion = '11.1.1-3.3'
 $virglVersion = '1.3.0-1.1'
 # Venus's virglrenderer (the winq-emu fork) beside a copy of that QEMU's exe, in
 # ucrt64\raigolmi-venus: the launcher starts that copy when the Venus setting is on.
-$venusVersion = '1.3.0.e80354b8-8'
+$venusVersion = '1.3.0.e80354b8-9'
 # Each file's SHA-256, from the release's own assets (GitHub lists each asset's digest), so a
 # file replaced on the release, or changed on the way, is refused before pacman installs it
 # unsigned. A new version changes these with the pins above.
 $patchedSha256 = @{
-    'mingw-w64-ucrt-x86_64-qemu-11.1.1-3.2-any.pkg.tar.zst'               = '8071353e5d0d439d70eb15e6226bb5c43a3de7516ce5033eb345f2340f1f3dae'
-    'mingw-w64-ucrt-x86_64-qemu-common-11.1.1-3.2-any.pkg.tar.zst'        = 'a1da9ce18c8d2c476af704730ce306a4e132c0c7a4e1f667c608bdccc874899c'
-    'mingw-w64-ucrt-x86_64-qemu-guest-agent-11.1.1-3.2-any.pkg.tar.zst'   = '1242d5397b01d0a1f8a17f3f978dc94e8dece10a4cfdbeb51f3562baf053d963'
-    'mingw-w64-ucrt-x86_64-qemu-image-util-11.1.1-3.2-any.pkg.tar.zst'    = '43698c887826d3e4e65402852b8ab5f0cb97202fdf885be00e10041ec7d1978c'
+    'mingw-w64-ucrt-x86_64-qemu-11.1.1-3.3-any.pkg.tar.zst'               = 'b16f5a16d0a0e0248d51d77ac1b2bea1452f222b99acfc8c34a558fe69694f2e'
+    'mingw-w64-ucrt-x86_64-qemu-common-11.1.1-3.3-any.pkg.tar.zst'        = 'c93910857757a8b41ca398ad7d30c32017c83aa8632c8f4c6e17d612c78e52e7'
+    'mingw-w64-ucrt-x86_64-qemu-guest-agent-11.1.1-3.3-any.pkg.tar.zst'   = '4efaed0badb76b10d1268b154b65724b77983255a229f2154afef7d0200e769d'
+    'mingw-w64-ucrt-x86_64-qemu-image-util-11.1.1-3.3-any.pkg.tar.zst'    = '8136ffc1403b100aba0b07b5aa6d48b64a88a01346efbda4d249c3b2c559b74d'
     'mingw-w64-ucrt-x86_64-virglrenderer-1.3.0-1.1-any.pkg.tar.zst'       = '9d79600ca8d8a10eb7fb17e672a6e2e7d968a6eba590ae44efec6fe28d51f0e3'
-    'mingw-w64-ucrt-x86_64-virglrenderer-venus-1.3.0.e80354b8-8-any.pkg.tar.zst' = '131b304b3f1514ae774e51a69fcbe3710bad9d26a9bc835c3d8220d6231f4ab0'
+    'mingw-w64-ucrt-x86_64-virglrenderer-venus-1.3.0.e80354b8-9-any.pkg.tar.zst' = '97c0ef4c6a055a2bc76ce67e56348bdef8c1e1a6e037d1af3742087160d827a7'
 }
 
 function Msys([string]$command) {
