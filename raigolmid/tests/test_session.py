@@ -18,6 +18,7 @@ from raigolmid.toolbelts import nixery_reference
 from raigolmid import labels, naming
 from raigolmid.agents import AgentError
 from raigolmid.facemounts import FaceMountError
+from raigolmid.intent import TabIntent
 from raigolmid.session import NotSelectable, SessionError
 
 from tests.harness import Harness, converse
@@ -483,6 +484,23 @@ def test_a_hand_on_is_whole_when_the_face_cannot_show_the_change(h, monkeypatch)
     assert successor in h.session.intent.tabs
     (closed,) = h.events_of("tab.closed")
     assert closed.tab == tab and closed.data["continued_by"] == successor
+
+
+def test_closing_a_tab_without_a_sandbox_moves_the_face_onto_the_next_tabs(h, monkeypatch):
+    """Two tabs on one body, the face tab the first with no sandbox: closed, the other is the
+    face tab, and the face is moved onto the sandbox it has open."""
+    h.session.select("body", "myapi")
+    other = h.session.succeed_tab(h.tab("myapi"), by="machine").tab_id
+    h.session.sandbox_open(other, "python-dev")
+    stale = TabIntent(tab_id=h.session.intent.new_tab_id(), body="myapi")
+    h.session.intent.tabs = {stale.tab_id: stale, **h.session.intent.tabs}
+    assert h.session.intent.focused_instance is None
+    shown = []
+    show = h.session.face_mounts.show
+    monkeypatch.setattr(h.session.face_mounts, "show",
+                        lambda instance: (shown.append(instance), show(instance)))
+    h.session.close_tab(stale.tab_id)
+    assert shown == [naming.instance_id("myapi", other)]
 
 
 def test_a_tab_that_continues_another_starts_with_its_claude_code_memory(h):

@@ -484,6 +484,16 @@ class Session:
         if focused != before or always_show:
             self._show(focused)
 
+    def _refocus_said(self, before: str | None) -> None:
+        """`_refocus` for a tab letting go: `FaceMounts` has said a failed sync, and `status`
+        carries it until one succeeds, so the face failing to show what is focused is the
+        face's failure and not the tab's. Raised, it would leave a closing tab half closed,
+        its agent stopped."""
+        try:
+            self._refocus(before)
+        except FaceMountError:
+            pass
+
     def _apply_face(self, previous: compatibility.Selection) -> None:
         """Bring the nested compositor to the selected face.
 
@@ -594,13 +604,7 @@ class Session:
         stop is returned for `_stop_released` to stop once the lock is let go."""
         before = self.intent.focused_instance
         self.intent.drop_ref(instance_id, naming.tab_ref(tab_id))
-        try:
-            self._refocus(before)
-        except FaceMountError:
-            # `FaceMounts` has said it, and `status` carries it until a sync succeeds: the
-            # face fails to show what is focused now, which is the face's failure and not the
-            # release's. Raised, it would leave a closing tab half closed, its agent stopped.
-            pass
+        self._refocus_said(before)
         want = self.intent.instances.get(instance_id)
         if want is None:
             return None
@@ -1596,7 +1600,10 @@ class Session:
         if held is not None:
             # While the tab is still the face tab, so the face is seen to leave its sandbox.
             released = self._release(held, tab.tab_id)
+        before = self.intent.focused_instance
         del self.intent.tabs[tab.tab_id]
+        # The face tab may be another of the body's tabs now, and the active sandbox its.
+        self._refocus_said(before)
         return {"tab": tab.tab_id, "body": tab.body, "instance": held,
                 "archive": archive}, released
 
