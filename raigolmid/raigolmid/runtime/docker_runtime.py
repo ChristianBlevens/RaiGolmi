@@ -42,13 +42,21 @@ CGROUP = Path("/sys/fs/cgroup")
 def _info(c: Container) -> ContainerInfo:
     attrs = c.attrs
     state = attrs.get("State", {})
+    status = state.get("Status", "unknown")
+    pid = state.get("Pid") or None
+    # Docker reports a container `running` until every process in it has gone, so one whose
+    # init has exited while a process in it cannot be killed (one blocked in the kernel) stays
+    # `running` for good, with an init pid that names nothing. It runs nothing: `dead`, Docker's
+    # word for a container it cannot finish removing, which is what becomes of it.
+    if status == "running" and pid is not None and not Path(f"/proc/{pid}").exists():
+        status = "dead"
     return ContainerInfo(
         id=c.id,
         name=c.name,
         image=(attrs.get("Config", {}) or {}).get("Image", ""),
-        status=state.get("Status", "unknown"),
+        status=status,
         labels=(attrs.get("Config", {}) or {}).get("Labels") or {},
-        pid=state.get("Pid") or None,
+        pid=pid,
         exit_code=state.get("ExitCode"),
         started_at=state.get("StartedAt"),
         image_id=attrs.get("Image", ""),
