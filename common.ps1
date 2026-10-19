@@ -115,6 +115,9 @@ function Apply-Upgrade([string]$image, [string]$archive) {
     $config = Join-Path $state 'ssh_config'
     $ssh    = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
     $scp    = Join-Path $env:SystemRoot 'System32\OpenSSH\scp.exe'
+    # -n: none of these commands reads input. Unattended, setup's input is the launcher's, which
+    # never ends, and an ssh.exe holding it can leave its session open after the command ends,
+    # setup waiting on it for good with the image staged and the machine not restarted.
     if (-not (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue)) {
         Write-Host 'Opening RaiGolmi, which boots the disk being upgraded...'
         Start-Process $exe -WorkingDirectory (Split-Path $exe)
@@ -127,7 +130,7 @@ function Apply-Upgrade([string]$image, [string]$archive) {
             $log = Join-Path (Split-Path $exe) 'qemu.log'
             Fail "RaiGolmi closed before the machine answered; why is at the end of $log."
         }
-        $answer = & $ssh -F $config raigolmi true 2>&1
+        $answer = & $ssh -n -F $config raigolmi true 2>&1
     } while ($LASTEXITCODE -ne 0 -and (Get-Date) -lt $deadline)
     if ($LASTEXITCODE -ne 0) {
         Fail "The machine did not answer over ssh within 10 minutes ($answer). Run this again."
@@ -147,11 +150,11 @@ function Apply-Upgrade([string]$image, [string]$archive) {
         $switch = "sudo bootc switch $image"
         $staged = $image
     }
-    & $ssh -F $config raigolmi "$switch && rm -f ~/.config/systemd/user/raigolmid.service.d/patched.conf"
+    & $ssh -n -F $config raigolmi "$switch && rm -f ~/.config/systemd/user/raigolmid.service.d/patched.conf"
     if ($LASTEXITCODE -ne 0) { Fail "The machine refused the new image; bootc's output is above. Nothing on it changed." }
     # bootc stages nothing when the image is the one the machine already boots ("No update
     # available"): there is nothing to write into the boot entries and nothing to restart.
-    & $ssh -F $config raigolmi 'test -e /run/ostree/staged-deployment'
+    & $ssh -n -F $config raigolmi 'test -e /run/ostree/staged-deployment'
     if ($LASTEXITCODE -gt 1) { Fail "Asking the machine whether bootc staged the image failed (ssh exited $LASTEXITCODE). Run this again." }
     if ($LASTEXITCODE -eq 1) {
         if ($archive) { Remove-Item $archive -ErrorAction Stop }
@@ -162,12 +165,12 @@ function Apply-Upgrade([string]$image, [string]$archive) {
     # that dies on the way down loses it. Stopping the finalize unit runs that step now, the
     # way ostree's own tests do; the new image is then the next boot's whatever the shutdown.
     Write-Host 'Writing it into the boot entries...'
-    & $ssh -F $config raigolmi ('sudo systemctl stop ostree-finalize-staged.service && ' +
+    & $ssh -n -F $config raigolmi ('sudo systemctl stop ostree-finalize-staged.service && ' +
                                 '! systemctl is-failed --quiet ostree-finalize-staged.service && ' +
                                 'test ! -e /run/ostree/staged-deployment && ' +
                                 "sudo bootc status | grep -A6 '^  rollback:' | grep -qF $staged")
     if ($LASTEXITCODE -ne 0) {
-        & $ssh -F $config raigolmi 'sudo bootc status; journalctl -b -u ostree-finalize-staged --no-pager | tail -20'
+        & $ssh -n -F $config raigolmi 'sudo bootc status; journalctl -b -u ostree-finalize-staged --no-pager | tail -20'
         Fail ("The new image was staged but not written into the boot entries; bootc's status " +
               "and the finalize log are above. The machine still boots the image it had.")
     }
