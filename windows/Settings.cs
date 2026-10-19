@@ -361,28 +361,41 @@ sealed class Settings
     [DllImport("kernel32.dll")] static extern uint SetThreadExecutionState(uint state);
 }
 
-// Whether Windows has the audio endpoints QEMU's DirectSound backend opens when it starts. It
-// opens the default playback and the default recording device whether or not the guest ever
-// records (audio/dsoundaudio.c, audio_dsound_realize), and a failure there ends QEMU before the
-// guest boots (audio/audio.c, audio_init_audiodevs, error_fatal).
+// Whether Windows has the audio endpoints QEMU's DirectSound backend opens when it starts: the
+// default playback device, and the default recording device unless the QEMU skips it. A failure
+// there ends QEMU before the guest boots (audio/audio.c, audio_init_audiodevs, error_fatal).
 static class AudioEndpoints
 {
+    // raigolmi-packages' QEMU from 11.1.1-3.3 opens no recording device when its audiodev has no
+    // input voices (qemu/006-dsound-capture-only-with-input.patch), as the machine's has none
+    // (Machine.Arguments); one before it opens it anyway (audio/dsoundaudio.c,
+    // audio_dsound_realize). setup installs the QEMU a launcher's release pins only once the
+    // machine is closed, so this launcher can start on the one before.
+    static readonly int[] CaptureSkippedFrom = { 11, 1, 1, 3, 3 };
+
+    public static bool QemuOpensCapture(int[] qemu)
+    {
+        for (int i = 0; i < Math.Min(qemu.Length, CaptureSkippedFrom.Length); i++)
+            if (qemu[i] != CaptureSkippedFrom[i])
+                return qemu[i] < CaptureSkippedFrom[i];
+        return qemu.Length < CaptureSkippedFrom.Length;
+    }
+
     // Why the machine cannot have its sound card on this PC now, or null when it can.
-    public static string Missing()
+    public static string Missing(bool opensCapture)
     {
         var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
         try
         {
-            var missing = new List<string>();
             if (!HasDefault(enumerator, eRender))
-                missing.Add("no playback device (speakers or headphones)");
-            if (!HasDefault(enumerator, eCapture))
-                missing.Add("no recording device (a microphone or line in)");
-            if (missing.Count == 0)
-                return null;
-            return "The machine has no sound this time: Windows has " + string.Join(" and ", missing) +
-                   ", and QEMU's Windows audio cannot start without both. Enable one in Windows' " +
-                   "Sound settings and start RaiGolmi again.";
+                return "The machine has no sound this time: Windows has no playback device (speakers " +
+                       "or headphones). Enable one in Windows' Sound settings and start RaiGolmi again.";
+            if (opensCapture && !HasDefault(enumerator, eCapture))
+                return "The machine has no sound this time: Windows has no recording device (a " +
+                       "microphone or line in), and the QEMU installed opens one. Run setup.bat to " +
+                       "install the QEMU that does not, or enable one in Windows' Sound settings, " +
+                       "and start RaiGolmi again.";
+            return null;
         }
         finally
         {

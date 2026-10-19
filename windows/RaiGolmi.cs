@@ -243,6 +243,32 @@ static class Launcher
     {
         return Path.Combine(QemuDir, file);
     }
+
+    // The installed QEMU's package version (pacman's record of it, <msys2>\var\lib\pacman\local\
+    // <name>-<version>), as numbers: 11.1.1-3.3 is { 11, 1, 1, 3, 3 }. setup pins it to
+    // raigolmi-packages' build (common.ps1 $qemuVersion, and IgnorePkg keeps pacman off it).
+    public static int[] QemuVersion()
+    {
+        const string package = "mingw-w64-ucrt-x86_64-qemu-";
+        string local = Path.Combine(Path.GetDirectoryName(QemuDir), @"var\lib\pacman\local");
+        var found = Directory.GetDirectories(local, package + "*")
+            .Select(Path.GetFileName)
+            .Where(d => char.IsDigit(d[package.Length]))
+            .ToList();
+        if (found.Count != 1)
+            throw new LauncherError("MSYS2 records " + found.Count + " installed QEMU packages in " + local +
+                                    " (" + string.Join(", ", found) + "), not one: run setup.bat.");
+        string version = found[0].Substring(package.Length);
+        try
+        {
+            return version.Split('.', '-').Select(int.Parse).ToArray();
+        }
+        catch (FormatException)
+        {
+            throw new LauncherError("The installed QEMU's version, " + version + " (" + local +
+                                    "), is not the numbers raigolmi-packages' builds have: run setup.bat.");
+        }
+    }
 }
 
 class LauncherError : Exception
@@ -316,7 +342,7 @@ class Machine
         if (m.Settings.Keeper)
             m.Keeper = new Keeper(recoveries);
         m.MemoryMiB = Settings.MemoryMiB(m.Settings.Memory);
-        m.NoSound = AudioEndpoints.Missing();
+        m.NoSound = AudioEndpoints.Missing(AudioEndpoints.QemuOpensCapture(Launcher.QemuVersion()));
         m.Qemu = m.Settings.Venus ? RequireVenus(Launcher.QemuPath(VenusQemu))
                                   : Require(Launcher.QemuPath(@"bin\qemu-system-x86_64w.exe"));
         m.Firmware = Require(Launcher.QemuPath(@"share\qemu\edk2-x86_64-code.fd"));
@@ -457,8 +483,9 @@ class Machine
     // hypervisor emulates each vCPU's local APIC (kernel-irqchip=on, required, so a host that
     // cannot fails QEMU's start): off, every IPI, timer and EOI exits to QEMU under its one lock.
     //
-    // Sound is HDA (ich9-intel-hda, the q35 chipset's own, with an output-only codec, so Windows
-    // is never asked for its microphone) into DirectSound, the one Windows backend that stops
+    // Sound is HDA (ich9-intel-hda, the q35 chipset's own, with an output-only codec and an
+    // audiodev with no input voices, so Windows is never asked for a microphone, and a PC with
+    // none still has sound) into DirectSound, the one Windows backend that stops
     // when the guest is silent: the guest closing its stream stops the codec's timer
     // (hw/audio/hda-codec.c hda_audio_set_running), the voice's disable stops the DirectSound
     // buffer, and the mixer's timer runs only while a voice is enabled (audio/audio-mixeng-be.c
@@ -486,7 +513,7 @@ class Machine
         a.Add("-device " + (Settings.Venus ? "virtio-vga-gl,blob=on,hostmem=4G,venus=on" : "virtio-vga-gl") +
               " -device qemu-xhci,id=xhci -device usb-tablet,bus=xhci.0");
         if (NoSound == null)
-            a.Add("-audiodev dsound,id=snd0 -device ich9-intel-hda " +
+            a.Add("-audiodev dsound,id=snd0,in.voices=0 -device ich9-intel-hda " +
                   "-device hda-output,audiodev=snd0");
         a.Add("-netdev user,id=net0,hostfwd=tcp:127.0.0.1:" + SshPort + "-:22 -device virtio-net,netdev=net0");
         // Boot credentials (systemd reads SMBIOS type 11): the login keys, Windows' own
@@ -1550,9 +1577,9 @@ class Window : Form
         Keeper.Compose("up -d", Note);
     }
 
-    // The keeper's files from this launcher's release, written over the folder's that differ, and
-    // the container recreated once its loop is between sessions (Keeper.Deliver). A write that
-    // fails is said and tried again at the next tick.
+    // The keeper's files and the setup scripts from this launcher's release, written over the
+    // folder's that differ, and the container recreated once its loop is between sessions
+    // (Keeper.Deliver). A write that fails is said and tried again at the next tick.
     void DeliverKeeper()
     {
         string outdated;
@@ -2414,12 +2441,15 @@ sealed class Keeper
     // --- the keeper's files ----------------------------------------------------------------------
 
     // A release replaces this program and the disk, and nothing else in the project folder, so it
-    // carries the keeper's files (RaiGolmi.csproj embeds them as keeper/<name>). On a folder that
-    // is not a git checkout they are written over the folder's keeper\ and the container is
-    // recreated, between sessions, while its loop runs another keeper.py: the loop keeps the code
-    // it loaded, and `compose up -d` leaves a running container as it is. A checkout is the
-    // developer's, whose keeper\ is the one they mean to run.
+    // carries the keeper's files (RaiGolmi.csproj embeds them as keeper/<name>) and the setup
+    // scripts the keeper's upgrade runs (project/<name>), whose pins name the QEMU this launcher
+    // is built for. On a folder that is not a git checkout they are written over the folder's,
+    // and the container is recreated, between sessions, while its loop runs another keeper.py:
+    // the loop keeps the code it loaded, and `compose up -d` leaves a running container as it is.
+    // A running setup has read its scripts whole, so writing them under it changes nothing it
+    // does. A checkout is the developer's, whose files are the ones they mean to run.
     const string CarriedPrefix = "keeper/";
+    const string ProjectPrefix = "project/";
 
     public static bool Checkout()
     {
@@ -2439,33 +2469,34 @@ sealed class Keeper
         }
     }
 
-    static IEnumerable<string> CarriedNames()
+    static IEnumerable<string> CarriedNames(string prefix)
     {
         bool any = false;
         foreach (string resource in typeof(Keeper).Assembly.GetManifestResourceNames())
-            if (resource.StartsWith(CarriedPrefix, StringComparison.Ordinal))
+            if (resource.StartsWith(prefix, StringComparison.Ordinal))
             {
                 any = true;
                 yield return resource;
             }
         if (!any)
-            throw new LauncherError("this launcher was built without the keeper's files (RaiGolmi.csproj)");
+            throw new LauncherError("this launcher was built without its " + prefix + " files (RaiGolmi.csproj)");
     }
 
-    // The carried files that differ from the folder's, written whole; their names.
+    // The carried files that differ from the folder's, written whole; their paths in the project.
     public static List<string> Deliver()
     {
         var written = new List<string>();
-        foreach (string resource in CarriedNames())
-        {
-            string name = resource.Substring(CarriedPrefix.Length);
-            string target = Path.Combine(Folder, name);
-            byte[] carried = Carried(resource);
-            if (File.Exists(target) && File.ReadAllBytes(target).AsSpan().SequenceEqual(carried))
-                continue;
-            Durable.Write(target, carried);
-            written.Add(name);
-        }
+        foreach (var (prefix, folder) in new[] { (CarriedPrefix, Folder), (ProjectPrefix, Launcher.Project) })
+            foreach (string resource in CarriedNames(prefix))
+            {
+                string name = resource.Substring(prefix.Length);
+                string target = Path.Combine(folder, name);
+                byte[] carried = Carried(resource);
+                if (File.Exists(target) && File.ReadAllBytes(target).AsSpan().SequenceEqual(carried))
+                    continue;
+                Durable.Write(target, carried);
+                written.Add(Path.GetRelativePath(Launcher.Project, target));
+            }
         return written;
     }
 

@@ -587,9 +587,8 @@ it instead, and tells you how to apply it there. On Linux, run `host/ci/build-lo
 - There's no XWayland, so X11-only programs don't run in a face. WebKit-based browsers don't
   work either. Firefox does, and so does Chromium with a few flags.
 - The clipboard between Windows and the machine carries text only.
-- The machine has sound only when Windows has both a default playback device and a default
-  recording device, since QEMU's Windows audio opens both. Without either (a PC with speakers
-  but no microphone, say) it starts with no sound card and says so. The agents' projects never
+- The machine has sound only when Windows has a default playback device. Without one it
+  starts with no sound card and says so. The agents' projects never
   need it: a program's audio in a body goes into nothing, or into a WAV file it names.
 - The app isn't signed, and it watches the keyboard so keys like Super reach the machine.
   That combination can make antivirus software suspicious of it. It's built by the

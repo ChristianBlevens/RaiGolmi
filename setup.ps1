@@ -92,7 +92,11 @@ function Download([string]$token, $layer, [string]$target) {
     Move-Item -Force $partial $target
 }
 
-Install-Missing { Run-Prerequisites } 'setup.bat'
+# Unattended, what needs only QEMU closed waits for the window to close (Install-Closed): the
+# rest needs a person, and Install-Missing refuses it.
+$closed = @()
+if ($Unattended) { $closed = @(Run-Prerequisites | Where-Object { $_.Closed }) }
+Install-Missing { Run-Prerequisites | Where-Object { -not ($Unattended -and $_.Closed) } } 'setup.bat'
 
 $token   = Registry-Token
 $release = Channel-Release $token
@@ -101,7 +105,12 @@ $installed = if (Test-Path $releaseRecord) { (Get-Content $releaseRecord -Raw).T
 $short = $release.Revision.Substring(0, 12)
 
 if ((Test-Path $disk) -and (Test-Path $exe) -and $installed -eq $release.Revision) {
-    Write-Host "RaiGolmi is up to date (release $short)."
+    if ($closed.Count -eq 0) {
+        Write-Host "RaiGolmi is up to date (release $short)."
+        exit 0
+    }
+    Install-Closed $closed
+    Open-RaiGolmi "Release $short, with what it runs on brought up to date."
     exit 0
 }
 
@@ -110,6 +119,7 @@ if (-not (Test-Path $disk)) {
     if (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
         Fail 'RaiGolmi is running and holds its launcher. Close its window, then run setup.bat again.'
     }
+    Install-Closed $closed
     Download $token $release.Files['RaiGolmi.exe'] $exe
     Download $token $release.Files['raigolmi.qcow2'] $disk
     Record-Release $release.Revision
@@ -128,6 +138,7 @@ if (-not (Test-Path $exe) -or -not (Get-Process -Name RaiGolmi -ErrorAction Sile
 }
 Record-Disk
 Apply-Upgrade -image $host_image
+Install-Closed $closed
 if (Test-Path $next) { Move-Item -Force $next $exe }
 Record-Release $release.Revision
 Open-RaiGolmi "Updated to release $short, with everything on the machine kept."

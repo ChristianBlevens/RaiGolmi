@@ -173,14 +173,42 @@ function Apply-Upgrade([string]$image, [string]$archive) {
     }
     if ($archive) { Remove-Item $archive -ErrorAction Stop }
     Write-Host 'Restarting the machine on the new image...'
-    # Closed as a person closes it, so the launcher stops taking frames before the guest
-    # shuts down (Display.StopListening) and the shutdown cannot abort QEMU.
+    Close-RaiGolmi 'to start on the new image'
+}
+
+# Closed as a person closes it, so the launcher stops taking frames before the guest shuts
+# down (Display.StopListening) and the shutdown cannot abort QEMU. A launcher that setup
+# -Unattended was started by records itself as upgrading, which its keeper door leaves closed.
+function Close-RaiGolmi([string]$why) {
     foreach ($p in Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
-        if (-not $p.CloseMainWindow()) { Fail 'RaiGolmi has no window to close; close it, then open it again to start on the new image.' }
+        if (-not $p.CloseMainWindow()) { Fail "RaiGolmi has no window to close; close it, then open it again $why." }
     }
     Wait-Process -Name RaiGolmi -Timeout 300 -ErrorAction SilentlyContinue
     if (Get-Process -Name RaiGolmi -ErrorAction SilentlyContinue) {
-        Fail 'The machine was upgraded but did not power off within 5 minutes. Close RaiGolmi and open it again to start on the new image.'
+        Fail "The machine did not power off within 5 minutes. Close RaiGolmi and open it again $why."
+    }
+}
+
+# What setup -Unattended installs with nobody asked: the prerequisites marked Closed, which need
+# no person, only QEMU not running. Installed with the window closed; when one does not
+# install, the machine is opened again before setup stops, so it is not left down.
+function Install-Closed([hashtable[]]$closed) {
+    if ($closed.Count -eq 0) { return }
+    Close-RaiGolmi 'to start with what it has'
+    $installed = $false
+    try {
+        foreach ($m in $closed) {
+            Write-Host "Installing $($m.What)..."
+            & $m.Do
+        }
+        $still = @(Run-Prerequisites | Where-Object { $_.Closed })
+        if ($still.Count -ne 0) {
+            $list = ($still | ForEach-Object { " - $($_.What)`n     $($_.How)" }) -join "`n"
+            Fail "These are still missing after installing (what went wrong is above):`n$list"
+        }
+        $installed = $true
+    } finally {
+        if (-not $installed) { Open-RaiGolmi 'Setup stopped before it finished installing.' }
     }
 }
 
@@ -363,9 +391,11 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
     # The stock virglrenderer cannot show the boot console, and the stock QEMU has no discard
     # on Windows, so the disk image never gives back what the guest frees: both come patched
     # from ChristianBlevens/raigolmi-packages.
+    # They install with nobody asked (Closed: QEMU closed is all they need, Install-Closed).
     if (-not (Patched-Installed @('virglrenderer') $virglVersion)) {
         $missing += @{ What = "the patched virglrenderer $virglVersion (without it the boot screen never shows; MSYS2 is brought up to date first, as MSYS2 requires)"
                        How  = "$packages/virglrenderer-$virglVersion"
+                       Closed = $true
                        Do   = { Install-Patched @(@{ Tag = "virglrenderer-$virglVersion"; Version = $virglVersion
                                                      Names = @('virglrenderer') }) } }
     }
@@ -375,6 +405,7 @@ public static extern int WHvGetCapability(int code, out int present, uint size, 
               (Patched-Installed @('virglrenderer-venus') $venusVersion))) {
         $missing += @{ What = "the patched QEMU $qemuVersion, with the Venus build $venusVersion beside it (without it the disk image never shrinks, and the Venus setting has no QEMU to run; MSYS2 is brought up to date first, as MSYS2 requires)"
                        How  = "$packages/qemu-$qemuVersion and $packages/virglrenderer-venus-$venusVersion"
+                       Closed = $true
                        Do   = { Install-Patched @(@{ Tag = "qemu-$qemuVersion"; Version = $qemuVersion
                                                      Names = @('qemu', 'qemu-common', 'qemu-guest-agent', 'qemu-image-util') },
                                                   @{ Tag = "virglrenderer-venus-$venusVersion"; Version = $venusVersion

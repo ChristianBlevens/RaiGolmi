@@ -19,8 +19,10 @@
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
     <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
   </ItemGroup>
-  <!-- The keeper's files, which a release carries to the project folder (Keeper.Deliver). -->
+  <!-- The keeper's files and the setup scripts, which a release carries to the project folder
+       (Keeper.Deliver). -->
   <ItemGroup>
     <EmbeddedResource Include="..\keeper\keeper.py;..\keeper\test_keeper.py;..\keeper\KEEPER.md;..\keeper\Dockerfile;..\keeper\compose.yml" LogicalName="keeper/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\setup.ps1;..\setup.bat;..\common.ps1" LogicalName="project/%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>
