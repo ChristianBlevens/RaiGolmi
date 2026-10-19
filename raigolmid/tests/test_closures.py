@@ -114,3 +114,41 @@ def test_a_second_ask_for_an_image_being_copied_waits_for_that_copy(rig):
     other.join(5)
     assert copies.copies == [image_id]
     assert second == [closures.paths.closures / image_id.removeprefix("sha256:")]
+
+
+def test_a_package_link_out_of_its_bin_is_pointed_at_the_package(rig):
+    """nixpkgs' pulseaudio links `bin/pactl -> ../.bin-unwrapped/pactl`; the image's merged /bin
+    copies the link as it is, and no `.bin-unwrapped` stands beside it."""
+    runtime, copies, closures = rig
+
+    def pulseaudio(spec):
+        result = copies(spec)
+        mounts = {m.target: m.source for m in spec.mounts}
+        image, store = mounts[closures_module.IMAGE_OUT], mounts[closures_module.STORE_OUT]
+        package = os.path.join(store, copies.store_name("neovim"), "bin")
+        os.symlink("../.bin-unwrapped/pactl", os.path.join(package, "pactl"))
+        os.symlink("../.bin-unwrapped/pactl", os.path.join(image, "bin", "pactl"))
+        os.symlink("neovim", os.path.join(image, "bin", "vi"))
+        os.chmod(os.path.join(image, "bin"), stat.S_IRUSR | stat.S_IXUSR)
+        return result
+
+    runtime.one_shot[naming.closure_copy()] = pulseaudio
+    _, path = closures.of_image(IMAGE)
+    assert os.readlink(path / "bin" / "pactl") == \
+        f"/nix/store/{copies.store_name('neovim')}/bin/pactl"
+    assert os.readlink(path / "bin" / "vi") == "neovim"
+    assert stat.S_IMODE(os.stat(path / "bin").st_mode) == stat.S_IRUSR | stat.S_IXUSR
+
+
+def test_a_link_out_of_bin_no_package_owns_is_refused(rig):
+    runtime, copies, closures = rig
+
+    def stray(spec):
+        result = copies(spec)
+        image = {m.target: m.source for m in spec.mounts}[closures_module.IMAGE_OUT]
+        os.symlink("../lib/nowhere", os.path.join(image, "bin", "stray"))
+        return result
+
+    runtime.one_shot[naming.closure_copy()] = stray
+    with pytest.raises(ClosureError, match="stray"):
+        closures.of_image(IMAGE)

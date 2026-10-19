@@ -16,6 +16,10 @@ view's server actually names.
     <closures>/<image id>/paths        the image's store paths, one name per line
     <closures>/<image id>/bin          the image's /bin, whose entries point into the store
 
+An image's /bin merges its packages' own: a package's link relative to its `bin` is copied
+as it is, so one leaving it (pulseaudio's `pactl -> ../.bin-unwrapped/pactl`) names a
+directory the merged /bin does not have. Each is pointed at the package's own entry instead.
+
 Every write lands under a temporary name and is renamed into place once complete, so a name
 in the store is always a whole store path, and an image directory under its final name always
 lists paths that are all present.
@@ -134,6 +138,7 @@ class Closures:
         if missing:
             raise ClosureError(f"the copy of {image_id} exited 0 and {len(missing)} of its "
                                f"store paths are not in {self.store}: {missing[:3]}")
+        _point_into_packages(partial / "bin", self.store, self.store_paths(partial))
         partial.rename(final)
         self.events.emit("closure.copied", image=image_id, path=str(final),
                          store_paths=len(self.store_paths(final)))
@@ -174,6 +179,33 @@ class Closures:
                     path.unlink()
                 paths += 1
         return closures, paths
+
+
+def _point_into_packages(bin_dir: Path, store: Path, store_paths: list[str]) -> None:
+    """Points each link in `bin_dir` that leaves it by a relative path at the entry of that
+    name and target in one of `store_paths`' own `bin`, where the path resolves. A link to a
+    sibling (`[ -> coreutils`) resolves in the merged /bin as it is."""
+    leaving = {entry.name: target for entry in bin_dir.iterdir() if entry.is_symlink()
+               for target in (os.readlink(entry),)
+               if not target.startswith("/") and "/" in target}
+    if not leaving:
+        return
+    owners: dict[str, str] = {}
+    for store_path in store_paths:
+        for name, target in leaving.items():
+            entry = store / store_path / "bin" / name
+            if name not in owners and entry.is_symlink() and os.readlink(entry) == target:
+                owners[name] = f"/nix/store/{store_path}/bin/{name}"
+    unowned = sorted(leaving.keys() - owners.keys())
+    if unowned:
+        raise ClosureError(f"{bin_dir} links {unowned[:3]} out of itself by relative paths, "
+                           f"and no store path's own bin has the same link to resolve them")
+    mode = stat.S_IMODE(os.stat(bin_dir).st_mode)
+    os.chmod(bin_dir, mode | stat.S_IWUSR)
+    for name, owner in owners.items():
+        os.unlink(bin_dir / name)
+        os.symlink(owner, bin_dir / name)
+    os.chmod(bin_dir, mode)
 
 
 def _remove_store_copy(root: Path) -> None:
