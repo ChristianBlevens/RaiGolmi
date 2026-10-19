@@ -275,6 +275,10 @@ def _require_on_an_output(compositor: HostCompositor, x: int, y: int) -> None:
         raise FaceError(f"({x}, {y}) is on no output of the face: it is {held or 'no output'}")
 
 
+def _compositor_socket(state: FaceRuntimeState) -> str:
+    return str(state.runtime_dir / f"sway-ipc.{os.getuid()}.1.sock")
+
+
 def listening_unix_sockets(pid: int | None = None) -> set[str]:
     """Pathname sockets something is **listening** on, in the network namespace of `pid`.
 
@@ -760,10 +764,16 @@ class Faces:
         raise FaceError(f"{browser} opened no window on the face and took the page into none "
                         f"within {START_TIMEOUT:g}s. Its output:\n{output.strip() or '<none>'}") from quiet
 
+    def up(self) -> bool:
+        """Whether the user's face is running with its compositor listening, so what is open
+        on it can be read and closed."""
+        state = self.current()
+        return state is not None and _compositor_socket(state) in listening_unix_sockets(state.pid)
+
     def _nested_compositor(self, state: FaceRuntimeState) -> HostCompositor:
         """The face's own sway. It is pid 1 in the face, so its socket's name is one every
         dead face left too; the one this face is listening on is the live one."""
-        socket = str(state.runtime_dir / f"sway-ipc.{os.getuid()}.1.sock")
+        socket = _compositor_socket(state)
         if socket not in listening_unix_sockets(state.pid):
             raise FaceError(f"the face's compositor is not listening on {socket}")
         return HostCompositor(socket)

@@ -360,7 +360,9 @@ def build_server(client: ApiClient):
                              "`reopened`, and those `missing`. What was in them that the app "
                              "does not restore itself is lost, so read `face_windows` first "
                              "and ask the user "
-                             "only when a window may hold unsaved work.")
+                             "only when a window may hold unsaved work. A face that is not "
+                             "up is started from nothing (`was_up` false), with no window to "
+                             "open again.")
     def restart_face() -> dict[str, Any]:
         return client.call("restart_face")
 

@@ -17,6 +17,7 @@ from raigolmid.toolbelts import nixery_reference
 
 from raigolmid import labels, naming
 from raigolmid.agents import AgentError
+from raigolmid.facemounts import FaceMountError
 from raigolmid.session import NotSelectable, SessionError
 
 from tests.harness import Harness, converse
@@ -466,6 +467,22 @@ def test_a_tab_that_continues_another_is_given_its_sandbox(h):
     assert old not in h.session.intent.instances
     with pytest.raises(SessionError, match="already open"):
         h.session.sandbox_open(successor, "python-dev")
+
+
+def test_a_hand_on_is_whole_when_the_face_cannot_show_the_change(h, monkeypatch):
+    """The face failing to follow the sandbox let go is the face's failure, said in `status`:
+    the old tab is still closed and only its successor is open, never both on one copy."""
+    h.open_sandbox("myapi", "python-dev")
+    tab = h.tab("myapi")
+
+    def unmountable(_instance):
+        raise FaceMountError("facemount sync 1 exited 1: no such face")
+    monkeypatch.setattr(h.session.face_mounts, "show", unmountable)
+    successor = h.session.succeed_tab(tab, by="machine").tab_id
+    assert tab not in h.session.intent.tabs
+    assert successor in h.session.intent.tabs
+    (closed,) = h.events_of("tab.closed")
+    assert closed.tab == tab and closed.data["continued_by"] == successor
 
 
 def test_a_tab_that_continues_another_starts_with_its_claude_code_memory(h):

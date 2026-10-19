@@ -99,3 +99,26 @@ def test_only_the_machine_tab_restarts_the_face(h):
     h.session.select("body", "myapi")
     with pytest.raises(SessionError, match="only the machine tab"):
         h.session.restart_face(h.tab("myapi"))
+
+
+def test_a_face_that_is_not_up_is_started_from_nothing(h, monkeypatch):
+    """A face whose container died, or whose compositor is not listening, has no windows to
+    read or close: it is started again with none to open, rather than refused."""
+    h.session.select("face", "writing")
+    h.session.ensure_tabs()
+    monkeypatch.setattr(Faces, "up", lambda _self: False)
+
+    def unreadable(_self, *_a):
+        raise AssertionError("a face that is not up has no compositor to ask")
+    monkeypatch.setattr(Faces, "windows", unreadable)
+    monkeypatch.setattr(Faces, "close_windows", unreadable)
+    monkeypatch.setattr(h.session.presence, "wait_until_away", lambda _patience: None)
+    started = []
+    monkeypatch.setattr(type(h.session), "_restart_face",
+                        lambda _self, face_id: started.append(face_id) or "c1")
+    monkeypatch.setattr(Faces, "reopen", lambda _self, windows: {
+        "open": [], "reopened": [], "missing": [], "asked": windows})
+
+    answer = h.session.restart_face(h.tab(None))
+    assert started == ["writing"]
+    assert answer["restarted"] == "writing" and answer["was_up"] is False

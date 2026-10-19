@@ -594,7 +594,13 @@ class Session:
         stop is returned for `_stop_released` to stop once the lock is let go."""
         before = self.intent.focused_instance
         self.intent.drop_ref(instance_id, naming.tab_ref(tab_id))
-        self._refocus(before)
+        try:
+            self._refocus(before)
+        except FaceMountError:
+            # `FaceMounts` has said it, and `status` carries it until a sync succeeds: the
+            # face fails to show what is focused now, which is the face's failure and not the
+            # release's. Raised, it would leave a closing tab half closed, its agent stopped.
+            pass
         want = self.intent.instances.get(instance_id)
         if want is None:
             return None
@@ -1836,20 +1842,24 @@ class Session:
     def restart_face(self, tab_id: str) -> dict[str, Any]:
         """The user's face started again on its definition as it is now, once they are away
         from the keyboard, with the windows they had open opened again; it answers with the
-        windows open once that is done, as `Faces.reopen` reads them."""
+        windows open once that is done, as `Faces.reopen` reads them. A face that is not up
+        (its container gone, or its compositor not listening) is started from nothing: no
+        window of it can be read, so none is opened again, and `was_up` says so."""
         self._machine_only(tab_id, "restarts the face")
         face_id = self.intent.selection.face
         if face_id is None:
             raise SessionError("no face is selected, so there is none to restart")
+        was_up = self.faces.up()
         try:
-            open_ = self.faces.windows()
+            open_ = self.faces.windows() if was_up else []
             self.presence.wait_until_away(INPUT_PATIENCE)
         except PresenceError as exc:
             raise SessionError(f"not restarted: {exc}. Try again when the user has stepped "
                                "away") from exc
         except FaceError as exc:
             raise SessionError(str(exc)) from exc
-        self.faces.close_windows()
+        if was_up:
+            self.faces.close_windows()
         with self._lock:
             if self._restart_face(face_id) is None:
                 raise SessionError(f"face '{face_id}' is no longer the selected one, or has no "
@@ -1858,6 +1868,7 @@ class Session:
         self.events.emit("face.restarted", face=face_id, by=tab_id,
                          reopened=len(after["reopened"]), missing=len(after["missing"]))
         return {"restarted": face_id,
+                "was_up": was_up,
                 "open": after["open"],
                 "reopened": [shlex.join(c) for c in after["reopened"]],
                 "missing": [shlex.join(c) for c in after["missing"]]}
