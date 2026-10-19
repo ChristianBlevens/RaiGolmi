@@ -117,6 +117,7 @@ def test_the_view_may_open_the_render_nodes_the_body_has(h, tmp_path, monkeypatc
     sandbox = h.open_sandbox("myapi", "python-dev")
     spec = h.runtime._containers[naming.view(sandbox)]["spec"]
     assert spec.devices == (f"{dri}/renderD128",)
+    assert spec.environment["VN_PERF"] == "no_async_mem_alloc"
 
 
 def test_leaving_a_body_leaves_its_tab_and_sandbox_running(h):

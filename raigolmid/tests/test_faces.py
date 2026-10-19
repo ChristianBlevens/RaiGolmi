@@ -285,6 +285,7 @@ def test_the_face_is_given_the_hosts_gpu_when_there_is_one(rig, tmp_path, monkey
 
     assert captured["spec"].devices == ((str(dri),) if gpu else ())
     assert "WLR_RENDERER" not in captured["spec"].environment
+    assert (captured["spec"].environment.get("VN_PERF") == "no_async_mem_alloc") == gpu
 
 
 def test_the_face_carries_its_apps_closure_and_what_rai_needs(rig, tmp_path):

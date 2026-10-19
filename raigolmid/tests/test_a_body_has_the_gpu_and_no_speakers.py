@@ -30,7 +30,16 @@ def test_a_body_is_given_the_render_nodes_and_not_the_display_node(tmp_path, mon
 
 
 def test_a_machine_with_no_gpu_names_no_device(tmp_path, monkeypatch):
-    assert "devices" not in _service(monkeypatch, tmp_path / "absent")
+    service = _service(monkeypatch, tmp_path / "absent")
+    assert "devices" not in service and "VN_PERF" not in service.get("environment", {})
+
+
+def test_a_body_given_a_render_node_has_venus_allocate_synchronously(tmp_path, monkeypatch):
+    """Venus's asynchronous allocation stalls the whole machine on RaiGolmi's renderer."""
+    dri = tmp_path / "dri"
+    dri.mkdir()
+    (dri / "renderD128").touch()
+    assert _service(monkeypatch, dri)["environment"]["VN_PERF"] == "no_async_mem_alloc"
 
 
 def test_a_bodys_default_audio_output_is_the_null_one(tmp_path, monkeypatch):

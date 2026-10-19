@@ -201,6 +201,7 @@ class Views:
                 "PYTHONPATH": LAUNCHER_MOUNT,
                 "PYTHONDONTWRITEBYTECODE": "1",
                 **localtime.environment(),
+                **(compose.RENDER_ENVIRONMENT if compose.render_nodes(compose.DRI) else {}),
             },
             mounts=(*mounts, *localtime.mounts()),
             pid_mode=plan.anchor_ref,

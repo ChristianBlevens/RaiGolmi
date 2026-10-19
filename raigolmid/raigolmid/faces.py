@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import hostimages, keyboard, labels, localtime, naming, settings
+from . import compose, hostimages, keyboard, labels, localtime, naming, settings
 from .closures import Closures
 from .definitions import Face, FaceDesktop, Toolbelt
 from .events import EventLog
@@ -633,6 +633,7 @@ class Faces:
                 # `rai ai --show` asks this socket rather than the face's own sway.
                 "RAIGOLMID_FACE": "1",
                 **localtime.environment(),
+                **(compose.RENDER_ENVIRONMENT if DRI.is_dir() else {}),
             },
             mounts=(*mounts, *localtime.mounts()),
             # The user's face is on the machine's network as `face`, where every sandbox is by

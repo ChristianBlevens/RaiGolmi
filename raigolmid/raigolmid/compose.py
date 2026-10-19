@@ -33,6 +33,14 @@ BODY_ASOUND = Path(__file__).resolve().parent / "body-asound.conf"
 ASOUND_CONF = "/etc/asound.conf"
 
 
+# What a program given a render node runs with. Mesa's Venus allocates device memory
+# asynchronously and has the blob made from it wait for the allocation on the host; the Venus
+# renderer on Windows waits there while QEMU's main loop waits for the blob, which stops the whole
+# machine (its sound, its input) for up to 0.7 s at a time while a game renders. With
+# no_async_mem_alloc the allocation waits in the program that made it. Other drivers ignore it.
+RENDER_ENVIRONMENT = {"VN_PERF": "no_async_mem_alloc"}
+
+
 def render_nodes(dri: Path) -> list[str]:
     return [str(node) for node in sorted(dri.glob("renderD*"))]
 
@@ -94,9 +102,10 @@ def render(body: Body, placement: BodyPlacement, epoch: int,
         service["devices"] = [f"{node}:{node}:rw" for node in devices]
     if body.command:
         service["command"] = list(body.command)
-    # The user's timezone, as every container they read a clock in has it; a body naming its
-    # own wins.
-    environment = {**localtime.environment(localtime.LOCALTIME), **body.environment}
+    # The user's timezone, as every container they read a clock in has it, and the render
+    # node's environment with the node; a body naming its own wins.
+    environment = {**localtime.environment(localtime.LOCALTIME),
+                   **(RENDER_ENVIRONMENT if devices else {}), **body.environment}
     if environment:
         service["environment"] = environment
     if body.read_only:

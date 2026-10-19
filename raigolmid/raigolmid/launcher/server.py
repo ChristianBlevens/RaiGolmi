@@ -666,7 +666,9 @@ class LauncherServer(socketserver.ThreadingUnixStreamServer):
             "HOME": os.environ.get("HOME", "/root"),
             "SHELL": os.environ.get("SHELL", "/.toolbelt/bin/bash"),
         }
-        for key in ("LANG", "LC_ALL", "NIX_PATH", "TERMINFO", "TERMINFO_DIRS"):
+        # VN_PERF: the render node's environment (compose.RENDER_ENVIRONMENT), which the view
+        # has with the node.
+        for key in ("LANG", "LC_ALL", "NIX_PATH", "TERMINFO", "TERMINFO_DIRS", "VN_PERF"):
             if key in os.environ:
                 self.base_env[key] = os.environ[key]
 

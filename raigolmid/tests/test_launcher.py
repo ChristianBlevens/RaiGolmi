@@ -62,6 +62,20 @@ def test_exec_carries_environment_and_working_directory(launcher, tmp_path):
     assert str(tmp_path) in result.stdout
 
 
+def test_what_it_starts_has_the_render_nodes_environment_the_view_has(tmp_path, monkeypatch):
+    monkeypatch.setenv("VN_PERF", "no_async_mem_alloc")
+    sock = tmp_path / "view.sock"
+    server = LauncherServer(str(sock), instance="test@tab-2", generation=2)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = LauncherClient(sock).exec(["/bin/sh", "-c", "echo $VN_PERF"], cwd="/tmp")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert result.stdout.strip() == "no_async_mem_alloc"
+
+
 def test_what_it_starts_finds_the_bodys_programs_before_the_toolbelts(launcher):
     """The toolbelt supplies what the body lacks, so a command's
     `python` is the body's, which sees the body's packages. The launcher's own PATH, the
