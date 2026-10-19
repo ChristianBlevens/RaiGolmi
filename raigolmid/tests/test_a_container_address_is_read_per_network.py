@@ -31,3 +31,30 @@ def test_a_running_container_whose_init_is_gone_is_dead(monkeypatch):
     import os
     container.attrs["State"] = {"Status": "running", "Pid": os.getpid()}
     assert _info(container).running
+
+
+def test_a_container_that_will_not_die_names_where_its_threads_wait(tmp_path, monkeypatch):
+    """Docker's `did not receive an exit event` is a process SIGKILL does not end: the error
+    says each thread left, its state and the kernel function it waits in."""
+    import os
+    import pytest
+    from docker.errors import APIError
+    from raigolmid.runtime import docker_runtime
+    from raigolmid.runtime.base import RuntimeError_
+
+    group = tmp_path / "system.slice" / "docker-c1.scope"
+    group.mkdir(parents=True)
+    (group / "cgroup.procs").write_text(f"{os.getpid()}\n")
+    monkeypatch.setattr(docker_runtime, "CGROUP", tmp_path)
+
+    class Stuck:
+        id = "c1"
+
+        def remove(self, force, v):
+            raise APIError("cannot remove container c1: could not kill container: tried to "
+                           "kill container, but did not receive an exit event")
+    runtime = docker_runtime.DockerRuntime.__new__(docker_runtime.DockerRuntime)
+    runtime._cgroup_driver = "systemd"
+    runtime._client = SimpleNamespace(containers=SimpleNamespace(get=lambda _n: Stuck()))
+    with pytest.raises(RuntimeError_, match=rf"Still in it: {os.getpid()}/\d+ \S+ [RSD] in "):
+        runtime.remove("raigolmid-face-x", force=True)

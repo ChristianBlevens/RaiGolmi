@@ -223,7 +223,8 @@ class DockerRuntime(ContainerRuntime):
 
     def remove(self, name_or_id: str, force: bool = False) -> None:
         try:
-            self._client.containers.get(name_or_id).remove(force=force, v=False)
+            container = self._client.containers.get(name_or_id)
+            container.remove(force=force, v=False)
         except NotFound:
             return
         except APIError as exc:
@@ -233,7 +234,46 @@ class DockerRuntime(ContainerRuntime):
                     f"'{name_or_id}' cannot be removed: {message}. Something still holds "
                     "mounts into it — a session view whose teardown has not run."
                 ) from exc
+            if "did not receive an exit event" in message:
+                # A process in it that SIGKILL does not end is blocked in the kernel; where,
+                # its wait channel says, which is what to look into.
+                message += f". Still in it: {self._stuck(container.id)}"
             raise RuntimeError_(f"could not remove '{name_or_id}': {message}") from exc
+
+    def _stuck(self, container_id: str) -> str:
+        """Each thread left in the container's cgroup, by its process, state and the kernel
+        function it waits in."""
+        procs = self._cgroup(container_id) / "cgroup.procs"
+        try:
+            pids = procs.read_text().split()
+        except OSError as exc:
+            return f"its cgroup is unreadable ({procs}: {exc})"
+        threads = []
+        for pid in pids:
+            for task in sorted(Path(f"/proc/{pid}/task").glob("*")):
+                try:
+                    comm = (task / "comm").read_text().strip()
+                    state = (task / "stat").read_text().rsplit(")", 1)[1].split()[0]
+                    # `0` where the kernel will not name it (a task running, or not
+                    # dumpable to this user).
+                    wchan = (task / "wchan").read_text().strip()
+                except OSError as exc:
+                    threads.append(f"{pid}/{task.name} unreadable ({exc.strerror})")
+                    continue
+                threads.append(f"{pid}/{task.name} {comm} {state} in "
+                               f"{wchan if wchan not in ('', '0') else '?'}")
+        return "; ".join(threads) or "no process (it is still ending)"
+
+    def _cgroup(self, container_id: str) -> Path:
+        """The container's cgroup (v2), where Docker's cgroup driver puts it."""
+        if self._cgroup_driver is None:
+            try:
+                self._cgroup_driver = self._client.info()["CgroupDriver"]
+            except APIError as exc:
+                raise RuntimeError_(f"could not ask Docker its cgroup driver: {exc}") from exc
+        return (CGROUP / f"system.slice/docker-{container_id}.scope"
+                if self._cgroup_driver == "systemd"
+                else CGROUP / f"docker/{container_id}")
 
     def logs(self, name_or_id: str, tail: int = 100) -> str:
         try:
@@ -372,15 +412,8 @@ class DockerRuntime(ContainerRuntime):
             raise RuntimeError_(f"could not prune the build cache: {exc}") from exc
 
     def use(self, container_id: str) -> CgroupUse:
-        """Read from the container's cgroup (v2), where Docker's cgroup driver puts it."""
-        if self._cgroup_driver is None:
-            try:
-                self._cgroup_driver = self._client.info()["CgroupDriver"]
-            except APIError as exc:
-                raise RuntimeError_(f"could not ask Docker its cgroup driver: {exc}") from exc
-        group = (CGROUP / f"system.slice/docker-{container_id}.scope"
-                 if self._cgroup_driver == "systemd"
-                 else CGROUP / f"docker/{container_id}")
+        """Read from the container's cgroup (v2)."""
+        group = self._cgroup(container_id)
         try:
             stat = dict(line.split() for line in (group / "memory.stat").read_text().splitlines())
             swapped = int((group / "memory.swap.current").read_text())
